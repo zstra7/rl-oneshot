@@ -99,6 +99,11 @@ test("WS4.C: FOV widens at supersonic speed and returns to baseline", async ({ p
     // -Z so the injected -Z velocity below is the car's own forward
     // direction, not fought by lateral grip.
     window.__PHYSICS_TEST__?.setCarState("car-player", { rotation: { x: 0, y: 0, z: 0, w: 1 } });
+    // Park the ball well clear of the arena centre: the sustain loop
+    // below repeatedly resets the car to (0, 1, 0), and a stray car-ball
+    // collision there would knock the car around, fighting the injected
+    // velocity.
+    window.__PHYSICS_TEST__?.setBallState({ position: { x: 25, y: 5, z: 25 }, linearVelocity: { x: 0, y: 0, z: 0 } });
   });
 
   const baseFov = (await page.evaluate(() => window.__GAME_TEST__?.runtime.getCameraDiagnostics()?.fov)) ?? 77;
@@ -112,12 +117,15 @@ test("WS4.C: FOV widens at supersonic speed and returns to baseline", async ({ p
   const sustain = (async () => {
     while (sustaining) {
       await page.evaluate(() => {
-        // Re-assert rotation alongside velocity each cycle: at this speed
-        // and with WS7.A's farther-from-centre kickoff spawns, the car
-        // can reach and bounce off the back wall multiple times over this
-        // loop's several-second window, which (via lateral grip) can spin
-        // it off its -Z heading and drop it out of supersonic mid-poll.
+        // Re-assert position/rotation alongside velocity each cycle: at
+        // this speed and with WS7.A's farther-from-centre kickoff spawns,
+        // the car can reach and bounce off the back wall within a single
+        // 50ms cycle, which (via lateral grip and wall collision impulses)
+        // can spin it off its -Z heading and drop it out of supersonic
+        // mid-poll. Pinning position back to the open arena centre each
+        // cycle keeps it clear of any wall for the whole sustain window.
         window.__PHYSICS_TEST__?.setCarState("car-player", {
+          position: { x: 0, y: 1, z: 0 },
           linearVelocity: { x: 0, y: 0, z: -25 },
           rotation: { x: 0, y: 0, z: 0, w: 1 }
         });

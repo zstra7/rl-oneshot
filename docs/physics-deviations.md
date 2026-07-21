@@ -538,7 +538,12 @@ unified goals, floor→wall fillets with wall driving, seated boost pads.
   spawns mean the car can reach and bounce off the back wall several
   times within the test's window, re-spinning it off its -Z heading via
   lateral grip and intermittently dropping it out of supersonic mid-poll
-  (observed as ~3/8 flaky failures before the fix, 0/8 after).
+  (observed as ~3/8 flaky failures before the fix, still ~4/15 flaky
+  after adding just the per-cycle rotation reset). Fully fixed by also
+  re-pinning `position` to the open arena centre `(0, 1, 0)` every cycle
+  (so the car never travels far enough to reach a wall at all) and
+  parking the ball away from that point first (so the repeated position
+  reset can't collide with it) — 15/15 stable afterward.
 - **VFX boost-trail test timing, twice-over.** New kickoff spots sit
   farther from the arena centre than the old fixed pose, which shifted
   when a player's drive-and-hit-the-ball VFX burst lands in real time
