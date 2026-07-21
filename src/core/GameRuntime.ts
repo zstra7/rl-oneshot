@@ -28,6 +28,8 @@ import type {
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
+import type { AiDifficulty } from "@/ai/AiDifficulty";
+import type { AiDebugState } from "@/ai/AiTypes";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
 
 export type UiRequestedAction = { readonly kind: "noop" };
@@ -105,6 +107,13 @@ export interface GameRuntimeFacade {
 
   /** Null before the camera controller has been constructed. */
   getCameraDiagnostics(): CameraDiagnostics | null;
+
+  /** AI spec section 7: takes effect on the next tick, live. */
+  selectAiDifficulty(difficulty: AiDifficulty): void;
+  getAiDifficulty(): AiDifficulty;
+  /** AI spec section 8: deterministic given seed + observations. */
+  setAiSeed(seed: number): void;
+  getAiDebugState(): AiDebugState;
 
   /** Populated once `initialise()` completes; used by the test API installer. */
   getGameFlowTestApi(): BrowserGameFlowTestApi;
@@ -530,6 +539,22 @@ export class GameRuntime implements GameRuntimeFacade {
     return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
       ? modules.physics.getCarState(PLAYER_CAR_ID).boostAmount
       : 0;
+  }
+
+  public selectAiDifficulty(difficulty: AiDifficulty): void {
+    this.requireModules().ai.setDifficulty(difficulty);
+  }
+
+  public getAiDifficulty(): AiDifficulty {
+    return this.requireModules().ai.getDifficulty();
+  }
+
+  public setAiSeed(seed: number): void {
+    this.requireModules().ai.setSeed(seed);
+  }
+
+  public getAiDebugState(): AiDebugState {
+    return this.requireModules().ai.getDebugState();
   }
 
   public getCameraDiagnostics(): CameraDiagnostics | null {

@@ -27,6 +27,7 @@ export type AiTacticalMode =
   | "recover"
   | "kickoff"
   | "defend"
+  | "clear"
   | "attack"
   | "collect-boost"
   | "retreat";

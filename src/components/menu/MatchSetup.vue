@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
+import type { AiDifficulty } from "@/ai/AiDifficulty";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
@@ -9,8 +10,19 @@ const runtime = useGameRuntime();
 const matchFlowStore = useMatchFlowStore();
 
 const durations: MatchDurationMinutes[] = [1, 3, 10];
+const difficulties: AiDifficulty[] = ["easy", "medium", "hard"];
 
 const selected = computed(() => matchFlowStore.session.selectedDurationMinutes);
+
+// AI difficulty is a runtime/AI-module setting (game-flow spec section 24:
+// "Reserve future row: OPPONENT DIFFICULTY"), not part of match session
+// state, so it's tracked locally here rather than in matchFlowStore.
+const selectedDifficulty = ref<AiDifficulty>(runtime.getAiDifficulty());
+
+function selectDifficulty(difficulty: AiDifficulty): void {
+  selectedDifficulty.value = difficulty;
+  runtime.selectAiDifficulty(difficulty);
+}
 </script>
 
 <template>
@@ -31,7 +43,19 @@ const selected = computed(() => matchFlowStore.session.selectedDurationMinutes);
       </button>
     </div>
 
-    <div class="difficulty-row">OPPONENT DIFFICULTY: STANDARD</div>
+    <div class="difficulty-row" role="group" aria-label="Opponent difficulty">
+      <button
+        v-for="difficulty in difficulties"
+        :key="difficulty"
+        type="button"
+        class="duration-item"
+        :class="{ active: selectedDifficulty === difficulty }"
+        :data-testid="`difficulty-${difficulty}`"
+        @click="selectDifficulty(difficulty)"
+      >
+        {{ difficulty.toUpperCase() }}
+      </button>
+    </div>
 
     <div class="menu-items">
       <button type="button" class="menu-item" data-testid="start-match" @click="runtime.startMatch()">
@@ -85,11 +109,10 @@ const selected = computed(() => matchFlowStore.session.selectedDurationMinutes);
 }
 
 .difficulty-row {
-  pointer-events: none;
-  font-family: monospace;
-  color: #7d8aa0;
+  display: flex;
+  gap: 0.5rem;
   margin-bottom: 1.5rem;
-  letter-spacing: 0.05em;
+  pointer-events: auto;
 }
 
 .menu-items {

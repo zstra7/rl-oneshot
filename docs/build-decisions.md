@@ -145,3 +145,25 @@
   section 3 `AiUpdateContext`) omits `recentPhysicsEvents` and most of
   `AiMatchContext` — see `docs/implementation-progress.md` Phase 9
   "Deferred" section for the full list and why.
+
+## Phase 10
+
+- `AiDifficultyParameters` is the spec's full section 7 struct (all
+  three presets copied verbatim from the spec's recommended values), but
+  this project's simplified planner only actually reads a subset:
+  `reactionDelaySeconds`, `perceptionPositionNoise`/
+  `perceptionVelocityNoise`, `tacticalHz`, `defensiveUrgency`,
+  `challengeAggression`, `boostPadAwarenessRadius`, `dodgeSkill`,
+  `aerialSkill`, `maximumAerialTime`, `mistakeFrequency`. Fields tied to
+  systems this phase doesn't build (`candidateCount`, `shotAccuracy`,
+  `shotPowerPreference`, `boostConservation`,
+  `maximumBoostBurstSeconds`, `boostPadDetourToleranceSeconds`,
+  `boostPadRespawnPlanningSeconds`, `boostDenialAggression`,
+  `boostRouteCandidateCount`, `powerslideSkill`, `decisionTemperature`,
+  `commitmentSeconds`, `maximumAerialHeight`, `kickoffProfile`,
+  `predictionHz`, `controlHz`, `planningHorizonSeconds`) are kept on the
+  type for spec fidelity and future use, not consumed yet.
+- `AiRandom` (mulberry32) is a local copy of the same algorithm the asset
+  pipeline's `SeededRandom` uses, not an import from `@/assets` — kept
+  the AI module self-contained rather than adding a cross-module
+  dependency for a few lines of PRNG math.

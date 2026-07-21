@@ -37,10 +37,17 @@ export function driveTowardPoint(
   const forwardDot = V.clamp(V.dot(forwardFlat, targetDirection), -1, 1);
   const rightDot = V.dot(rightFlat, targetDirection);
 
-  // Signed heading error in (-pi, pi]: 0 = target dead ahead.
+  // Signed heading error in (-pi, pi]: 0 = target dead ahead, positive =
+  // target to the right. Physics's GroundSteeringController maps
+  // positive `steer` to a positive yaw rate around +Y, which (given the
+  // car's local forward is -Z) rotates the car *toward its left*, not
+  // its right — confirmed via an isolated ad hoc Vitest steer-direction
+  // test. Negate so a target to the right actually produces a rightward
+  // turn, matching the human input mapping (`steerRight - steerLeft`,
+  // D key => positive steer => turns right).
   const angleError = Math.atan2(rightDot, forwardDot);
 
-  const steer = V.clamp(angleError * AI_CONSTANTS.steerGain, -1, 1);
+  const steer = V.clamp(-angleError * AI_CONSTANTS.steerGain, -1, 1);
   const absAngle = Math.abs(angleError);
 
   const boost =

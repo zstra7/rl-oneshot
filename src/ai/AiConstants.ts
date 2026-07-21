@@ -10,7 +10,7 @@ export const AI_CONSTANTS = {
   steerGain: 2.2,
 
   /** Use boost while driving when aligned within this heading error (radians). */
-  boostAlignmentThreshold: 0.5,
+  boostAlignmentThreshold: 0.2,
   /** Only boost below this fraction of the no-boost top speed. */
   boostSpeedFraction: 0.92,
 
@@ -44,10 +44,9 @@ export const AI_CONSTANTS = {
    */
   attackReachTimeLimit: 3.5,
 
-  /** Boost management. */
+  /** Boost management. Pad search radius comes from AiDifficultyParameters.boostPadAwarenessRadius. */
   boostReserveThreshold: 40,
   boostCriticalThreshold: 15,
-  boostPadSearchRadius: 45,
 
   /** Recovery (airborne self-righting via pitch/roll, AI spec section 26.1). */
   recoveryGain: 3.0,

@@ -1,3 +1,5 @@
+import type { AiDebugState } from "@/ai/AiTypes";
+import type { AiDifficulty } from "@/ai/AiDifficulty";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
 import type { AppState } from "@/core/ApplicationState";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
@@ -13,6 +15,11 @@ export interface BrowserRuntimeTestApi {
   stepFixedTicks(count: number): void;
   /** Phase 8: chase camera position/target/mode, or null before it exists. */
   getCameraDiagnostics(): CameraDiagnostics | null;
+  /** Phase 10: opponent AI difficulty/seed/tactical-mode inspection. */
+  selectAiDifficulty(difficulty: AiDifficulty): void;
+  getAiDifficulty(): AiDifficulty;
+  setAiSeed(seed: number): void;
+  getAiDebugState(): AiDebugState;
 }
 
 /**
