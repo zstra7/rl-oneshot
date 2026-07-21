@@ -30,6 +30,13 @@ export interface CarInput {
   powerslide: boolean;
 }
 
+/** physics spec section 4.2: per-car tuning, never a global setting. */
+export interface CarControlProfile {
+  dodgeDeadzone: number;
+}
+
+export const DEFAULT_DODGE_DEADZONE = 0.8;
+
 export const NEUTRAL_CAR_INPUT: CarInput = {
   throttle: 0,
   steer: 0,
@@ -41,6 +48,8 @@ export const NEUTRAL_CAR_INPUT: CarInput = {
   powerslide: false
 };
 
+export type DodgeState = "none" | "active" | "recovery";
+
 export interface CarSerializableState {
   readonly id: CarId;
 
@@ -50,6 +59,18 @@ export interface CarSerializableState {
   readonly angularVelocity: Vec3Like;
 
   readonly speed: number;
+  readonly forwardSpeed: number;
+
+  readonly grounded: boolean;
+  readonly wheelContactCount: number;
+  readonly supportNormal: Vec3Like;
+
+  readonly boostAmount: number;
+  readonly supersonic: boolean;
+
+  readonly firstJumpUsed: boolean;
+  readonly secondJumpAvailable: boolean;
+  readonly dodgeState: DodgeState;
 }
 
 export interface BallSerializableState {

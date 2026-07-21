@@ -1,6 +1,13 @@
 import type RAPIER from "@dimforge/rapier3d-compat";
 
-import { NEUTRAL_CAR_INPUT, type CarId, type CarInput } from "@/physics/PhysicsTypes";
+import {
+  DEFAULT_DODGE_DEADZONE,
+  NEUTRAL_CAR_INPUT,
+  type CarControlProfile,
+  type CarId,
+  type CarInput
+} from "@/physics/PhysicsTypes";
+import { createInitialCarRuntimeState, type CarRuntimeState } from "@/physics/car/CarRuntimeState";
 
 export interface CarEntity {
   readonly id: CarId;
@@ -8,6 +15,25 @@ export interface CarEntity {
   readonly collider: RAPIER.Collider;
   currentInput: CarInput;
   previousInput: CarInput;
+  controlProfile: CarControlProfile;
+  readonly runtime: CarRuntimeState;
+}
+
+export function createCarEntity(
+  id: CarId,
+  body: RAPIER.RigidBody,
+  collider: RAPIER.Collider,
+  initialBoost: number
+): CarEntity {
+  return {
+    id,
+    body,
+    collider,
+    currentInput: { ...NEUTRAL_CAR_INPUT },
+    previousInput: { ...NEUTRAL_CAR_INPUT },
+    controlProfile: { dodgeDeadzone: DEFAULT_DODGE_DEADZONE },
+    runtime: createInitialCarRuntimeState(initialBoost)
+  };
 }
 
 /**
@@ -59,11 +85,4 @@ export class CarRegistry {
   public get size(): number {
     return this.cars.size;
   }
-}
-
-export function createNeutralInputPair(): { current: CarInput; previous: CarInput } {
-  return {
-    current: { ...NEUTRAL_CAR_INPUT },
-    previous: { ...NEUTRAL_CAR_INPUT }
-  };
 }

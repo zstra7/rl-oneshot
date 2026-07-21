@@ -188,14 +188,16 @@ export class GameRuntime implements GameRuntimeFacade {
     if (this.modules) {
       // Sample input for this exact tick and hand it to physics before
       // stepping, per core architecture spec section 25 fixed-tick order
-      // (sample input -> submit CarInput -> step physics). Phase 3 stores
-      // CarInput but does not yet act on it (no ground/air controller
-      // until Phase 5), and `grounded: true` is a placeholder until the
-      // physics module exposes real suspension/ground-contact state.
-      const frame = this.modules.input.sampleGameplayInputForTick(tick, {
-        grounded: true
-      });
+      // (sample input -> submit CarInput -> step physics). Grounded state
+      // now comes from the real Phase 5 suspension/ground-contact state
+      // (falls back to true before the car has spawned/settled).
+      const grounded = this.modules.physics.getCarIds().includes("car-player")
+        ? this.modules.physics.getCarState("car-player").grounded
+        : true;
+
+      const frame = this.modules.input.sampleGameplayInputForTick(tick, { grounded });
       this.modules.physics.setCarInput("car-player", frame.car);
+      this.modules.physics.setCarControlProfile("car-player", frame.carControlProfile);
     }
 
     // The single Rapier step location: core's one FixedStepCoordinator

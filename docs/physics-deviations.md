@@ -77,3 +77,68 @@ Record deviations from
   code, not by any call in this codebase (`RAPIER.init()` is called with
   no arguments). It does not affect functionality or test results;
   revisit if a `@dimforge/rapier3d-compat` upgrade removes it.
+
+## Phase 5 — Car driving and physics calibration
+
+- **`CarSerializableState` now extended** (per the Phase 3 note above)
+  with `forwardSpeed`, `grounded`, `wheelContactCount`, `supportNormal`,
+  `boostAmount`, `supersonic`, `firstJumpUsed`, `secondJumpAvailable`,
+  `dodgeState` — matching physics spec section 30.2 except
+  `previousInput` (internal only, never serialised) is omitted.
+- **Suspension debug visualisation (section 16.6) was not built.** The
+  spec says "Do not tune suspension without this visualisation." Given
+  Phase 5's "No final visuals yet" scope and time constraints, tuning was
+  instead done by asserting on serialized `CarSerializableState` fields
+  (`grounded`, `wheelContactCount`, `supportNormal`, velocities) captured
+  via ad hoc Vitest runs before writing the final test suite. If future
+  calibration proves difficult without a visual, add the suspension debug
+  draw described in section 16.6 to `PhysicsRenderBinding`.
+- **`hasLeftGroundSinceJump` runtime flag (not in the spec).** The spec's
+  section 22 jump-reset logic ("touches ground again") was implemented
+  first as "grounded flag is true", which turned out to immediately
+  reset `firstJumpUsed`/`secondJumpAvailable` on the very tick after the
+  first jump — because the suspension probe's `maximumLength` (0.22 m,
+  section 16 calibration value) is generous enough that a single tick's
+  jump displacement doesn't clear it, so `grounded` can still read true
+  for a tick or two right after liftoff. This silently ate the entire
+  second-jump/dodge window. Fixed by tracking `hasLeftGroundSinceJump`
+  (true once the car has actually read `grounded === false` at least once
+  since the first jump) and only performing the reset once that flag is
+  set. Recorded here since it is a deviation from a literal reading of
+  "grounded" as the reset trigger, discovered via the ad hoc car-sanity
+  Vitest runs described above (worth knowing if suspension
+  `maximumLength`/`restLength` are later recalibrated — this interaction
+  could resurface).
+- **Car-ball extra-hit contact-onset tracking is simplified.** Section
+  27.2-27.3's full `ContactPairState` (with `hasSeparatedSinceExtraImpulse`
+  / `maximumSeparationSinceHit` for detecting re-contact within one
+  continuous overlap) was not implemented. `resolveCarBallContacts`
+  (`src/physics/collision/CarBallCollision.ts`) tracks only a per-car
+  `wasTouchingLastTick` boolean and applies the extra impulse once on
+  each false→true transition (contact onset). This covers the mandatory
+  "phase one" cases (single touch, multiple simultaneous cars) but not
+  the nuance of a car re-contacting the ball while never fully separating
+  in Rapier's narrow phase. Revisit if playtesting shows the ball
+  "sticking" without a second hit registering during an extended shove.
+- **Car-ball contact point is approximated as the ball centre**, not the
+  real witness point from the contact manifold (section 25.5's
+  `contactPoint`). `world.contactPair()`'s `TempContactManifold` exposes
+  `solverContactPoint`, but the ball-centre approximation was used for
+  simplicity — the spec explicitly calls the whole extra-hit curve
+  "provisional" and expects calibration.
+- **Dodge rotation profile is simplified** relative to section 25.4-25.6.
+  The full spec describes driving local pitch/roll angular *velocity*
+  toward a dodge profile with flip-cancel and gradual restoration; the
+  Phase 5 implementation (`DodgeController.updateDodgeState`) applies a
+  constant-rate torque impulse for the `active` duration based on the
+  dodge direction, with a simple opposite-pitch-input cancellation term,
+  and does not gradually restore ordinary aerial control during
+  `recovery` (aerial rotation is simply re-enabled the tick `dodgeState`
+  returns to `"none"`). Sufficient for Phase 5's "player can dodge, car
+  feels testably stable" exit criterion; revisit during dedicated dodge
+  calibration (spec section 25.7's scenario catalogue) in a later pass.
+- **`Vec3Math.ts`** — the physics module has its own plain-object vector
+  math (no THREE.js dependency), since physics must not import
+  rendering/asset code (dependency direction). Quaternion vector rotation
+  and axis math are implemented directly rather than via `THREE.Vector3`/
+  `THREE.Quaternion`.

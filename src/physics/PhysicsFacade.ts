@@ -19,9 +19,12 @@ import type {
   TransformSample,
   WorldSerializableState
 } from "@/physics/PhysicsTypes";
-import { NEUTRAL_CAR_INPUT } from "@/physics/PhysicsTypes";
+import { NEUTRAL_CAR_INPUT, type CarControlProfile } from "@/physics/PhysicsTypes";
 import { getArenaPresetDefinition } from "@/physics/arena/TestArenaPresets";
-import { CarRegistry, type CarEntity } from "@/physics/entities/CarRegistry";
+import { CarRegistry, createCarEntity, type CarEntity } from "@/physics/entities/CarRegistry";
+import { prePhysicsTick, postPhysicsTick } from "@/physics/car/CarController";
+import { resolveCarBallContacts } from "@/physics/collision/CarBallCollision";
+import * as V from "@/physics/Vec3Math";
 
 export const PHYSICS_MODULE_CONTRACT_VERSION = "2.1";
 
@@ -101,6 +104,7 @@ export class PhysicsFacade implements GameModule {
   private currentSnapshot: Map<CarId, TransformSample> = new Map();
   private previousBall: TransformSample = zeroTransform();
   private currentBall: TransformSample = zeroTransform();
+  private readonly wasTouchingBallLastTick = new Map<CarId, boolean>();
 
   public async initialise(): Promise<void> {
     await RAPIER.init();
@@ -208,15 +212,15 @@ export class PhysicsFacade implements GameModule {
       body
     );
 
-    const car: CarEntity = {
-      id: options.id,
+    const car = createCarEntity(
+      options.id,
       body,
       collider,
-      currentInput: { ...NEUTRAL_CAR_INPUT },
-      previousInput: { ...NEUTRAL_CAR_INPUT }
-    };
+      options.initialBoost ?? RL_CONSTANTS.kickoffBoostAmount
+    );
 
     this.carRegistry.add(car);
+    this.wasTouchingBallLastTick.set(car.id, false);
 
     const sample = cloneTransform(body.translation(), body.rotation());
     this.previousSnapshot.set(car.id, sample);
@@ -237,6 +241,7 @@ export class PhysicsFacade implements GameModule {
     this.carRegistry.remove(carId);
     this.previousSnapshot.delete(carId);
     this.currentSnapshot.delete(carId);
+    this.wasTouchingBallLastTick.delete(carId);
   }
 
   public getCarIds(): CarId[] {
@@ -252,6 +257,7 @@ export class PhysicsFacade implements GameModule {
     this.carRegistry.clear();
     this.previousSnapshot.clear();
     this.currentSnapshot.clear();
+    this.wasTouchingBallLastTick.clear();
 
     if (this.ballBody) {
       world.removeRigidBody(this.ballBody);
@@ -348,6 +354,12 @@ export class PhysicsFacade implements GameModule {
     car.currentInput = { ...car.currentInput, ...input };
   }
 
+  /** physics spec section 4.2: per-car tuning, never a global setting. */
+  public setCarControlProfile(carId: CarId, profile: Partial<CarControlProfile>): void {
+    const car = this.carRegistry.get(carId);
+    car.controlProfile = { ...car.controlProfile, ...profile };
+  }
+
   public clearCarInput(carId: CarId): void {
     const car = this.carRegistry.get(carId);
     car.currentInput = { ...NEUTRAL_CAR_INPUT };
@@ -359,32 +371,53 @@ export class PhysicsFacade implements GameModule {
     }
   }
 
-  /** Steps Rapier exactly once. Called by GameRuntime's single FixedStepCoordinator. */
+  /**
+   * Steps Rapier exactly once, following physics spec section 29's fixed-
+   * tick order. Called by GameRuntime's single FixedStepCoordinator.
+   */
   public step(): void {
     const world = this.requireWorld();
+    const cars = this.carRegistry.getAllStable();
+    const dt = RL_CONSTANTS.physicsDt;
 
-    for (const car of this.carRegistry.getAllStable()) {
-      this.previousSnapshot.set(car.id, this.currentSnapshot.get(car.id) ?? cloneTransform(car.body.translation(), car.body.rotation()));
+    for (const car of cars) {
+      this.previousSnapshot.set(
+        car.id,
+        this.currentSnapshot.get(car.id) ?? cloneTransform(car.body.translation(), car.body.rotation())
+      );
     }
     if (this.ballBody) {
       this.previousBall = this.currentBall;
     }
 
+    for (const car of cars) {
+      prePhysicsTick(world, car, this.parameters, dt);
+    }
+
     world.step();
 
-    for (const car of this.carRegistry.getAllStable()) {
+    for (const car of cars) {
       clampLinearVelocity(car.body, RL_CONSTANTS.carMaxSpeed);
+      postPhysicsTick(car);
       this.currentSnapshot.set(car.id, cloneTransform(car.body.translation(), car.body.rotation()));
       car.previousInput = car.currentInput;
     }
 
     if (this.ballBody) {
+      resolveCarBallContacts(
+        world,
+        cars,
+        this.ballBody,
+        this.wasTouchingBallLastTick,
+        this.parameters,
+        dt
+      );
       clampLinearVelocity(this.ballBody, RL_CONSTANTS.ballMaxSpeed);
       this.currentBall = cloneTransform(this.ballBody.translation(), this.ballBody.rotation());
     }
 
     this.tick += 1;
-    this.simulationTime += RL_CONSTANTS.physicsDt;
+    this.simulationTime += dt;
   }
 
   public stepTicks(count: number): void {
@@ -459,13 +492,25 @@ function serializeCar(car: CarEntity): CarSerializableState {
   const angvel = car.body.angvel();
   const speed = Math.sqrt(linvel.x ** 2 + linvel.y ** 2 + linvel.z ** 2);
 
+  const forward = V.applyQuaternion(V.LOCAL_FORWARD, rotation);
+  const forwardSpeed = V.dot(linvel, forward);
+
   return {
     id: car.id,
     position: { x: position.x, y: position.y, z: position.z },
     rotation: { x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w },
     linearVelocity: { x: linvel.x, y: linvel.y, z: linvel.z },
     angularVelocity: { x: angvel.x, y: angvel.y, z: angvel.z },
-    speed
+    speed,
+    forwardSpeed,
+    grounded: car.runtime.grounded,
+    wheelContactCount: car.runtime.wheelContactCount,
+    supportNormal: car.runtime.supportNormal,
+    boostAmount: car.runtime.boostAmount,
+    supersonic: speed >= RL_CONSTANTS.supersonicThreshold,
+    firstJumpUsed: car.runtime.firstJumpUsed,
+    secondJumpAvailable: car.runtime.secondJumpAvailable,
+    dodgeState: car.runtime.dodgeState
   };
 }
 

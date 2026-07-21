@@ -70,7 +70,16 @@ test("the fixed tick advances while running and halts after stop()", async ({
     .poll(() => page.evaluate(() => window.__GAME_TEST__?.ready() ?? false))
     .toBe(true);
 
-  await page.waitForTimeout(150);
+  // Poll instead of a fixed sleep: Phase 5's per-tick car controller cost
+  // (suspension shape casts, etc.) means the first tick can occasionally
+  // take longer than a short fixed wait, especially under CI/parallel
+  // load — polling avoids that flakiness without weakening the assertion.
+  await expect
+    .poll(
+      () => page.evaluate(() => window.__GAME_TEST__?.runtime.getDiagnostics().fixedTick ?? -1),
+      { timeout: 5_000 }
+    )
+    .toBeGreaterThan(0);
 
   const tickWhileRunning = await page.evaluate(
     () => window.__GAME_TEST__?.runtime.getDiagnostics().fixedTick ?? -1
