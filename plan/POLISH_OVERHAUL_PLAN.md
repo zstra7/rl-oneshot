@@ -59,6 +59,12 @@ ordering below is deliberate.
    methods.
 6. All new tunables go in the existing constants/parameters files
    (`CameraConstants.ts`, `PhysicsParameters.ts`, `PhysicsConstants.ts`), never inlined.
+7. **Frame pacing is already correct — do not "improve" it.** `FixedStepCoordinator`
+   was audited for this plan: it clamps frame delta to 0.25s, caps catch-up at 8 steps,
+   and drops excess accumulated time (spiral-of-death prevention), and all camera/VFX
+   smoothing is exp-based (frame-rate independent). Any perceived jerkiness is the
+   camera rig (WS4) or grip/steering (WS2), not the loop. Leave
+   `FixedStepCoordinator.ts` untouched.
 
 ### 0.3 Workflow per workstream
 
@@ -421,7 +427,7 @@ height offset, looking at the ball. Because the camera is ~1.1m above the car an
 ~2.7m behind it, the car naturally projects into the bottom-centre of the frame while
 the ball stays centred. No screen-space math needed.
 
-### Change — rewrite `updateChaseCamera` in `src/camera/ChaseCameraController.ts`
+### WS4.A Change — rewrite `updateChaseCamera` in `src/camera/ChaseCameraController.ts`
 
 Replace `CHASE_CAMERA_CONSTANTS` in `src/camera/CameraConstants.ts` wholesale:
 
@@ -489,7 +495,7 @@ menu path, swivel, and rear-view semantics):
    the camera quaternion to `CameraDiagnostics`** (needed by the tests):
    `aspect: this.camera.aspect`, `quaternion: {x,y,z,w}`.
 
-### Tests
+### WS4.A Tests
 
 **New Playwright file `tests/camera/rl-framing.spec.ts`** (project conventions from
 `tests/camera/chase-camera.spec.ts`: boot, `__GAME_TEST__.gameFlow` start match,
@@ -523,8 +529,65 @@ inside the arena" — relax those bounds by ±4m (the camera may now poke throug
 transparent walls by design), and update any assertion pinned to the old FOV (72) or
 distance. Read that spec fully before editing.
 
-Note for the settings panel: the CAMERA settings category sliders remain non-live
-(pre-existing deferred state) — do not wire them in this pass; note it in docs.
+### WS4.B Live camera settings (wire the existing sliders)
+
+The settings store **already** persists a full camera category
+(`src/stores/settingsStore.ts:19-26`: `fov, distance, height, stiffness,
+ballLookStrength, shakeIntensity`, defaults at lines ~60-67) with sliders in
+`SettingsPanel.vue`'s CAMERA tab — they are just not wired to anything. After the
+WS4.A rewrite, wiring them is cheap and gives RL-style personal camera tuning.
+
+**Semantics** (redefine the stored defaults to match — update `DEFAULT_SETTINGS.camera`
+and `validateSettings` clamps in `settingsStore.ts`):
+- `fov`: **absolute vertical FOV**, default **77**, slider range [65, 90]
+  (the current stored default of 92 was arbitrary — migrating users get it clamped).
+- `distance`, `height`: **multipliers** on `CHASE_CAMERA_CONSTANTS.distance/height`,
+  default 1.0, ranges [0.7, 1.6] and [0.6, 1.8].
+- `stiffness`: multiplier on `positionSmoothingRate` **and** `yawSmoothingRate`,
+  default 1.0, range [0.4, 2.0] (higher = stiffer, like RL).
+- `ballLookStrength`: maps to ball-cam aim bias — `ballCamCarBias = 0.3 * (1 - value)`
+  (default 0.5 → the 0.15 constant), range [0, 1].
+- `shakeIntensity`: consumed by WS4.D, range [0, 2], default 1.
+
+**Wiring (copy the Phase-16 audio-settings pattern exactly):**
+`ChaseCameraController.applyCameraSettings(settings)` stores the overrides and applies
+fov immediately; `GameRuntime.setCameraSettings(...)` facade method (with a
+pending-before-init fallback like `setAudioSettings`); `GameCanvas.vue` applies
+persisted values at boot next to the audio call; `SettingsPanel.vue`'s camera sliders
+call it live (mirror `applyLiveAudioSettings`). Expose current effective values in
+`CameraDiagnostics`.
+
+**Tests (new `tests/camera/camera-settings.spec.ts`, Playwright):** move the FOV
+slider (find its existing testid in `SettingsPanel.vue` — read the file; if camera
+sliders lack testids, add `data-testid="camera-fov"` etc. — new testids are allowed,
+only *changing existing ones* is banned) → `getCameraDiagnostics().fov` matches; set
+distance multiplier to 1.5 → measured camera-to-car distance grows ~1.5× (±15%);
+values persist across reload (copy the settings-persistence test pattern).
+
+### WS4.C Supersonic FOV kick (responsiveness feedback)
+
+`CarSerializableState.supersonic` already exists (`PhysicsTypes.ts:69`). In the
+chase camera: `effectiveFov = settingsFov + (playerSupersonic ? 4 : 0)`, smoothed at
+rate 6/s (exp-lerp like the rest), `updateProjectionMatrix()` when it changes by
+> 0.01. Subtle speed sensation, RL-adjacent juice, ~15 lines.
+**Test:** in `tests/camera/camera-settings.spec.ts`: hold W + boost until
+`getCarState(player).supersonic === true`, poll `getCameraDiagnostics().fov ≥ base + 3`;
+release and slow, fov returns to base (±0.5).
+
+### WS4.D Camera shake on big impacts (optional — skip only if time-boxed, and say so in docs)
+
+Gated by the **existing** `gameplay.cameraShakeEnabled` toggle and
+`camera.shakeIntensity`. In the camera controller, per render frame: watch ball
+velocity delta (same diff pattern as `VfxModule.detectBallImpact`); on delta > 8 m/s
+within 20m of the car, set `shakeEnergy = clamp(delta/30, 0, 1) * shakeIntensity`.
+Each frame add a decaying offset to the camera position *after* smoothing, *before*
+`lookAt`: `offset = 0.12 * shakeEnergy * noiseVec`, `shakeEnergy *= exp(-8 * dt)`,
+where `noiseVec` comes from a `SeededRandom` instance (never `Math.random()`).
+**Test (tolerance-based, Playwright):** script a hard ball impact next to the player
+(fire the ball at the player's position via `setBallState`); with shake enabled,
+sample 20 camera positions and compute mean high-frequency deviation from a 5-frame
+moving average — assert > 0.01; with `cameraShakeEnabled: false` (set via the settings
+toggle) the same metric is < 0.005.
 
 ---
 
@@ -834,6 +897,23 @@ Spawn positions `(-6,1,-10)`/`(6,1,10)` (GameRuntime initial) and
 `dot(carForwardWorld, normalize(ballPos - carPos)) > 0.95` (both face the centred
 ball). This single assertion catches both position and rotation mistakes.
 
+**WS7.A-2 Kickoff position variety (RL has five kickoff spots — adds real gameplay
+variety for near-zero cost):** replace the single spawn pose per team with a 5-entry
+table (positions for the player side; opponent side is the z-mirror):
+diagonal left `(-8, 0.35, -18)`, diagonal right `(8, 0.35, -18)`, back-left
+`(-2.5, 0.35, -22)`, back-right `(2.5, 0.35, -22)`, far-back `(0, 0.35, -24)`.
+Rotation is **computed, not stored**: add a helper
+`yawFacing(from, to): QuatLike` (yaw = `atan2` of the flattened direction, converted
+to a quaternion about Y — note local forward is −Z, so derive the formula and pin it
+with the facing test) and aim every spawn at the arena centre. Selection is
+**round-robin, not random**: `ResetWorldOptions` gains `kickoffVariantIndex?: number`;
+`MatchFlowController.beginKickoffReset` passes `this.kickoffCounter++ % 5`
+(counter resets on `startMatch`). Round-robin keeps determinism trivially (no RNG).
+Both cars use the **same** variant index (mirrored), like RL.
+**Test:** loop variants 0-4 through `resetWorld`: all five give distinct player
+positions, and the WS7.A facing assertion (`dot > 0.95` toward the ball) holds for
+every variant on both cars — this pins `yawFacing` for arbitrary angles, not just π.
+
 ### WS7.B Auto-flip when stranded upside down
 
 **Change:** new per-car runtime field `invertedSeconds` (in `CarRuntimeState.ts`,
@@ -902,6 +982,34 @@ detect path or invoke `spawn` via a goal-celebration transition as the existing 
 does), step past `maxLife` with repeated `updateRenderFrame` calls, then read
 `geometry.getAttribute("position")` and assert every inactive index has y === -10000,
 and `getActiveParticleCount() === 0`.
+
+### WS7.E Engine hum tied to speed (feel/audio)
+
+The audio module's continuous-voice infrastructure (`ContinuousNoiseVoice` — looping
+noise + lowpass whose gain/filter already scale with `setIntensity`) makes a
+speed-scaled engine hum ~1 hour of work and a large moment-to-moment feel win.
+
+**Change:**
+1. `src/audio/AudioTypes.ts`: add `EngineStateAudioEvent`
+   `{ type: "audio:engine-state"; carId: CarId; active: boolean; speed: number }` to
+   the union.
+2. `src/integration/AudioEventAdapter.ts`: each frame, for the **player car only**
+   (AI engine noise would just be mud), emit
+   `{ type: "audio:engine-state", carId, active: speed > 0.5, speed }` — with
+   hysteresis: once active, stay active until speed < 0.3.
+3. `src/audio/RetroAudioModule.ts`: in `consumeEvent`, handle it exactly like
+   `audio:boost-state`'s `handleContinuousVoice` path — key `engine:<carId>`, a
+   `ContinuousNoiseVoice(context, sharedNoiseBuffer, vehicleBus, /*baseFilterHz*/ 320, /*peakGain*/ 0.07)`,
+   `intensity = min(1, speed / 23)`. The existing `update()` pause/blur handling stops
+   `boost:`/`powerslide:` prefixes — add `engine:` to that predicate, and add it to the
+   `match-end` stop list if one exists (grep `stopContinuousVoicesMatching`).
+
+**Tests (extend `tests/ui/audio.spec.ts`, following its established pattern —
+`runtime.stop()` first so the adapter doesn't overwrite injected events):**
+emit `engine-state active:true speed:12` → `activeContinuousVoices` contains
+`"engine:car-player"`; emit `active:false` → voice gone. Plus one live check: during
+the existing "playing a live match produces audio activity" test, after driving
+(held W) the diagnostics voice list contains the engine voice.
 
 ---
 
@@ -973,50 +1081,150 @@ the floor only + shell transparency, documenting why.
 
 ## WS9 — UI restyle: PS1 Wipeout character
 
-**Goal:** de-generic the menus/HUD. Keep every `data-testid` and every visible label
-string exactly as-is (release-gate + suites select on them). This is CSS + minor
-template wrappers only — no behavioural changes, no new dependencies, **no remote
-fonts** (runtime assets must be local).
+**Goal:** de-generic the menus/HUD into a Wipeout-2097 / Designers-Republic-flavoured
+identity. Keep every `data-testid` and every visible label string exactly as-is
+(release-gate + suites select on them; any decorative numbering/text must be added via
+CSS pseudo-elements, never as real DOM text). This is fonts + CSS + minor template
+class edits — no behavioural changes, no npm dependencies.
 
-**Change:**
-1. New stylesheet `src/styles/retro-ui.css`, imported once in `src/main.ts` (or
-   `App.vue` style, non-scoped). Define CSS custom properties:
-   `--ui-cyan: #4ff0ff; --ui-magenta: #ff5fd8; --ui-amber: #ffc65f; --ui-bg: rgba(8,6,18,0.82); --ui-font: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;`
-   plus utility classes:
-   - `.wo-panel`: angled corner-cut container —
-     `clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));`
-     1px inner border via `box-shadow: inset 0 0 0 1px rgba(79,240,255,0.35)`,
-     background `var(--ui-bg)`.
-   - `.wo-title`: uppercase, `font-style: italic`, `transform: skewX(-8deg)`,
-     `letter-spacing: 0.28em`, dual chromatic shadow
-     `text-shadow: 2px 0 rgba(255,95,216,0.55), -2px 0 rgba(79,240,255,0.55)`.
-   - `.wo-item`: menu row — left accent bar (`border-left: 3px solid var(--ui-cyan)`),
-     skewed hover slide (existing MainMenu already translates on hover — keep),
-     background gradient `linear-gradient(90deg, rgba(79,240,255,0.10), transparent 60%)`.
-   - `.wo-scanlines`: full-screen overlay,
-     `background: repeating-linear-gradient(0deg, rgba(0,0,0,0.14) 0 1px, transparent 1px 3px); pointer-events: none; mix-blend-mode: multiply;`
-2. Add one `<div class="wo-scanlines" aria-hidden="true">` overlay in `App.vue` above
-   the HUD/menu layer (below dialogs). It must not intercept events
-   (`pointer-events: none`).
-3. Apply classes across `src/components/menu/MainMenu.vue`, `MatchSetup.vue`,
-   `SettingsPanel.vue`, `src/components/hud/PauseMenu.vue`, `ResultsScreen.vue`,
-   `GameplayHud.vue`, `CountdownOverlay.vue`, `GoalBanner.vue`, `OvertimeBanner.vue`:
-   swap the plain monospace-box look for `.wo-panel`/`.wo-title`/`.wo-item`, keep
-   layout and all test hooks. HUD specifics: scoreboard becomes a winged centre plate
-   (clip-path chevrons using the amber/cyan/magenta split like the reference shots:
-   player score cyan-boxed, timer centre, opponent magenta-boxed); boost gauge gets a
-   circular conic-gradient ring (`background: conic-gradient(var(--ui-amber) calc(var(--boost)*1%), rgba(255,255,255,0.08) 0)`
-   with a CSS var bound via `:style` to the existing boost value) — the numeric
-   readout stays.
-4. Countdown/GO and GOAL banners: big skewed italic with the chromatic shadow, brief
-   CSS scale-in (`@keyframes` pop, 150ms) — CSS-only.
+### WS9.A Typography — real fonts, self-hosted
 
-**Tests:** the entire existing Playwright UI/flow suite is the regression gate (it
-selects by testid/text only). Add one smoke assertion to
-`tests/ui/settings.spec.ts`-style file or `tests/smoke/boot.spec.ts`: the scanline
-overlay exists and has `pointer-events: none`
-(`getComputedStyle(document.querySelector('.wo-scanlines')).pointerEvents === 'none'`),
-proving it can't eat clicks. Manual screenshot review in WS10.
+Internet fonts are **allowed for sourcing**, but they must be **downloaded during
+implementation and committed to the repo**, never linked at runtime:
+`tests/release/release-gate.spec.ts` asserts a live match makes zero non-localhost
+requests, and the Master Brief forbids fetching runtime assets remotely. A
+`<link href="https://fonts.googleapis.com/…">` tag would fail the release gate —
+self-hosting satisfies both the gate and "use internet fonts".
+
+**Families (both SIL OFL licensed, on Google Fonts):**
+- **Russo One** (weight 400 only) — display: title lockup, countdown, GOAL/VICTORY
+  banners, scores. Broad, aggressive, engineered — the closest free face to the
+  Wipeout/AG-racing look.
+- **Chakra Petch** (400, 600, 700, 700-italic) — everything else: menu items, labels,
+  HUD numerals (it has excellent squared techno digits), settings. Supports
+  `font-variant-numeric: tabular-nums` styling for the timer/boost so digits don't
+  jitter as they change.
+
+**Acquisition steps:**
+```bash
+mkdir -p public/fonts
+# 1. Ask the Google Fonts CSS API for the woff2 URLs (the UA header matters — without
+#    a modern browser UA it serves TTF):
+curl -s -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36" \
+  "https://fonts.googleapis.com/css2?family=Russo+One&family=Chakra+Petch:ital,wght@0,400;0,600;0,700;1,700&display=swap"
+# 2. curl each fonts.gstatic.com woff2 URL from the response into public/fonts/ with
+#    stable names: russo-one-400.woff2, chakra-petch-400.woff2, chakra-petch-600.woff2,
+#    chakra-petch-700.woff2, chakra-petch-700i.woff2
+# 3. Fallback if the CSS API is unreachable from this environment: download the TTFs
+#    from https://github.com/google/fonts/tree/main/ofl/russoone and /ofl/chakrapetch
+#    (raw.githubusercontent.com) and self-host those instead — bigger files, same result.
+```
+Add `@font-face` rules in the new stylesheet (`font-display: swap`, `url('/fonts/…')`),
+with fallback stacks `"Chakra Petch", "Segoe UI", Arial, sans-serif` /
+`"Russo One", Impact, sans-serif`. **Attribution:** commit each family's OFL.txt next to
+the fonts (`public/fonts/OFL-*.txt` — they're in the same GitHub folders) and add both
+to `docs/asset-attribution.md`.
+
+**Font tests:** Playwright (add to `tests/smoke/boot.spec.ts`):
+`await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check('16px "Chakra Petch"') && document.fonts.check('16px "Russo One"'); })`
+must be `true`. And `npm run test:release` staying green proves no runtime font CDN
+requests snuck in.
+
+### WS9.B Design tokens & utility classes
+
+New stylesheet `src/styles/retro-ui.css`, imported once from `src/main.ts`. The
+design language, in one line: *angular neon signage on near-black — 45° corner cuts,
+diagonal slashes, chevrons, oversized italic numerals, tight uppercase tracking,
+cyan/magenta team coding with amber for energy, glow used sparingly.*
+
+```css
+:root {
+  --ui-cyan: #4ff0ff; --ui-magenta: #ff5fd8; --ui-amber: #ffc65f;
+  --ui-ink: #e8f9ff; --ui-dim: #8fa4b8;
+  --ui-bg: rgba(8, 6, 18, 0.82);
+  --font-display: "Russo One", Impact, sans-serif;
+  --font-ui: "Chakra Petch", "Segoe UI", Arial, sans-serif;
+  --skew: -8deg; --cut: 14px;
+}
+```
+Utilities (all prefixed `wo-`):
+- `.wo-panel` — corner-cut container:
+  `clip-path: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));`
+  `background: var(--ui-bg); box-shadow: inset 0 0 0 1px rgba(79,240,255,0.35);`
+- `.wo-title` — `font-family: var(--font-display); text-transform: uppercase;`
+  `transform: skewX(var(--skew)); letter-spacing: 0.08em;` chromatic dual shadow
+  `text-shadow: 2px 0 rgba(255,95,216,0.55), -2px 0 rgba(79,240,255,0.55);`
+- `.wo-label` — `font-family: var(--font-ui); font-weight: 600; text-transform: uppercase; letter-spacing: 0.22em; font-size: 0.72rem; color: var(--ui-dim);`
+- `.wo-numeral` — `font-family: var(--font-ui); font-weight: 700; font-variant-numeric: tabular-nums;`
+- `.wo-item` — menu slat: left accent bar `border-left: 3px solid var(--ui-cyan);`
+  `background: linear-gradient(90deg, rgba(79,240,255,0.10), transparent 60%);`
+  hover/focus: slide along the skew axis (keep MainMenu's existing translateX) +
+  border brightens. Decorative index number via
+  `.wo-item::before { content: attr(data-index); color: var(--ui-amber); font: 600 0.7rem var(--font-ui); margin-right: 0.8em; }`
+  — set `data-index="01"` etc. on the buttons (attributes are safe; text nodes are not).
+- `.wo-chip` — parallelogram toggle (duration/difficulty/graphics chips):
+  `transform: skewX(var(--skew));` inner content counter-skewed; active state = solid
+  cyan fill with black text.
+- `.wo-scanlines` — `position: fixed; inset: 0; pointer-events: none; z-index: 40;`
+  `background: repeating-linear-gradient(0deg, rgba(0,0,0,0.14) 0 1px, transparent 1px 3px); mix-blend-mode: multiply;`
+- `.wo-vignette` — same placement, `background: radial-gradient(ellipse at center, transparent 55%, rgba(2,0,8,0.55) 100%);`
+
+Add `<div class="wo-scanlines" aria-hidden="true"></div>` and
+`<div class="wo-vignette" aria-hidden="true"></div>` once in `App.vue`, above the
+HUD/menu layer.
+
+### WS9.C Per-screen treatments
+
+Apply per component (class swaps + scoped-style updates only; DOM structure, testids
+and text nodes unchanged):
+
+- **MainMenu.vue** — stacked lockup: small `.wo-label` "SPACE" in cyan above a huge
+  `.wo-title` "CARBALL" (`font-size: clamp(3rem, 8vw, 5.5rem)`) — the `<h1>` already
+  contains "SPACE CARBALL"; split visually with a nested span **only if** no test
+  selects the exact string (grep `tests/` for "SPACE CARBALL" first; if anything
+  matches, keep one text node and style it whole). Menu buttons become `.wo-item`s
+  with `data-index` 01/02.
+- **MatchSetup.vue** — duration + difficulty rows become `.wo-chip` groups;
+  START MATCH is the primary slat (amber accent bar, larger); BACK stays secondary.
+- **SettingsPanel.vue** — category tabs become a left rail of `.wo-item`s (active =
+  filled); sliders: `accent-color: var(--ui-cyan);` labels `.wo-label`; keep every
+  testid and the panel's DOM order (the settings Playwright suite clicks through it).
+- **GameplayHud.vue** — scoreboard becomes a winged centre plate: three cells —
+  player score in a cyan-filled `clip-path` chevron block (black text, `.wo-numeral`
+  1.5rem), timer centre (`.wo-numeral` 1.7rem on dark), opponent score
+  magenta-filled; thin angled wing shapes via `::before/::after` on the plate.
+  Boost gauge: circular ring —
+  `background: conic-gradient(var(--ui-amber) calc(var(--boost-pct) * 1%), rgba(255,255,255,0.08) 0);`
+  with `--boost-pct` bound via `:style="{ '--boost-pct': boost }"`; centred numeral
+  `.wo-numeral` 2rem; existing `low` class (<20) pulses amber→deeper amber
+  (2 opacity steps, 600ms alternate — no strobe). **Supersonic feedback:** when the
+  player car is supersonic, the ring gains a white outer glow and a tiny
+  "SUPERSONIC" `.wo-label`. Wiring: `GameRuntime`'s existing per-tick store sync
+  (the object built around `GameRuntime.ts:446`, `playerBoostAmount`) gains
+  `playerSupersonic: modules.physics.getCarState(PLAYER_CAR_ID).supersonic`; mirror a
+  `playerSupersonic` field through `matchFlowStore` exactly like `playerBoostAmount`;
+  HUD adds a computed. (This is the one intentional non-CSS change in WS9.)
+- **CountdownOverlay.vue** — `.wo-title` at `clamp(4rem, 10vw, 7rem)`; keyed
+  `@keyframes wo-pop` (scale 1.35→1, opacity 0→1, 150ms) re-triggered per value
+  (`:key="value"` on the element); "GO!" in amber.
+- **GoalBanner.vue / OvertimeBanner.vue** — full-width diagonal band
+  (`transform: skewY(-2deg)`), scoring-team colour at 85% alpha, `.wo-title` text,
+  200ms slide-in. Respect the accessibility "reduced flashes" setting if a banner
+  animation flashes (steady slide-in is fine; no strobing).
+- **PauseMenu.vue / ResultsScreen.vue** — `.wo-panel` containers;
+  VICTORY = cyan / DEFEAT = magenta / DRAW = amber `.wo-title` at 3rem+; final score
+  `.wo-numeral` 2.6rem; buttons as `.wo-item`s.
+
+### WS9.D Tests
+
+- The entire existing Playwright UI/flow suite is the regression gate (testid/text
+  selection only — run it after every component edit, not just at the end).
+- Fonts loaded check (WS9.A).
+- Overlay safety: `getComputedStyle(document.querySelector('.wo-scanlines')).pointerEvents === 'none'`
+  (add beside the font check).
+- Boost ring binding: in a live match, evaluate the HUD boost element's inline style
+  contains `--boost-pct` and it tracks `matchFlowStore` boost within 1 unit.
+- Manual screenshot review in WS10 (add: one HUD shot at supersonic speed).
 
 ---
 
@@ -1058,6 +1266,11 @@ proving it can't eat clicks. Manual screenshot review in WS10.
 | `PhysicsFacade.ts` | DEFAULT_CAR_SPAWNS | (0,0.35,−24) yaw π / (0,0.35,24) yaw 0 |
 | auto-flip | invert threshold / dwell | up.y < −0.35 & speed < 2 / 1.0s |
 | AI stuck | detect / reverse | 90 ticks @ speed<1 / 84 ticks reverse |
+| `settingsStore.ts` camera | fov abs / distance / height / stiffness / ballLook / shake | 77 [65,90] / 1.0 [0.7,1.6] / 1.0 [0.6,1.8] / 1.0 [0.4,2] / 0.5 [0,1] / 1.0 [0,2] |
+| camera juice | supersonic FOV kick / kick smoothing / shake max offset / shake decay | +4° / 6 per s / 0.12m·intensity / exp(−8·dt) |
+| kickoff variants | 5 poses (player side, z-mirrored) | (±8,·,−18) (±2.5,·,−22) (0,·,−24), round-robin |
+| engine hum | filter base / peak gain / intensity / hysteresis | 320 Hz / 0.07 / speed÷23 / on >0.5, off <0.3 m/s |
+| fonts | families (self-hosted woff2, OFL) | Russo One 400; Chakra Petch 400/600/700/700i |
 
 ## Appendix B — Test inventory added by this plan
 
@@ -1067,7 +1280,8 @@ proving it can't eat clicks. Manual screenshot review in WS10.
 | `tests/unit/gamepadInput.spec.ts` | Vitest | WS1.B |
 | `tests/unit/drivingFeel.spec.ts` | Vitest | WS2 |
 | `tests/unit/dodgeFlip.spec.ts` | Vitest | WS3 |
-| `tests/camera/rl-framing.spec.ts` | Playwright | WS4 |
+| `tests/camera/rl-framing.spec.ts` | Playwright | WS4.A |
+| `tests/camera/camera-settings.spec.ts` | Playwright | WS4.B/C/D |
 | `tests/unit/goalIntegrity.spec.ts` | Vitest | WS5.B |
 | `tests/unit/wallDriving.spec.ts` | Vitest | WS5.C |
 | `tests/unit/boostPads.spec.ts` (extended) | Vitest | WS5.D |
@@ -1077,7 +1291,9 @@ proving it can't eat clicks. Manual screenshot review in WS10.
 | `tests/unit/autoFlip.spec.ts` | Vitest | WS7.B |
 | `tests/game-flow/match-flow.spec.ts` (extended) | Playwright | WS7.C |
 | `tests/unit/vfxModule.spec.ts` (extended) | Vitest | WS7.D |
+| `tests/ui/audio.spec.ts` (extended) | Playwright | WS7.E |
 | `tests/visual-language/arena-shell.spec.ts` | Playwright | WS5.A / WS8.B |
+| `tests/smoke/boot.spec.ts` (extended: fonts + overlays) | Playwright | WS9 |
 | existing full suites | both | every WS regression |
 
 ## Appendix C — Known existing tests that will need updating (expected, not regressions)
