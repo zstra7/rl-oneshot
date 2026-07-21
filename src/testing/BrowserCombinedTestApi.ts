@@ -22,6 +22,8 @@ export interface BrowserRuntimeTestApi {
    * (settings can only be opened from menu states, not mid-match). */
   setCameraSettings(settings: CameraSettings): void;
   getCameraSettings(): CameraSettings;
+  /** WS7.C: whether the menu-presentation ghost ball/cars are currently shown. */
+  isMenuPresentationVisible(): boolean;
   /** Phase 10: opponent AI difficulty/seed/tactical-mode inspection. */
   selectAiDifficulty(difficulty: AiDifficulty): void;
   getAiDifficulty(): AiDifficulty;

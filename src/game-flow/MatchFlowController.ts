@@ -39,6 +39,9 @@ const PAUSABLE_STATES: readonly MatchState[] = [
   "OVERTIME_PLAYING"
 ];
 
+/** WS7.A-2: mirrors PhysicsFacade's KICKOFF_VARIANTS length (5 RL-style kickoff spots). */
+const KICKOFF_VARIANT_COUNT = 5;
+
 /**
  * Owns `MatchState` (game-flow spec section 28): the one authority for
  * match/session state transitions. UI requests actions through this
@@ -67,6 +70,8 @@ export class MatchFlowController {
   private celebrationTicksRemaining = 0;
   private celebrationLeadsToMatchEnd = false;
   private overtimeIntroTicksRemaining = 0;
+  /** WS7.A-2: which of the 5 kickoff spots comes next (round-robin). */
+  private kickoffCounter = 0;
 
   private readonly events: MatchFlowEvent[] = [];
 
@@ -159,6 +164,7 @@ export class MatchFlowController {
     this.overtimeElapsed = 0;
     this.winner = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
+    this.kickoffCounter = 0;
 
     this.setMatchState("MATCH_LOADING");
     // Procedural assets are already resident (Phase 2); there is no real
@@ -321,9 +327,14 @@ export class MatchFlowController {
     this.setMatchState("KICKOFF_RESET");
     this.pushEvent({ type: "kickoff-reset-started" });
 
+    // WS7.A-2 (plan/POLISH_OVERHAUL_PLAN.md): round-robin through the 5
+    // RL-style kickoff spots — deterministic (no RNG), reset per match
+    // in startMatch().
     this.requirePhysics().resetWorld({
-      carCreationOrder: [PLAYER_CAR_ID, OPPONENT_CAR_ID]
+      carCreationOrder: [PLAYER_CAR_ID, OPPONENT_CAR_ID],
+      kickoffVariantIndex: this.kickoffCounter % KICKOFF_VARIANT_COUNT
     });
+    this.kickoffCounter += 1;
 
     this.pushEvent({ type: "kickoff-reset-completed" });
 
@@ -393,6 +404,7 @@ export class MatchFlowController {
     this.winner = null;
     this.goalLatch = false;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
+    this.kickoffCounter = 0;
     this.beginKickoffReset("PLAYING");
   }
 
@@ -406,6 +418,7 @@ export class MatchFlowController {
     this.overtimeElapsed = 0;
     this.winner = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
+    this.kickoffCounter = 0;
 
     this.setMatchState("MATCH_LOADING");
     this.setMatchState("KICKOFF_SETUP");

@@ -38,6 +38,14 @@ export interface CarRuntimeState {
   powerslideBlend: number;
   boostAmount: number;
   supersonic: boolean;
+
+  /**
+   * WS7.B (plan/POLISH_OVERHAUL_PLAN.md): seconds spent upside down,
+   * stationary and airborne — a deliberate product deviation from real
+   * Rocket League (which has no auto-flip; players dodge out themselves)
+   * requested for this game. See docs/physics-deviations.md.
+   */
+  invertedSeconds: number;
 }
 
 export function createInitialCarRuntimeState(initialBoost: number): CarRuntimeState {
@@ -65,6 +73,8 @@ export function createInitialCarRuntimeState(initialBoost: number): CarRuntimeSt
 
     powerslideBlend: 0,
     boostAmount: initialBoost,
-    supersonic: false
+    supersonic: false,
+
+    invertedSeconds: 0
   };
 }

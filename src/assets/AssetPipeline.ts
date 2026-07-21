@@ -235,17 +235,26 @@ export class AssetPipeline implements GameModule {
     root.add(createStadiumBlockout(context));
     root.add(createDefaultStarfield(context));
 
+    // WS7.C (plan/POLISH_OVERHAUL_PLAN.md): named so GameRuntime can
+    // toggle just these three children's visibility once a match goes
+    // live, leaving the stadium/starfield (siblings under the same
+    // root) always visible.
     const ball = createProceduralBallVisual(context);
+    ball.name = "MenuGhostBall";
     ball.position.set(0, context.physicsMetadata.ballRadius + 2, 0);
     root.add(ball);
 
+    // WS7.A: mirrors PhysicsFacade's default (far-back) kickoff pose —
+    // player facing +Z (yaw pi), opponent facing -Z (identity).
     const playerCar = this.createCarVisual("player");
-    playerCar.position.set(-6, context.physicsMetadata.carHitboxSize.y / 2, -10);
+    playerCar.name = "MenuGhostPlayerCar";
+    playerCar.rotation.y = Math.PI;
+    playerCar.position.set(0, context.physicsMetadata.carHitboxSize.y / 2, -24);
     root.add(playerCar);
 
     const opponentCar = this.createCarVisual("opponent");
-    opponentCar.rotation.y = Math.PI;
-    opponentCar.position.set(6, context.physicsMetadata.carHitboxSize.y / 2, 10);
+    opponentCar.name = "MenuGhostOpponentCar";
+    opponentCar.position.set(0, context.physicsMetadata.carHitboxSize.y / 2, 24);
     root.add(opponentCar);
 
     return root;

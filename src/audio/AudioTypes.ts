@@ -107,6 +107,14 @@ export interface MatchEndAudioEvent {
   readonly winner: TeamId | null;
 }
 
+/** WS7.E (plan/POLISH_OVERHAUL_PLAN.md): speed-scaled continuous engine hum, player car only. */
+export interface EngineStateAudioEvent {
+  readonly type: "audio:engine-state";
+  readonly carId: CarId;
+  readonly active: boolean;
+  readonly speed: number;
+}
+
 export type AudioGameEvent =
   | UiNavigateAudioEvent
   | UiConfirmAudioEvent
@@ -122,7 +130,8 @@ export type AudioGameEvent =
   | BoostPadRespawnAudioEvent
   | GoalAudioEvent
   | OvertimeAudioEvent
-  | MatchEndAudioEvent;
+  | MatchEndAudioEvent
+  | EngineStateAudioEvent;
 
 export interface AudioUpdateFrame {
   readonly frameDeltaSeconds: number;

@@ -14,6 +14,7 @@ import type {
   CarInput,
   CarSerializableState,
   PhysicsRenderSnapshot,
+  QuatLike,
   ResetWorldOptions,
   SpawnCarOptions,
   TransformSample,
@@ -41,10 +42,33 @@ export const PHYSICS_MODULE_CONTRACT_VERSION = "2.1";
 // WS5.B (plan/POLISH_OVERHAUL_PLAN.md): the ball used to fall 8m at every
 // kickoff — spawn it resting on the floor instead.
 const DEFAULT_BALL_SPAWN = { x: 0, y: RL_CONSTANTS.ballRadius, z: 0 };
-const DEFAULT_CAR_SPAWNS: Record<number, { x: number; y: number; z: number }> = {
-  0: { x: -6, y: 1, z: -10 },
-  1: { x: 6, y: 1, z: 10 }
-};
+
+const KICKOFF_SPAWN_Y = 0.35;
+const ARENA_CENTRE = { x: 0, y: KICKOFF_SPAWN_Y, z: 0 };
+
+/**
+ * WS7.A-2 (plan/POLISH_OVERHAUL_PLAN.md): the 5 RL-style kickoff spots,
+ * given here for the player side (negative Z); the opponent's spawn for
+ * the same variant index is the Z-mirror. Rotation is computed (not
+ * stored) via `V.yawFacing`, aimed at the arena centre.
+ */
+const KICKOFF_VARIANTS: ReadonlyArray<{ x: number; z: number }> = [
+  { x: -8, z: -18 }, // diagonal left
+  { x: 8, z: -18 }, // diagonal right
+  { x: -2.5, z: -22 }, // back-left
+  { x: 2.5, z: -22 }, // back-right
+  { x: 0, z: -24 } // far-back
+];
+
+function kickoffSpawn(
+  variantIndex: number,
+  isPlayerSide: boolean
+): { transform: V.Vec3Like; rotation: QuatLike } {
+  const variant =
+    KICKOFF_VARIANTS[((variantIndex % KICKOFF_VARIANTS.length) + KICKOFF_VARIANTS.length) % KICKOFF_VARIANTS.length]!;
+  const transform = { x: variant.x, y: KICKOFF_SPAWN_Y, z: isPlayerSide ? variant.z : -variant.z };
+  return { transform, rotation: V.yawFacing(transform, ARENA_CENTRE) };
+}
 
 function cloneTransform(
   position: RAPIER.Vector,
@@ -94,6 +118,58 @@ function clampLinearVelocity(body: RAPIER.RigidBody, maxSpeed: number): void {
       true
     );
   }
+}
+
+const AUTO_FLIP_UPSIDE_DOWN_THRESHOLD = -0.35;
+const AUTO_FLIP_SPEED_THRESHOLD = 2.0;
+const AUTO_FLIP_ANGULAR_SPEED_THRESHOLD = 2.0;
+const AUTO_FLIP_SECONDS = 1.0;
+
+/**
+ * WS7.B (plan/POLISH_OVERHAUL_PLAN.md): a car stranded upside down,
+ * airborne and roughly stationary for `AUTO_FLIP_SECONDS` gets righted
+ * automatically. Real Rocket League has no auto-flip (players dodge out
+ * themselves) — this is a deliberate product deviation requested for
+ * this game, see docs/physics-deviations.md.
+ */
+function applyAutoFlipIfStranded(car: CarEntity, dt: number): void {
+  const rotation = car.body.rotation();
+  const up = V.applyQuaternion(V.UP, rotation);
+  const linvel = car.body.linvel();
+  const angvel = car.body.angvel();
+
+  // Deliberately not gated on `!grounded`: a car that has settled
+  // upside down on the floor is exactly the case this needs to fix, and
+  // the suspension probes (which rotate with the body) can still report
+  // ground contact for a symmetric car collider resting on its roof —
+  // confirmed empirically (a Vitest debug trace showed `grounded: true`
+  // with a downward-pointing support normal within a couple of ticks of
+  // an upside-down spawn). up.y this negative already excludes every
+  // normal driving/aerial orientation, so the speed/angular-speed gates
+  // alone are enough to avoid misfiring mid-dodge or mid-recovery.
+  const strandedUpsideDown =
+    up.y < AUTO_FLIP_UPSIDE_DOWN_THRESHOLD &&
+    V.length(linvel) < AUTO_FLIP_SPEED_THRESHOLD &&
+    V.length(angvel) < AUTO_FLIP_ANGULAR_SPEED_THRESHOLD;
+
+  car.runtime.invertedSeconds = strandedUpsideDown ? car.runtime.invertedSeconds + dt : 0;
+
+  if (car.runtime.invertedSeconds < AUTO_FLIP_SECONDS) {
+    return;
+  }
+
+  // Preserve the car's current heading — only pitch/roll get corrected,
+  // not yaw. Falls back to yaw 0 if the car is pointing straight up/
+  // down, where the flattened forward vector is degenerate.
+  const forward = V.applyQuaternion(V.LOCAL_FORWARD, rotation);
+  const flatForward = { x: forward.x, y: 0, z: forward.z };
+  const yaw = V.length(flatForward) < 0.1 ? 0 : Math.atan2(-flatForward.x, -flatForward.z);
+
+  const translation = car.body.translation();
+  car.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
+  car.body.setTranslation({ x: translation.x, y: translation.y + 0.5, z: translation.z }, true);
+  car.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  car.runtime.invertedSeconds = 0;
 }
 
 /**
@@ -235,14 +311,16 @@ export class PhysicsFacade implements GameModule {
       throw new Error(`Duplicate CarId "${options.id}" rejected.`);
     }
 
-    const body = world.createRigidBody(
-      RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(options.transform.x, options.transform.y, options.transform.z)
-        .setCanSleep(false)
-        .setCcdEnabled(true)
-        .setLinearDamping(0)
-        .setAngularDamping(0)
-    );
+    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(options.transform.x, options.transform.y, options.transform.z)
+      .setCanSleep(false)
+      .setCcdEnabled(true)
+      .setLinearDamping(0)
+      .setAngularDamping(0);
+    if (options.rotation) {
+      bodyDesc.setRotation(options.rotation);
+    }
+    const body = world.createRigidBody(bodyDesc);
 
     const collider = world.createCollider(
       RAPIER.ColliderDesc.cuboid(CAR_HALF_EXTENTS.x, CAR_HALF_EXTENTS.y, CAR_HALF_EXTENTS.z)
@@ -313,9 +391,10 @@ export class PhysicsFacade implements GameModule {
     }
 
     if (options?.carCreationOrder) {
+      const variantIndex = options.kickoffVariantIndex ?? 0;
       options.carCreationOrder.forEach((carId, index) => {
-        const spawn = DEFAULT_CAR_SPAWNS[index] ?? DEFAULT_CAR_SPAWNS[0];
-        this.spawnCar({ id: carId, transform: spawn! });
+        const spawn = kickoffSpawn(variantIndex, index === 0);
+        this.spawnCar({ id: carId, transform: spawn.transform, rotation: spawn.rotation });
       });
     }
 
@@ -453,6 +532,7 @@ export class PhysicsFacade implements GameModule {
     for (const car of cars) {
       clampLinearVelocity(car.body, RL_CONSTANTS.carMaxSpeed);
       postPhysicsTick(car);
+      applyAutoFlipIfStranded(car, dt);
       this.currentSnapshot.set(car.id, cloneTransform(car.body.translation(), car.body.rotation()));
       car.previousInput = car.currentInput;
     }

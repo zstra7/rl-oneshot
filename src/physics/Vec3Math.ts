@@ -1,4 +1,4 @@
-import type { Vec3Like } from "@/physics/PhysicsTypes";
+import type { QuatLike, Vec3Like } from "@/physics/PhysicsTypes";
 
 export type { Vec3Like };
 
@@ -84,3 +84,19 @@ export const ZERO: Vec3Like = { x: 0, y: 0, z: 0 };
 export const UP: Vec3Like = { x: 0, y: 1, z: 0 };
 export const LOCAL_FORWARD: Vec3Like = { x: 0, y: 0, z: -1 };
 export const LOCAL_RIGHT: Vec3Like = { x: 1, y: 0, z: 0 };
+
+/**
+ * WS7.A-2 (plan/POLISH_OVERHAUL_PLAN.md): a yaw-only quaternion that
+ * points `LOCAL_FORWARD` (0,0,-1) from `from` toward `to` (flattened,
+ * y ignored). Derived from `applyQuaternion`'s rotate-about-Y convention:
+ * a yaw of `theta` maps local forward to `(-sin(theta), 0, -cos(theta))`
+ * (verified against the two known reference poses — yaw 0 keeps facing
+ * -Z, yaw pi flips to face +Z), so solving `(dx,dz) = (-sin(theta),
+ * -cos(theta))` gives `theta = atan2(-dx, -dz)`.
+ */
+export function yawFacing(from: Vec3Like, to: Vec3Like): QuatLike {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const theta = Math.atan2(-dx, -dz);
+  return { x: 0, y: Math.sin(theta / 2), z: 0, w: Math.cos(theta / 2) };
+}

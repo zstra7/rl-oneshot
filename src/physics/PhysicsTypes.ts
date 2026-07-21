@@ -94,12 +94,16 @@ export type ArenaPreset = "flat-plane" | "box-arena";
 export interface SpawnCarOptions {
   readonly id: CarId;
   readonly transform: Vec3Like;
+  /** WS7.A: spawn orientation; identity (facing local -Z) if omitted. */
+  readonly rotation?: QuatLike;
   readonly initialBoost?: number;
 }
 
 export interface ResetWorldOptions {
   readonly carCreationOrder?: readonly CarId[];
   readonly arenaPreset?: ArenaPreset;
+  /** WS7.A-2: which of the 5 RL-style kickoff spawn spots to use (round-robin, not random). */
+  readonly kickoffVariantIndex?: number;
 }
 
 /** One entity transform sample, used for render interpolation. */

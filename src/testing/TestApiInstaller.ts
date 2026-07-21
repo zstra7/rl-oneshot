@@ -20,6 +20,7 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       getCameraDiagnostics: () => runtime.getCameraDiagnostics(),
       setCameraSettings: (settings) => runtime.setCameraSettings(settings),
       getCameraSettings: () => runtime.getCameraSettings(),
+      isMenuPresentationVisible: () => runtime.isMenuPresentationVisible(),
       selectAiDifficulty: (difficulty) => runtime.selectAiDifficulty(difficulty),
       getAiDifficulty: () => runtime.getAiDifficulty(),
       setAiSeed: (seed) => runtime.setAiSeed(seed),

@@ -27,18 +27,30 @@ const PARTICLE_VERTEX_SHADER = `
 attribute float size;
 attribute vec3 color;
 varying vec3 vColor;
+varying float vSize;
 void main() {
   vColor = color;
+  vSize = size;
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   gl_PointSize = size * (300.0 / max(-mvPosition.z, 0.001));
   gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
+// WS7.D (plan/POLISH_OVERHAUL_PLAN.md): `gl_PointSize = 0` is clamped to
+// 1px on most GPUs rather than culled, so an inactive pooled particle
+// (size driven to 0 in uploadBuffers) could still rasterise a stray 1px
+// dot at its last position forever with additive blending. Discarding
+// on the size varying (not just relying on point-size) makes a
+// zero-size particle genuinely invisible on every GPU/driver.
 const PARTICLE_FRAGMENT_SHADER = `
 precision mediump float;
 varying vec3 vColor;
+varying float vSize;
 void main() {
+  if (vSize <= 0.0) {
+    discard;
+  }
   vec2 coord = gl_PointCoord - vec2(0.5);
   float dist = length(coord);
   if (dist > 0.5) {
@@ -308,6 +320,10 @@ export class VfxModule implements RenderFrameModule {
         sizeAttr.setX(i, particle.size * Math.max(0, lifeRatio));
       } else {
         sizeAttr.setX(i, 0);
+        // Belt-and-braces alongside the fragment-shader discard: move
+        // the point far off-screen too, so even a renderer/driver that
+        // ignores gl_PointSize==0 has nothing there to draw.
+        positionAttr.setXYZ(i, 0, -10000, 0);
       }
     }
 

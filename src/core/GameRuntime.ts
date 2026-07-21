@@ -1,3 +1,5 @@
+import type * as THREE from "three";
+
 import type { AppState } from "@/core/ApplicationState";
 import { validateModuleContracts } from "@/core/ContractRegistry";
 import { DefaultErrorReporter, type ErrorReporter } from "@/core/ErrorReporter";
@@ -153,12 +155,16 @@ export interface GameRuntimeFacade {
   getAudioDiagnostics(): AudioDiagnostics;
   /** UI sound helper (retro audio module spec section 18): components call this instead of importing RetroAudioModule directly. */
   playUiSound(kind: "navigate" | "confirm" | "cancel"): void;
+
+  isMenuPresentationVisible(): boolean;
 }
 
 export class GameRuntime implements GameRuntimeFacade {
   private appState: AppState = "BOOT";
   private modules: ModuleContainer | null = null;
   private sceneRenderer: PlaceholderSceneRenderer | null = null;
+  private placeholderWorldGroup: THREE.Group | null = null;
+  private menuPresentationVisible = true;
   private physicsRenderBinding: PhysicsRenderBinding | null = null;
   private boostPadRenderBinding: BoostPadRenderBinding | null = null;
   private gameFlowTestApi: BrowserGameFlowTestApi | null = null;
@@ -222,15 +228,29 @@ export class GameRuntime implements GameRuntimeFacade {
     this.moduleStatus["renderer"] = "ready";
     this.frameCoordinator.register(this.sceneRenderer);
 
-    this.sceneRenderer.addToScene(this.modules.assets.buildPlaceholderWorld());
+    const placeholderWorld = this.modules.assets.buildPlaceholderWorld();
+    this.placeholderWorldGroup = placeholderWorld;
+    this.sceneRenderer.addToScene(placeholderWorld);
     installAssetTestApi(this.modules.assets);
 
     // Menu-presentation cars (game-flow spec section 23: "Live presentation
     // stadium, Player car shown on field, Ball visible"). The real Phase 7
     // kickoff sequence re-spawns both cars via physics.resetWorld() when a
     // match actually starts.
-    this.modules.physics.spawnCar({ id: PLAYER_CAR_ID, transform: { x: -6, y: 1, z: -10 } });
-    this.modules.physics.spawnCar({ id: OPPONENT_CAR_ID, transform: { x: 6, y: 1, z: 10 } });
+    // WS7.A (plan/POLISH_OVERHAUL_PLAN.md): the same "far-back" kickoff
+    // pose PhysicsFacade.resetWorld() uses for its default kickoff
+    // variant (index 4) — duplicated here rather than imported since
+    // it's a private constant, both cars facing the arena centre.
+    this.modules.physics.spawnCar({
+      id: PLAYER_CAR_ID,
+      transform: { x: 0, y: 0.35, z: -24 },
+      rotation: { x: 0, y: 1, z: 0, w: 0 }
+    });
+    this.modules.physics.spawnCar({
+      id: OPPONENT_CAR_ID,
+      transform: { x: 0, y: 0.35, z: 24 },
+      rotation: { x: 0, y: 0, z: 0, w: 1 }
+    });
 
     this.physicsRenderBinding = new PhysicsRenderBinding(
       this.modules.physics,
@@ -456,7 +476,33 @@ export class GameRuntime implements GameRuntimeFacade {
   private setAppState(next: AppState): void {
     const previous = this.appState;
     this.appState = next;
+    this.updateMenuPresentationVisibility(next);
     this.dispatcher.emit("runtime:app-state-changed", { previous, next });
+  }
+
+  /**
+   * WS7.C (plan/POLISH_OVERHAUL_PLAN.md): the placeholder world's static
+   * ghost ball/cars (named "MenuGhost*" in `AssetPipeline.buildPlaceholderWorld`)
+   * should only be visible at the menu — otherwise they sit motionless
+   * on top of the live, physics-driven cars/ball during a match. Only
+   * those three named children toggle; the stadium/starfield siblings
+   * under the same root stay visible always.
+   */
+  private updateMenuPresentationVisibility(appState: AppState): void {
+    this.menuPresentationVisible = appState === "MENU";
+    if (!this.placeholderWorldGroup) {
+      return;
+    }
+    for (const name of ["MenuGhostBall", "MenuGhostPlayerCar", "MenuGhostOpponentCar"]) {
+      const object = this.placeholderWorldGroup.getObjectByName(name);
+      if (object) {
+        object.visible = this.menuPresentationVisible;
+      }
+    }
+  }
+
+  public isMenuPresentationVisible(): boolean {
+    return this.menuPresentationVisible;
   }
 
   private handleFatalRuntimeError(error: unknown): void {

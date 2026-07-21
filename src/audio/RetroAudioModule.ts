@@ -287,6 +287,17 @@ export class RetroAudioModule implements AudioModule {
         );
         return;
       }
+      case "audio:engine-state": {
+        // WS7.E: speed-scaled continuous hum, player car only.
+        this.handleContinuousVoice(
+          `engine:${event.carId}`,
+          event.active,
+          () => new ContinuousNoiseVoice(graph.context, this.sharedNoiseBuffer(), graph.vehicleBus, 320, 0.07),
+          undefined,
+          event.active ? Math.min(1, event.speed / 23) : undefined
+        );
+        return;
+      }
       case "audio:ball-hit": {
         const key = "ball-hit";
         if (!this.cooldowns.canPlay(key, now, 0.03, event.intensity)) {
@@ -474,7 +485,9 @@ export class RetroAudioModule implements AudioModule {
       return;
     }
     if (frame.matchPaused || !frame.windowFocused) {
-      this.stopContinuousVoicesMatching((key) => key.startsWith("boost:") || key.startsWith("powerslide:"));
+      this.stopContinuousVoicesMatching(
+        (key) => key.startsWith("boost:") || key.startsWith("powerslide:") || key.startsWith("engine:")
+      );
     }
   }
 
