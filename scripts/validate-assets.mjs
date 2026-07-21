@@ -5,14 +5,14 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
 const errors = [];
 
-const modelsDir = `${rootDir}/assets/models`;
+const modelsDir = `${rootDir}/public/assets/cars`;
 const texturesDir = `${rootDir}/assets/textures`;
 
 if (!existsSync(modelsDir)) {
-  errors.push(`Missing required directory: assets/models`);
+  errors.push(`Missing required directory: public/assets/cars`);
 } else if (readdirSync(modelsDir).filter((f) => f.endsWith(".glb")).length === 0) {
   console.warn(
-    "Warning: no .glb files found in assets/models. " +
+    "Warning: no .glb files found in public/assets/cars. " +
       "The procedural fallback car will be used until a car is supplied."
   );
 }

@@ -193,6 +193,7 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.physicsRenderBinding = new PhysicsRenderBinding(
       this.modules.physics,
+      this.modules.assets,
       () => this.fixedStepCoordinator.alpha
     );
     this.frameCoordinator.register(this.physicsRenderBinding);

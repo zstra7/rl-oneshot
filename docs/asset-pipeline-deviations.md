@@ -57,3 +57,65 @@ Record deviations from `plan/asset_production_pipeline_module_spec.md`.
   material affordance (shared-by-default, explicit opt-out per instance
   when state must vary independently), not a new pattern invented outside
   the pipeline design.
+
+## Phase 11
+
+- **Assets moved from `assets/models/`/`assets/textures/` (repo root) to
+  `public/assets/cars/`/`assets/textures/` (`assets/textures/` unchanged,
+  deferred to Phase 12).** Spec section 85 explicitly expects
+  `public/assets/cars/car.glb` — the repo-root `assets/` directory used
+  since Phase 0 was never inside Vite's `publicDir` and had no dev-server
+  URL. `scripts/validate-assets.mjs` was updated to check the new path.
+- **`CarAssetDescriptor.expectedUpAxis`/`expectedForwardAxis` were
+  determined via `THREE.GLTFLoader` + `Box3.setFromObject`, not the manual
+  byte-level GLB parse done earlier in this phase's investigation.** That
+  manual parse misread which raw accessor axis was which and concluded
+  up=+Z/forward=+Y; the real loader shows up is already +Y (the file
+  complies with glTF's nominal Y-up convention) and forward is +Z
+  (confirmed visually — grille/headlights face +Z, trunk/tail-lights face
+  -Z). See `docs/car-intake-report.md` for the full derivation. This
+  produced a real, visually-obvious bug during development (the car
+  rendered as a tall vertical "tower" — the model's 9m length axis got
+  rotated onto the vertical axis) caught immediately via a Playwright
+  screenshot, before it reached the committed descriptor values.
+- **`visualScale` is a single compromise value (0.2), not an exact OBB
+  fit on every axis** — the source model's realistic-sedan proportions
+  (length/width ~2.4) don't match the physics hitbox's stubby
+  Rocket-League proportions (~1.4). Spec section 16 explicitly permits
+  this ("does not need to exactly fill the OBB, but should closely
+  correspond"); the compromise favours width/height (most visually
+  load-bearing from the chase camera) over an exact length match. See
+  `docs/car-intake-report.md`.
+- **`car.glb` has no separate wheel nodes or boost-socket nodes** (both
+  meshes — body and wheels — are static, non-articulated). Spec section
+  18 explicitly allows this ("a car without animated wheels remains
+  valid"), so `CarAssetDescriptor.wheelNodes`/`boostSockets` are left
+  undefined and wheel-spin/steering visual animation is not implemented
+  for the real GLB (only the now-superseded `ProceduralCarFallback` never
+  had procedural wheel spin either, so this is not a regression).
+- **`PhysicsRenderBinding` now renders real per-car visuals (GLB or
+  `ProceduralCarFallback`) and the real procedural ball visual, replacing
+  the plain wireframe debug box/sphere used since Phase 3.** This was a
+  known, explicitly-deferred gap ("real CarVisual/BallVisual instances...
+  once match flow (Phase 7) creates actual match instances" — see Phase
+  3/5 notes) that Phase 7 did not actually close; Phase 11 is the natural
+  integration point since it is the phase that first produces a real car
+  visual to bind.
+- **Development/test fallback policy**: if a car descriptor fails to
+  load/validate, `AssetPipeline` falls back to `ProceduralCarFallback` in
+  dev/test builds (`!import.meta.env.PROD`) and throws (fails the whole
+  pipeline) in a production build, matching spec section 20's "required
+  car missing -> fail asset pipeline" production policy. In this repo's
+  normal operation both car descriptors load successfully, so the
+  fallback path is exercised only by intentionally-broken test scenarios,
+  not real usage.
+- **`AssetPipeline.initialise()` is now `async`** (it was synchronous
+  through Phase 2-10) to await the real GLB load/validate step. This was
+  already legal per `GameModule.initialise(): Promise<void> | void` and
+  `GameRuntime.initialise()` already `await`s every generic module in its
+  init loop, so no caller needed to change.
+- Car intake inspection (spec section 13) is exposed for automated/manual
+  use via `window.__ASSET_TEST__.getCarIntakeReports()` (new test-only
+  method, gated the same as the rest of `BrowserAssetTestApi`) rather than
+  a dedicated `?assetLab=1` development UI — consistent with Phase 2's
+  decision to skip the asset lab as out of scope.

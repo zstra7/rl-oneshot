@@ -1,11 +1,7 @@
-export type TextureAssetId = string;
+import { PLAYER_CAR_DESCRIPTOR, OPPONENT_CAR_DESCRIPTOR } from "@/assets/cars/CarDescriptors";
+import type { CarAssetDescriptor } from "@/assets/cars/CarModelTypes";
 
-export interface CarAssetDescriptor {
-  readonly id: string;
-  /** "fallback" until Phase 11 wires a real supplied GLB into the manifest. */
-  readonly source: "fallback" | "glb";
-  readonly url?: string;
-}
+export type TextureAssetId = string;
 
 export interface TextureAssetDescriptor {
   readonly id: TextureAssetId;
@@ -45,16 +41,18 @@ export interface GameAssetManifest {
 }
 
 /**
- * Phase 2 manifest: no authored car/texture assets are required yet (the
- * procedural fallback car covers both slots). Phase 11/12 replace the
- * `cars` descriptors with real "glb" entries and populate `textures` once
- * the supplied car GLB / texture library are actually wired in.
+ * Phase 11 wires the real supplied `car.glb` in for both car slots (asset
+ * pipeline spec section 85's "one shared car.glb" option — see
+ * `src/assets/cars/CarDescriptors.ts`). `AssetPipeline` still falls back
+ * to `ProceduralCarFallback` per car if loading/validating either
+ * descriptor fails outside production (spec section 20). Phase 12
+ * populates `textures`.
  */
 export const GAME_ASSET_MANIFEST: GameAssetManifest = {
   schemaVersion: 1,
   cars: {
-    player: { id: "player", source: "fallback" },
-    opponent: { id: "opponent", source: "fallback" }
+    player: PLAYER_CAR_DESCRIPTOR,
+    opponent: OPPONENT_CAR_DESCRIPTOR
   },
   textures: {},
   procedural: {
@@ -69,6 +67,22 @@ export function validateAssetManifest(manifest: GameAssetManifest): string[] {
 
   if (manifest.schemaVersion !== 1) {
     errors.push(`Unsupported asset manifest schemaVersion: ${manifest.schemaVersion}`);
+  }
+
+  const carDescriptors = [manifest.cars.player, manifest.cars.opponent];
+  const seenIds = new Set<string>();
+  for (const descriptor of carDescriptors) {
+    if (seenIds.has(descriptor.id)) {
+      errors.push(`Duplicate car descriptor id "${descriptor.id}".`);
+    }
+    seenIds.add(descriptor.id);
+
+    if (descriptor.required && !descriptor.url) {
+      errors.push(`Required car "${descriptor.id}" is missing a url.`);
+    }
+    if (descriptor.teamTintTargets.some((target) => target.required) === false) {
+      errors.push(`Car "${descriptor.id}" declares no required team-tint target.`);
+    }
   }
 
   for (const [id, descriptor] of Object.entries(manifest.textures)) {

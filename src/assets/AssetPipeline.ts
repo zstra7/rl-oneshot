@@ -13,8 +13,12 @@ import {
   type AssetLoadProgress,
   type AssetPipelineState
 } from "@/assets/AssetTypes";
+import { CarAssetLoader } from "@/assets/cars/CarAssetLoader";
+import { getCarDescriptor, getTeamVisualProfile } from "@/assets/cars/CarDescriptors";
+import type { CarAssetInspectionReport, CarTeamId, LoadedCarSource } from "@/assets/cars/CarModelTypes";
 import { createProceduralCarFallback } from "@/assets/cars/ProceduralCarFallback";
-import { createBallVisual } from "@/assets/procedural/BallVisualFactory";
+import { validateCarAsset } from "@/assets/cars/CarValidation";
+import { createBallVisual as createProceduralBallVisual } from "@/assets/procedural/BallVisualFactory";
 import {
   applyBoostPadVisualState,
   createBoostPadVisual,
@@ -53,7 +57,12 @@ export class AssetPipeline implements GameModule {
   private context: ProceduralAssetContext | null = null;
   private activePreview: ProceduralPreviewHandle | null = null;
 
-  public initialise(): void {
+  private readonly carLoader = new CarAssetLoader();
+  private readonly loadedCarSources = new Map<CarTeamId, LoadedCarSource>();
+  private readonly carUsesFallback = new Map<CarTeamId, boolean>();
+  private readonly carIntakeReports = new Map<CarTeamId, CarAssetInspectionReport>();
+
+  public async initialise(): Promise<void> {
     this.setState("VALIDATING_SKILLS");
     // Skill file presence is enforced at build time by
     // `npm run validate:threejs-skills`; nothing further to check here.
@@ -66,10 +75,9 @@ export class AssetPipeline implements GameModule {
       throw new Error(`Asset manifest invalid: ${manifestErrors.join("; ")}`);
     }
 
-    // Phase 2 requires no authored assets: the procedural fallback covers
-    // both car slots and no textures are marked required yet.
     this.setState("LOADING_AUTHORED_ASSETS");
     this.setState("VALIDATING_AUTHORED_ASSETS");
+    await this.loadAndValidateCars();
 
     this.setState("BUILDING_PROCEDURAL_RESOURCES");
     this.context = {
@@ -100,6 +108,76 @@ export class AssetPipeline implements GameModule {
     return this.context;
   }
 
+  /**
+   * Asset pipeline spec sections 12-14/20: load the shared `car.glb` once
+   * per descriptor URL, validate it (section 14.1 required checks), and
+   * fall back to `ProceduralCarFallback` per car slot in development if
+   * loading/validation fails. Production policy (section 20) is "required
+   * car missing -> fail asset pipeline" — a failure in a production build
+   * (`import.meta.env.PROD`) is fatal instead of silently falling back.
+   */
+  private async loadAndValidateCars(): Promise<void> {
+    const teams: readonly CarTeamId[] = ["player", "opponent"];
+
+    for (const team of teams) {
+      const descriptor = getCarDescriptor(team);
+      try {
+        const source = await this.carLoader.loadSource(descriptor);
+        const { errors, warnings } = validateCarAsset(source.report, descriptor);
+
+        this.carIntakeReports.set(team, source.report);
+        this.errors.push(...warnings.map((warning) => `[warning] ${warning}`));
+
+        if (errors.length > 0) {
+          throw new Error(errors.join("; "));
+        }
+
+        this.loadedCarSources.set(team, source);
+        this.carUsesFallback.set(team, false);
+      } catch (error) {
+        const message = `Car "${descriptor.id}" failed to load/validate: ${String(
+          error instanceof Error ? error.message : error
+        )}`;
+
+        if (import.meta.env.PROD) {
+          this.errors.push(message);
+          this.setState("FAILED");
+          throw new Error(message);
+        }
+
+        this.errors.push(`${message} (using procedural fallback in this dev/test build)`);
+        this.carUsesFallback.set(team, true);
+      }
+    }
+  }
+
+  /**
+   * Real supplied GLB when loaded/validated successfully, otherwise the
+   * procedural placeholder (spec section 20) — used both by the menu
+   * presentation (`buildPlaceholderWorld`) and by live gameplay
+   * (`PhysicsRenderBinding`), so both show the same visual per car.
+   */
+  public createCarVisual(team: CarTeamId): THREE.Group {
+    const source = this.loadedCarSources.get(team);
+    if (source && !this.carUsesFallback.get(team)) {
+      return this.carLoader.createInstance(source, getTeamVisualProfile(team));
+    }
+    return createProceduralCarFallback(this.requireContext(), team);
+  }
+
+  public createBallVisual(): THREE.Group {
+    return createProceduralBallVisual(this.requireContext());
+  }
+
+  public getCarIntakeReports(): ReadonlyMap<CarTeamId, CarAssetInspectionReport> {
+    return this.carIntakeReports;
+  }
+
+  /** True if `createCarVisual(team)` is currently serving `ProceduralCarFallback` instead of the loaded GLB. */
+  public isCarUsingFallback(team: CarTeamId): boolean {
+    return this.carUsesFallback.get(team) ?? true;
+  }
+
   public createBoostPadVisual(padId: string, type: BoostPadVisualType): THREE.Group {
     return createBoostPadVisual(this.requireContext(), padId, type);
   }
@@ -117,15 +195,15 @@ export class AssetPipeline implements GameModule {
     root.add(createStadiumBlockout(context));
     root.add(createDefaultStarfield(context));
 
-    const ball = createBallVisual(context);
+    const ball = createProceduralBallVisual(context);
     ball.position.set(0, context.physicsMetadata.ballRadius + 2, 0);
     root.add(ball);
 
-    const playerCar = createProceduralCarFallback(context, "player");
+    const playerCar = this.createCarVisual("player");
     playerCar.position.set(-6, context.physicsMetadata.carHitboxSize.y / 2, -10);
     root.add(playerCar);
 
-    const opponentCar = createProceduralCarFallback(context, "opponent");
+    const opponentCar = this.createCarVisual("opponent");
     opponentCar.rotation.y = Math.PI;
     opponentCar.position.set(6, context.physicsMetadata.carHitboxSize.y / 2, 10);
     root.add(opponentCar);
@@ -157,7 +235,7 @@ export class AssetPipeline implements GameModule {
     group.name = "ProceduralPreview";
     group.add(createStadiumBlockout(previewContext));
     group.add(createDefaultStarfield(previewContext));
-    group.add(createBallVisual(previewContext));
+    group.add(createProceduralBallVisual(previewContext));
 
     return {
       group,
@@ -205,6 +283,10 @@ export class AssetPipeline implements GameModule {
     this.disposePreview();
     this.geometryRegistry.disposeAll();
     this.materialRegistry.disposeAll();
+    this.carLoader.dispose();
+    this.loadedCarSources.clear();
+    this.carUsesFallback.clear();
+    this.carIntakeReports.clear();
     this.context = null;
     this.state = "IDLE";
   }

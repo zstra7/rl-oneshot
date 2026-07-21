@@ -167,3 +167,20 @@
   pipeline's `SeededRandom` uses, not an import from `@/assets` — kept
   the AI module self-contained rather than adding a cross-module
   dependency for a few lines of PRNG math.
+
+## Phase 11
+
+- `assets/models/car.glb` was moved (`git mv`) to
+  `public/assets/cars/car.glb` so Vite's default `publicDir` serves it at
+  a real dev/preview-server URL, matching asset pipeline spec section 85's
+  expected layout. `assets/textures/` was left in place (Phase 12).
+- `AssetManifest.ts`'s own placeholder `CarAssetDescriptor` (an `{id,
+  source: "fallback"|"glb", url?}` shape, unused since Phase 2) was
+  replaced by the asset pipeline spec section 11.3 `CarAssetDescriptor`
+  (now defined in `src/assets/cars/CarModelTypes.ts`) — a grep confirmed
+  the old type had no other consumers, so there was no compatibility
+  surface to preserve.
+- `AssetPipeline.initialise()` changed from synchronous to `async` to
+  await the real car GLB load/validate step (see
+  `docs/asset-pipeline-deviations.md` Phase 11). This was already legal
+  per the `GameModule` contract and required no caller changes.

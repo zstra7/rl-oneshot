@@ -1,12 +1,14 @@
 import type { AssetResourceCounts } from "@/assets/AssetPipeline";
 import type { AssetPipeline } from "@/assets/AssetPipeline";
 import type { AssetLoadError, AssetLoadProgress, AssetPipelineState } from "@/assets/AssetTypes";
+import type { CarAssetInspectionReport, CarTeamId } from "@/assets/cars/CarModelTypes";
 
 /**
- * Trimmed to what Phase 2 actually implements. `listCarReports` /
- * `createCarPreview` / texture-specific methods from the asset pipeline
- * spec section 59 are deferred until Phase 11/12 add real car/texture
- * intake — see docs/asset-pipeline-deviations.md.
+ * Trimmed to what Phase 2/11 actually implement. `createCarPreview` /
+ * texture-specific methods from the asset pipeline spec section 59 are
+ * still deferred until Phase 12 adds real texture intake — see
+ * docs/asset-pipeline-deviations.md. `listCarReports` (spec section 59) is
+ * implemented as `getCarIntakeReports`.
  */
 export interface BrowserAssetTestApi {
   ready(): boolean;
@@ -14,6 +16,8 @@ export interface BrowserAssetTestApi {
   getLoadingProgress(): AssetLoadProgress;
   getErrors(): readonly AssetLoadError[];
   getSceneResourceCounts(): AssetResourceCounts;
+  getCarIntakeReports(): Record<CarTeamId, CarAssetInspectionReport | undefined>;
+  isCarUsingFallback(team: CarTeamId): boolean;
 
   rebuildProceduralPreview(seed: number): AssetResourceCounts;
   disposePreview(): void;
@@ -36,6 +40,11 @@ export function installAssetTestApi(pipeline: AssetPipeline): void {
     getLoadingProgress: () => pipeline.getLoadingProgress(),
     getErrors: () => pipeline.getErrors(),
     getSceneResourceCounts: () => pipeline.getSceneResourceCounts(),
+    getCarIntakeReports: () => {
+      const reports = pipeline.getCarIntakeReports();
+      return { player: reports.get("player"), opponent: reports.get("opponent") };
+    },
+    isCarUsingFallback: (team) => pipeline.isCarUsingFallback(team),
     rebuildProceduralPreview: (seed: number) => {
       const preview = pipeline.setProceduralPreviewSeed(seed);
       let geometries = 0;
