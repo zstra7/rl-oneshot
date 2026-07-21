@@ -119,3 +119,57 @@ Record deviations from `plan/asset_production_pipeline_module_spec.md`.
   method, gated the same as the rest of `BrowserAssetTestApi`) rather than
   a dedicated `?assetLab=1` development UI — consistent with Phase 2's
   decision to skip the asset lab as out of scope.
+
+## Phase 12
+
+- **Textures moved from `assets/textures/` (repo root) to
+  `public/assets/textures/`**, same reasoning as the Phase 11 car GLB move
+  — the repo-root location has no dev-server URL. Three vendor
+  catalog/preview images (`Listing_image.png` 1260x1000, `Render.png`
+  1920x1080, `Thumbnail.png` 256x256 — clearly not in-game textures, see
+  `docs/asset-attribution.md`) were deliberately left behind at
+  `assets/textures/`, not moved and not added to the manifest.
+- **The 298-entry texture manifest (`TextureManifestData.ts`) is
+  generated, not hand-authored** (`scripts/generate-texture-manifest.mjs`,
+  same "write a script for scale, review its output" precedent as the
+  car's inspection tooling). Every entry is classified
+  `semantic: "color"` — the supplied library has no separate normal/
+  roughness/metalness/AO map filenames (checked by hand against the full
+  file listing before writing the script), so this is a real authorial
+  classification decision recorded in the script's own comments, not code
+  "discovering" semantics from filenames at runtime (spec section 22
+  explicitly warns against the latter).
+- **No manifest texture is currently marked `required: true`.** Spec
+  section 25/26 ties `required` to real fail-the-pipeline behaviour
+  (dev shows a checker, production fails outright) — with 298 supplied
+  files and only 2 currently wired into any material, marking any of them
+  `required` would be premature (a later Phase 14 stadium-art pass, once
+  it decides which specific textures a specific material actually
+  depends on, is the right place to promote those to `required: true`).
+- **Only 2 of the 298 supplied textures (`ConcreteFloor-01_64.png` for
+  the stadium floor, `ConcretePanel-01_64.png` for the stadium walls/
+  ceiling) are eagerly loaded and applied at boot**
+  (`AssetPipeline.loadAndValidateStadiumTextures`,
+  `StadiumGeometryFactory.ts`), replacing the flat placeholder colours
+  used since Phase 2. This is a deliberate, scoped proof that the
+  load-validate-configure-apply pipeline works end to end against a real
+  supplied texture, not full stadium re-texturing — the Master Brief
+  reserves "Stadium art and VFX" for Phase 14. The remaining 296 entries
+  are fully catalogued (`docs/texture-intake-report.md`) and loadable on
+  demand via the new `AssetPipeline.loadTexture()`/
+  `TextureAssetLoader.load()`, just not eagerly fetched for surfaces
+  nothing currently renders.
+- **`TextureAssetLoader`'s missing-required-texture fallback (spec
+  section 26) uses a `THREE.DataTexture`-based magenta/black checker, not
+  a `CanvasTexture` built via `document.createElement("canvas")`** — kept
+  DOM-independent so the same loader code path is exercisable from
+  Vitest's Node test environment (no `document` global there) as well as
+  a real browser, rather than requiring a jsdom environment switch for
+  one fallback texture.
+- Asset attribution (spec section 27, `docs/asset-attribution.md`) is
+  complete for the car (embedded `asset.extras` gave a real author/
+  licence) but the texture library's licence is recorded as
+  **unknown/unspecified** — no licence metadata was bundled with the
+  supplied files, and the pipeline cannot infer legal rights (spec
+  section 27's own explicit caveat). Flagged for the project owner to
+  confirm before any public distribution.

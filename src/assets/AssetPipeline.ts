@@ -31,6 +31,9 @@ import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAsset
 import { SeededRandom } from "@/assets/procedural/SeededRandom";
 import { createDefaultStarfield } from "@/assets/procedural/StarfieldFactory";
 import { createStadiumBlockout } from "@/assets/procedural/StadiumGeometryFactory";
+import { TextureAssetLoader } from "@/assets/textures/TextureAssetLoader";
+import type { TextureAssetDescriptor } from "@/assets/textures/TextureTypes";
+import { validateLoadedTexture } from "@/assets/textures/TextureValidation";
 import type { GameModule } from "@/core/GameModule";
 
 export interface AssetResourceCounts {
@@ -44,9 +47,8 @@ export interface ProceduralPreviewHandle {
 }
 
 /**
- * Real asset pipeline (Master Brief Phase 2). Only the procedural
- * foundation is implemented here: no authored car GLB / texture intake
- * yet (that is Phase 11/12 — see docs/asset-pipeline-deviations.md).
+ * Real asset pipeline (Master Brief Phase 2, extended by Phase 11 car GLB
+ * and Phase 12 texture intake — see docs/asset-pipeline-deviations.md).
  */
 export class AssetPipeline implements GameModule {
   private state: AssetPipelineState = "IDLE";
@@ -61,6 +63,9 @@ export class AssetPipeline implements GameModule {
   private readonly loadedCarSources = new Map<CarTeamId, LoadedCarSource>();
   private readonly carUsesFallback = new Map<CarTeamId, boolean>();
   private readonly carIntakeReports = new Map<CarTeamId, CarAssetInspectionReport>();
+
+  private readonly textureLoader = new TextureAssetLoader();
+  private stadiumTextures: { floor?: THREE.Texture; wall?: THREE.Texture } = {};
 
   public async initialise(): Promise<void> {
     this.setState("VALIDATING_SKILLS");
@@ -78,6 +83,7 @@ export class AssetPipeline implements GameModule {
     this.setState("LOADING_AUTHORED_ASSETS");
     this.setState("VALIDATING_AUTHORED_ASSETS");
     await this.loadAndValidateCars();
+    await this.loadAndValidateStadiumTextures();
 
     this.setState("BUILDING_PROCEDURAL_RESOURCES");
     this.context = {
@@ -87,7 +93,8 @@ export class AssetPipeline implements GameModule {
       random: new SeededRandom(DEFAULT_PROCEDURAL_SEEDS.menuScene),
       visualPreset: "balanced",
       stadiumDimensions: DEFAULT_STADIUM_DIMENSIONS,
-      physicsMetadata: PLACEHOLDER_PHYSICS_METADATA
+      physicsMetadata: PLACEHOLDER_PHYSICS_METADATA,
+      stadiumTextures: this.stadiumTextures
     };
 
     this.setState("WARMING_SHADERS");
@@ -149,6 +156,39 @@ export class AssetPipeline implements GameModule {
         this.carUsesFallback.set(team, true);
       }
     }
+  }
+
+  /**
+   * Asset pipeline spec sections 21-26: loads a small curated subset of
+   * the 298-texture supplied library that `StadiumGeometryFactory`
+   * actually consumes right now (the floor/wall base surfaces) — not the
+   * full library eagerly (see docs/asset-pipeline-deviations.md Phase 12
+   * for why). Every other manifest entry is still fully catalogued
+   * (`docs/texture-intake-report.md`) and loadable on demand via
+   * `loadTexture()`, just not eagerly fetched at boot for surfaces
+   * nothing currently renders. None of the manifest textures are marked
+   * `required`, so a failure here only ever falls back (spec section 26)
+   * — it can never fail the whole pipeline.
+   */
+  private async loadAndValidateStadiumTextures(): Promise<void> {
+    const manifest = GAME_ASSET_MANIFEST.textures;
+    const floorDescriptor = manifest["ConcreteFloor-01_64"];
+    const wallDescriptor = manifest["ConcretePanel-01_64"];
+
+    if (floorDescriptor) {
+      this.stadiumTextures.floor = await this.loadTexture(floorDescriptor);
+    }
+    if (wallDescriptor) {
+      this.stadiumTextures.wall = await this.loadTexture(wallDescriptor);
+    }
+  }
+
+  /** Loads and validates (spec section 25) one manifest texture by descriptor, warnings recorded, never throws. */
+  public async loadTexture(descriptor: TextureAssetDescriptor): Promise<THREE.Texture> {
+    const texture = await this.textureLoader.load(descriptor);
+    const { warnings } = validateLoadedTexture(descriptor, texture);
+    this.errors.push(...warnings.map((warning) => `[warning] ${warning}`));
+    return texture;
   }
 
   /**
@@ -287,6 +327,8 @@ export class AssetPipeline implements GameModule {
     this.loadedCarSources.clear();
     this.carUsesFallback.clear();
     this.carIntakeReports.clear();
+    this.textureLoader.dispose();
+    this.stadiumTextures = {};
     this.context = null;
     this.state = "IDLE";
   }

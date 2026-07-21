@@ -16,25 +16,36 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   const root = new THREE.Group();
   root.name = "StadiumVisualRoot";
 
+  const floorTexture = context.stadiumTextures?.floor;
+  const wallTexture = context.stadiumTextures?.wall;
+
   const floorMaterial = context.materialRegistry.getOrCreate(
-    "stadium-floor-v1",
+    `stadium-floor-v2-${floorTexture ? "textured" : "flat"}`,
     () =>
       new THREE.MeshStandardMaterial({
-        color: 0x11131a,
+        color: floorTexture ? 0xffffff : 0x11131a,
+        map: floorTexture ?? null,
         roughness: 0.85,
         metalness: 0.05
       })
   );
+  if (floorTexture) {
+    floorTexture.repeat.set(fieldWidth / 2, fieldLength / 2);
+  }
 
   const wallMaterial = context.materialRegistry.getOrCreate(
-    "stadium-wall-v1",
+    `stadium-wall-v2-${wallTexture ? "textured" : "flat"}`,
     () =>
       new THREE.MeshStandardMaterial({
-        color: 0x1c1f2b,
+        color: wallTexture ? 0xffffff : 0x1c1f2b,
+        map: wallTexture ?? null,
         roughness: 0.7,
         metalness: 0.15
       })
   );
+  if (wallTexture) {
+    wallTexture.repeat.set(fieldLength / 2, interiorHeight / 2);
+  }
 
   const floorGeometry = context.geometryRegistry.getOrCreate(
     "stadium-floor-panel-v1",

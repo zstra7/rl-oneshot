@@ -1,25 +1,10 @@
 import { PLAYER_CAR_DESCRIPTOR, OPPONENT_CAR_DESCRIPTOR } from "@/assets/cars/CarDescriptors";
 import type { CarAssetDescriptor } from "@/assets/cars/CarModelTypes";
+import { TEXTURE_MANIFEST_ENTRIES } from "@/assets/textures/TextureManifestData";
+import type { TextureAssetDescriptor, TextureAssetId } from "@/assets/textures/TextureTypes";
+import { validateTextureManifestIds } from "@/assets/textures/TextureValidation";
 
-export type TextureAssetId = string;
-
-export interface TextureAssetDescriptor {
-  readonly id: TextureAssetId;
-  readonly url: string;
-  readonly semantic:
-    | "color"
-    | "emissive"
-    | "normal"
-    | "roughness"
-    | "metalness"
-    | "ao"
-    | "alpha"
-    | "mask"
-    | "height"
-    | "noise"
-    | "ui-color";
-  readonly required: boolean;
-}
+export type { TextureAssetDescriptor, TextureAssetId };
 
 export interface ProceduralAssetManifest {
   readonly ball: true;
@@ -54,7 +39,7 @@ export const GAME_ASSET_MANIFEST: GameAssetManifest = {
     player: PLAYER_CAR_DESCRIPTOR,
     opponent: OPPONENT_CAR_DESCRIPTOR
   },
-  textures: {},
+  textures: Object.fromEntries(TEXTURE_MANIFEST_ENTRIES.map((entry) => [entry.id, entry])),
   procedural: {
     ball: true,
     stadiumBlockout: true,
@@ -90,6 +75,7 @@ export function validateAssetManifest(manifest: GameAssetManifest): string[] {
       errors.push(`Required texture "${id}" is missing a url.`);
     }
   }
+  errors.push(...validateTextureManifestIds(Object.values(manifest.textures)));
 
   return errors;
 }

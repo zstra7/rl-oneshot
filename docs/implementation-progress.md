@@ -1,145 +1,113 @@
 # Current Phase
 
-Phase: 11 — User Car GLB Integration
+Phase: 12 — User Texture Integration
 Status: Complete — exit criteria verified
 Last verified commit: (this commit)
 
 ## Working
-- `src/assets/cars/CarModelTypes.ts`: the asset pipeline spec section
-  11.3/13/17 types (`CarAssetDescriptor`, `MaterialTargetRule`,
-  `TeamVisualProfile`, `CarAssetInspectionReport`, `LoadedCarSource`).
-- `src/assets/cars/CarDescriptors.ts`: real, calibrated descriptors for
-  the supplied `car.glb` (shared by `player-car`/`opponent-car` — spec
-  section 85's "one shared car.glb" option), with `expectedUpAxis`/
-  `expectedForwardAxis`/`visualScale`/`visualOffset`/`visualRotationEuler`
-  all derived from a real inspection + Playwright screenshot verification
-  — see `docs/car-intake-report.md` for the full derivation and
-  `docs/asset-pipeline-deviations.md` for a real bug this caught.
-- `src/assets/cars/CarAssetLoader.ts`: a cached `GLTFLoader`
-  (cache-by-URL — "load once" for the shared file), `createInstance`
-  builds the spec section 15 normalisation hierarchy (`CarPhysicsRoot` ->
-  `CarVisualOffset` -> `CarTeamVisualRoot` -> `LoadedGlbScene`), clones and
-  colour-mutates only the team-tint-targeted material per instance
-  ("clone twice" — team-tinted body material cloned per team, wheel
-  material and all geometry/textures stay shared), and builds the section
-  13 inspection report from the loaded GLTF.
-- `src/assets/cars/CarValidation.ts`: the spec section 14.1 required
-  checks (no mesh / non-finite or zero bounds / missing required
-  team-tint target / missing declared wheel node or boost socket) and
-  14.2 warnings (triangle/material/texture count thresholds).
-- `src/assets/AssetPipeline.ts`: `LOADING_AUTHORED_ASSETS`/
-  `VALIDATING_AUTHORED_ASSETS` now actually load+validate both car
-  descriptors (previously no-ops since Phase 2); `createCarVisual(team)`
-  returns the real GLB instance when valid or `ProceduralCarFallback`
-  otherwise (dev/test only — production fails the pipeline, spec section
-  20); `createBallVisual()`/`getCarIntakeReports()`/
-  `isCarUsingFallback()` are new public accessors.
-- **`src/integration/PhysicsRenderBinding.ts` now renders real per-car
-  visuals and the real procedural ball visual every frame**, replacing
-  the plain wireframe debug box/sphere used since Phase 3 — this is the
-  change that actually makes Phase 11 visible in live gameplay, not just
-  in an unused loader. Car team (for tint) is resolved from the physics
-  `CarId` (`car-player`/`car-opponent`).
-- `AssetManifest.ts`'s `GAME_ASSET_MANIFEST.cars.player/opponent` now
-  reference the real descriptors (`source: "glb"` semantics implicit in
-  the richer descriptor type); `validateAssetManifest` gained car-specific
-  checks (duplicate id, missing url when required, no required team-tint
-  target declared).
-- `assets/models/car.glb` moved to `public/assets/cars/car.glb` (spec
-  section 85's expected layout — see `docs/build-decisions.md`).
-- `window.__ASSET_TEST__`: `getCarIntakeReports()`/`isCarUsingFallback()`
-  for deterministic Playwright verification (spec section 59's
-  `listCarReports`, deferred since Phase 2).
-- `docs/car-intake-report.md`: the spec section 13 human-readable report,
-  generated from a real Playwright-driven load of the supplied `car.glb`.
+- `src/assets/textures/TextureTypes.ts`: the asset pipeline spec section
+  22 `TextureAssetDescriptor` type plus `isColorSpaceSemantic` (section
+  23's colour-vs-data semantic split).
+- `scripts/generate-texture-manifest.mjs` + `src/assets/textures/
+  TextureManifestData.ts`: scans `public/assets/textures/`, reads each
+  PNG's real header (dimensions, alpha presence) without a decode
+  dependency, and generates the 298-entry manifest plus
+  `docs/texture-intake-report.md` (spec section 25). Deliberately
+  excludes the 3 vendor catalog/preview images that shipped alongside the
+  real textures (not in-game assets — see `docs/asset-attribution.md`).
+- `src/assets/textures/TextureAssetLoader.ts`: a cached
+  `THREE.TextureLoader` (cache-by-id) that configures colour space
+  (section 23), the 4 filtering profiles (section 24: pixel / pixel-
+  mipmapped / surface / data), wrap/repeat/flipY per descriptor, and
+  falls back per section 26 (dev/test checker for a missing required
+  texture, a shared semantic fallback — white/flat-normal/noise/etc — for
+  a missing optional one; fallbacks are DOM-independent `DataTexture`s,
+  shared single instances, never generated per caller).
+- `src/assets/textures/TextureValidation.ts`: spec section 25's
+  duplicate-manifest-id check (static) and per-loaded-texture checks
+  (zero/failed-decode dimensions, hard dimension limit, non-POT-with-
+  mipmaps warning, colour-space-vs-semantic mismatch warnings, aspect
+  ratio deviation).
+- `AssetManifest.ts`: `textures` is now populated from the generated
+  manifest (298 entries); `validateAssetManifest` gained the duplicate-id
+  check.
+- `AssetPipeline.ts`: `loadAndValidateStadiumTextures()` (called from
+  `initialise()`) loads and validates two curated textures
+  (`ConcreteFloor-01_64`, `ConcretePanel-01_64`) and stores them on the
+  new `ProceduralAssetContext.stadiumTextures`; the new public
+  `loadTexture(descriptor)` loads+validates any other manifest entry on
+  demand.
+- `StadiumGeometryFactory.ts`: the floor/wall/ceiling materials now use
+  the real supplied textures as their `map` (falling back to the prior
+  flat colour when no texture is present, e.g. in a scratch preview
+  context), with `repeat` scaled to the stadium's actual dimensions.
+- `docs/texture-intake-report.md` (generated, all 298 files) and
+  `docs/asset-attribution.md` (spec section 27, both the car and the
+  texture library, including an honest "licence unknown" flag for the
+  latter — no licence metadata shipped with the supplied files).
 
 ## Failing
-- None. All Phase 11 exit criteria verified locally in this session.
+- None. All Phase 12 exit criteria verified locally in this session.
 
 ## Deferred
-- Wheel visual animation (spin/steer, spec section 18) — the supplied
-  `car.glb` has no separate wheel nodes (both meshes are static), and the
-  spec explicitly allows this ("a car without animated wheels remains
-  valid"). Would need a car with articulated wheel nodes to implement.
-- Car animation clips (spec section 19) — the supplied GLB has none.
-- Draco/Meshopt/KTX2 decoder support (spec section 11.2) — the supplied
-  GLB is uncompressed, so no decoder is configured; would need to be
-  added if a future compressed GLB is supplied.
-- The full interactive "development alignment scene" with a live GUI
-  panel for scale/offset/rotation (spec section 16) was not built as
-  permanent tooling — alignment was done via ad hoc Playwright screenshot
-  iteration (moving the placeholder-world camera, inspecting the result,
-  adjusting the descriptor, rebuilding) during this session, then the
-  final values were hardcoded into `CarDescriptors.ts` per the spec's own
-  "save values in descriptor code, do not rely on runtime GUI values."
-  Playwright side/front/top/chase captures exist as test artifacts
-  (`tests/assets/car-visual.spec.ts`) but not as a dedicated multi-angle
-  alignment rig.
-- Skinned-mesh/skeleton-cloning support (spec section 12) — the supplied
-  GLB has no skinned meshes (`skinnedMeshCount: 0`), so `createInstance`'s
-  plain `Object3D.clone(true)` is sufficient; a future skinned car would
-  need the proper skeleton-cloning pattern instead.
+- **Full stadium re-texturing** (using more than 2 of the 298 supplied
+  textures — hazard stripes, painted variants, vents, pipes-and-cables,
+  metal grates/mesh, the tiling grid set, curved-transition/glass-panel
+  surfaces, etc.) is explicitly Phase 14 ("Stadium art and VFX") per the
+  Master Brief, not this phase's scope — see
+  `docs/asset-pipeline-deviations.md`.
+- KTX2/compressed-texture support (spec section 21) — the supplied
+  library is plain PNG, so no transcoder is configured.
+- Per-material `repeat`/`expectedAspectRatio`/`maximumDimension` tuning
+  beyond the two currently-applied textures — the other 296 manifest
+  entries use the generator's uniform defaults (`repeat: {1,1}`, no
+  aspect/dimension overrides) since nothing consumes them yet.
+- A dedicated `?assetLab=1` texture browser UI (spec section 58) — still
+  out of scope per the Phase 2 precedent; the generated intake report and
+  `window.__ASSET_TEST__` cover the "developer needs visibility" need.
 
 ## Tests passing
 - `npm run validate` — all four validators pass (`validate-assets.mjs`
-  updated to check `public/assets/cars/` instead of the old
-  `assets/models/`).
+  now also checks `public/assets/textures/`).
 - `npm run type-check` (`vue-tsc --noEmit`) — zero errors.
-- `npm run test:unit` (Vitest) — 16 files, 129 tests, all passing,
-  including a new `carAsset.spec.ts` (19 tests): descriptor sanity,
-  manifest validation (including the real `GAME_ASSET_MANIFEST` and a
-  synthetic duplicate-id case), all `CarValidation` required-check/warning
-  branches, `matchTargetInReport`'s three match modes, and
-  `CarAssetLoader.createInstance`'s hierarchy/scale/rotation and
-  team-material-cloning behaviour (including "the original cached source
-  material is never mutated" and "the untouched wheel material is the
-  exact same shared instance across both teams"). All 110 prior tests
-  (Phases 1-10) still pass unchanged.
+- `npm run test:unit` (Vitest) — 17 files, 147 tests, all passing,
+  including a new `textureAsset.spec.ts` (18 tests): the generated
+  manifest's shape/count/exclusions, `GAME_ASSET_MANIFEST` validation,
+  `isColorSpaceSemantic`'s full semantic split, all 4 filtering profiles,
+  every `validateLoadedTexture` branch, and `TextureAssetLoader`'s
+  fallback/caching/sharing behaviour. All 129 prior tests (Phases 1-11)
+  still pass unchanged.
 - `npm run build` (validate -> type-check -> unit -> `vite build`) —
   passes on a plain production build.
-- Playwright: all 43 prior tests still pass, plus a new
-  `tests/assets/car-visual.spec.ts` (4 tests): both car descriptors load
-  and validate the real `car.glb` with zero errors, both cars report
-  `isCarUsingFallback() === false` (proving the real GLB is in use, not
-  silently falling back), a live match drives with the real car visuals
-  bound to physics and stays finite/on-ground, and the menu presentation
-  shows both team-tinted cars with no console errors — 47/47 total on
-  `chromium-dev` and `chromium-preview`. Verified visually via Playwright
-  screenshots (ad hoc, during development) of the car's front, rear, and
-  side, and (committed test artifacts) of a live match and the menu
-  presentation, all showing the real textured PSX Pontiac Ventura model
-  correctly oriented, scaled, grounded, and team-tinted — not the prior
-  wireframe debug box.
+- Playwright: all 47 prior tests still pass, plus a new
+  `tests/assets/texture-visual.spec.ts` (3 tests): the pipeline loads the
+  supplied stadium textures with zero errors, no third-party/external
+  texture requests are made (only same-origin supplied files), and the
+  stadium renders successfully with the pipeline reaching `READY` — 50/50
+  total on `chromium-dev` and `chromium-preview`. Verified visually via a
+  Playwright screenshot showing the real concrete panel/floor textures
+  tiled across the stadium walls and floor, replacing the prior flat grey
+  placeholder colour.
 
 ## Next exact task
-- Begin Phase 12 (user texture integration) per `plan/MASTER_BUILD_BRIEF.md`
-  and asset pipeline spec sections 21+ (Supplied Texture Contract). The
-  supplied texture library already exists in `assets/textures/` (dozens
-  of PNG files) but is not yet wired into the pipeline or moved to
-  `public/assets/textures/`. Required reading before starting: the asset
-  pipeline spec's texture intake/classification/validation sections (not
-  yet read in depth). Do not touch PSX post-processing (Phase 13) yet.
+- Begin Phase 13 (PSX visual language) per `plan/MASTER_BUILD_BRIEF.md` —
+  low-resolution render target, dithering, vertex jitter, and a limited
+  colour palette. Required reading before starting: the relevant PSX
+  rendering sections of the visual-language/rendering spec (not yet
+  identified/read in this session — check `plan/` for the right spec
+  file). Do not touch stadium art/VFX (Phase 14) yet.
 
 ## Known deviations
-- **A real bug found and fixed during this phase: an earlier manual
-  byte-level parse of the raw GLB (done before `GLTFLoader` was wired up)
-  misread the accessor axis layout and concluded the source model's up
-  axis was +Z; it is actually +Y (glTF's nominal convention, which this
-  file complies with).** Applying the resulting (wrong) axis-correction
-  rotation produced a car that rendered as a tall vertical "tower" (the
-  model's ~9m length axis got rotated onto the vertical axis) — caught
-  immediately via an ad hoc Playwright screenshot before it was committed.
-  Re-deriving the axes from `THREE.Box3.setFromObject()` on the actually-
-  loaded scene (ground truth) and re-verifying the forward sign visually
-  (nose vs tail) fixed it. See `docs/car-intake-report.md` and
-  `docs/asset-pipeline-deviations.md` Phase 11.
-- `visualScale` is a uniform compromise (0.2), not an exact fit on every
-  axis, because the source model's realistic-sedan proportions don't
-  match the physics hitbox's stubby Rocket-League proportions — spec
-  section 16 explicitly permits this.
-- No wheel nodes/boost sockets/animation clips exist on the supplied
-  model — see Deferred above.
-- Carried over from Phase 1-10: `window.__GAME_TEST__`/`__ASSET_TEST__`/
+- 298 supplied textures were all classified `semantic: "color"` — no
+  separate normal/roughness/metalness/AO maps were supplied (checked
+  against the full filename list before writing the manifest generator).
+- No manifest texture is marked `required: true` yet (see
+  `docs/asset-pipeline-deviations.md` Phase 12 for why).
+- Only 2 of 298 supplied textures are currently wired into a material
+  (stadium floor + walls/ceiling) — full stadium re-texturing is Phase 14.
+- Texture library licence is unspecified/unknown — flagged in
+  `docs/asset-attribution.md` for the project owner to confirm.
+- Carried over from Phase 1-11: `window.__GAME_TEST__`/`__ASSET_TEST__`/
   `__PHYSICS_TEST__`/`__INPUT_TEST__` only install when `__TEST_BUILD__`
   is true, which the literal `test:release` script (plain `npm run
   build`) does not set — see `docs/build-decisions.md`. A benign

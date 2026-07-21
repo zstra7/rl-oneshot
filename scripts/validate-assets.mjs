@@ -6,7 +6,7 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const errors = [];
 
 const modelsDir = `${rootDir}/public/assets/cars`;
-const texturesDir = `${rootDir}/assets/textures`;
+const texturesDir = `${rootDir}/public/assets/textures`;
 
 if (!existsSync(modelsDir)) {
   errors.push(`Missing required directory: public/assets/cars`);
@@ -18,7 +18,9 @@ if (!existsSync(modelsDir)) {
 }
 
 if (!existsSync(texturesDir)) {
-  errors.push(`Missing required directory: assets/textures`);
+  errors.push(`Missing required directory: public/assets/textures`);
+} else if (readdirSync(texturesDir).filter((f) => f.endsWith(".png")).length === 0) {
+  console.warn("Warning: no .png files found in public/assets/textures.");
 }
 
 if (errors.length > 0) {
