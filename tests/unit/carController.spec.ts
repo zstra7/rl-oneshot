@@ -131,12 +131,16 @@ describe("Car controller (Phase 5)", () => {
     const beforeDodge = physics.getCarState("car-a");
     expect(beforeDodge.dodgeState).toBe("none");
 
-    physics.setCarInput("car-a", { jump: true, pitch: -1 });
+    // WS3 (plan/POLISH_OVERHAUL_PLAN.md): pitch:+1 (nose-down, W in the
+    // air) is the front-flip/forward-dodge trigger, matching Rocket
+    // League's stick-forward-flips-forward convention — the dodge
+    // direction previously used the opposite sign.
+    physics.setCarInput("car-a", { jump: true, pitch: 1 });
     physics.stepTicks(1);
 
     const dodging = physics.getCarState("car-a");
     expect(dodging.dodgeState).toBe("active");
-    // Front-flip (pitch: -1) should push the car forward (-Z).
+    // Front-flip (pitch: +1) should push the car forward (-Z).
     expect(dodging.linearVelocity.z).toBeLessThan(beforeDodge.linearVelocity.z - 2);
   });
 

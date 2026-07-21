@@ -27,6 +27,13 @@ export interface CarRuntimeState {
   dodgeState: DodgeState;
   dodgeElapsed: number;
   dodgeDirection: { x: number; z: number };
+  /** World-space axis the flip rotates about, fixed at trigger time (WS3). */
+  dodgeAxis: Vec3Like;
+  /** The dodge's local forward input component at trigger time, used to
+   * detect an opposing (flip-cancel) pitch input during the active phase. */
+  dodgeForwardInput: number;
+  /** 0 = flip at full rate, 1 = fully cancelled (WS3 flip-cancel blend). */
+  dodgeCancelBlend: number;
 
   powerslideBlend: number;
   boostAmount: number;
@@ -52,6 +59,9 @@ export function createInitialCarRuntimeState(initialBoost: number): CarRuntimeSt
     dodgeState: "none",
     dodgeElapsed: 0,
     dodgeDirection: { x: 0, z: 0 },
+    dodgeAxis: { x: 0, y: 0, z: 0 },
+    dodgeForwardInput: 0,
+    dodgeCancelBlend: 0,
 
     powerslideBlend: 0,
     boostAmount: initialBoost,

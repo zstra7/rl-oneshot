@@ -52,8 +52,8 @@ export interface PhysicsParameters {
     linearImpulse: number;
     activeDuration: number;
     recoveryDuration: number;
-    angularAcceleration: number;
-    flipCancelPitchDeceleration: number;
+    /** Seconds over which a flip-cancel blends the flip rate to zero (WS3). */
+    flipCancelBlendSeconds: number;
     explicitBallHitBonus: number;
   };
 
@@ -139,8 +139,7 @@ export const DEFAULT_PHYSICS_PARAMETERS: PhysicsParameters = {
     linearImpulse: 5.0,
     activeDuration: 0.65,
     recoveryDuration: 0.15,
-    angularAcceleration: 35,
-    flipCancelPitchDeceleration: 45,
+    flipCancelBlendSeconds: 0.1,
     explicitBallHitBonus: 1.8
   },
 

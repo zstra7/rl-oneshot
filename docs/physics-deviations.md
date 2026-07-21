@@ -262,3 +262,70 @@ sensor overlap facts")
   its tick count to stay well inside the arena (≤ ~280 ticks / 2.3s for
   this arena size) or it will silently pass or fail based on wall-impact
   behaviour rather than the driving model under test.
+- **The AI is now genuinely competent enough (post-WS2 tuning) to reach
+  and deflect a repositioned ball, or occasionally score for real during
+  a multi-second live-simulation test window** — several Playwright
+  tests that scripted a specific player shot or relied on the opponent
+  never scoring during a "fast-forward regulation time" window assumed
+  the AI was too slow to interfere, which stopped being true once
+  steering/grip were fixed and tuned. Fixed by parking the opponent car
+  far from the play area (`__PHYSICS_TEST__.setCarState("car-opponent",
+  {...})`) in `tests/physics/car-driving.spec.ts`,
+  `tests/game-flow/match-flow.spec.ts` (both tests that fast-forward a
+  full minute), and `tests/visual-language/stadium-vfx.spec.ts`'s boost
+  trail lifecycle test — confirmed via a pure headless
+  `PhysicsFacade`-only replay that the player-only driving/shooting
+  behaviour itself was never actually broken, only shared with a
+  now-more-active AI the test never isolated against.
+
+## Post-launch polish pass — WS3 (plan/POLISH_OVERHAUL_PLAN.md)
+
+- **Rewrote the directional dodge (`DodgeController.ts`) from a torque
+  ramp to a kinematic flip**: the previous implementation drove the flip
+  via `applyTorqueImpulse` at a fixed rate for a fixed duration, which
+  (a) can't guarantee a specific total rotation (torque-impulse-vs-actual-
+  inertia mismatch, same class of issue as the WS2 grip/steering finding)
+  and (b) never zeroed spin at the end, so the car could land carrying
+  residual pitch/roll. Now: the flip axis is computed once at trigger time
+  (`normalize(cross(worldUp, dodgeDirectionWorld))`) and `setAngvel()` is
+  called directly every active-phase tick at a fixed rate
+  (`2π / activeDuration`, so a full dodge always rotates exactly ~360°
+  over its 0.65s duration regardless of the car's actual moment of
+  inertia), with only the yaw component of angular velocity carried into
+  recovery (pitch/roll spin is zeroed) so the car settles flat instead of
+  tumbling.
+- **The dodge's forward-direction input sign was inverted** — same class
+  of bug as the WS1 ground-steering fix.
+  `direction.forward = -car.currentInput.pitch` meant holding W in the
+  air (nose-down pitch, Rocket League's stick-forward-flips-forward
+  convention) triggered a *backward* dodge. Fixed to
+  `direction.forward = car.currentInput.pitch` (no negation); pinned by 6
+  sign-specific tests in `tests/unit/dodgeFlip.spec.ts` covering forward/
+  backward/sideways dodge direction, the resulting flip axis, vertical-
+  velocity cancellation at a jump's apex, and flip-cancel. One existing
+  test (`tests/unit/carController.spec.ts`, "dodge with directional pitch
+  input...") had encoded the old (backward) convention as its expected
+  behaviour and needed updating to match the corrected sign — confirmed
+  against real Rocket League mechanics before changing it (not just
+  "made the test pass").
+- **New `dodge.flipCancelBlendSeconds` parameter (0.1s)** replaces the
+  removed torque-based `angularAcceleration`/`flipCancelPitchDeceleration`
+  parameters, which no longer apply to the kinematic model. Flip-cancel
+  (holding pitch opposite the dodge's own forward component) blends the
+  flip rate to zero over this window and ends the active phase early,
+  rather than fighting a continuous opposing torque.
+- **Vertical-velocity cancel added at dodge trigger**: if the car has
+  upward velocity when a directional dodge triggers (e.g. dodging near a
+  jump's apex), it's zeroed before the dodge's linear impulse is applied
+  — this is what makes a Rocket League front-flip/speed-flip hug the
+  ground instead of launching the car upward. Not present in the
+  original implementation.
+- **Test-writing gotcha discovered while pinning "forward flip
+  accelerates the car"**: measuring "forward speed" via
+  `dot(linearVelocity, car's *current* forward vector)` immediately after
+  triggering a flip is meaningless — the car is actively tumbling, so its
+  live forward vector no longer points anywhere near its pre-dodge
+  heading only a few ticks in. The correct approach (used in
+  `dodgeFlip.spec.ts`) is to capture the forward direction *once*, before
+  the dodge, and reuse that fixed reference vector for both the
+  before/after velocity comparison.
