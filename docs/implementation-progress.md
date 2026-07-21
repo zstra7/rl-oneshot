@@ -1,8 +1,30 @@
 # Current Phase
 
-Phase: 16 — Audio Module
+Phase: 17 — Integration Hardening
 Status: Complete — exit criteria verified
 Last verified commit: (this commit)
+
+## Phase 17 summary
+Phase 17 has no dedicated module spec — it's a cross-cutting audit against
+the Master Brief's own "Required Architecture"/"Never Do These" invariants
+and the `npm run test:<module>` convention. See
+`docs/integration-deviations.md` Phase 17 section for full detail. In
+short: found and fixed a real `Math.random()` violation in `VfxModule`
+(now uses a seeded `SeededRandom`, consistent with the rest of the
+codebase), fixed a broken `test:visual` script path and added missing
+`test:audio`/`test:ui` per-module scripts, audited and confirmed clean on
+every other "Never Do These" invariant (no reactive Three.js objects, no
+Rapier/Three in Pinia stores, no remote fetches, exactly one
+`AudioContext`/`requestAnimationFrame`/Rapier-world), and added a new
+cross-module Playwright suite (`tests/integration/hardening.spec.ts`)
+running physics+AI+camera+VFX+audio together through a full match.
+
+---
+
+# Prior Phase
+
+Phase: 16 — Audio Module
+Status: Complete — exit criteria verified
 
 ## Working
 - `src/audio/AudioTypes.ts`: full spec-accurate type system —
@@ -98,9 +120,11 @@ decisions.
   `chromium-preview` (full-suite run in this session's log).
 
 ## Next exact task
-- Begin Phase 17 (Integration hardening) per `plan/MASTER_BUILD_BRIEF.md`.
-  Required reading before starting: whichever spec file(s) that phase
-  references (not yet read this session).
+- Begin Phase 18 (Final build gate) per `plan/MASTER_BUILD_BRIEF.md`'s
+  "Final Goal": a clean checkout should allow `npm ci` -> `npm run
+  validate` -> `npm run build` -> `npm run test:release` with no manual
+  fixes. `tests/release` (referenced by the `test:release` script) still
+  does not exist — see `docs/integration-deviations.md` Phase 17.
 
 ## Known deviations
 - See `docs/audio-deviations.md` for the full Phase 16 deviations list

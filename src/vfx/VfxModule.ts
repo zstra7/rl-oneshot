@@ -7,7 +7,10 @@ import type { RenderFrameContext, RenderFrameModule } from "@/core/GameModule";
 import type { PhysicsFacade } from "@/physics/PhysicsFacade";
 import type { CarId } from "@/physics/PhysicsTypes";
 import * as V from "@/physics/Vec3Math";
+import { SeededRandom } from "@/assets/procedural/SeededRandom";
 import { VISUAL_PALETTE } from "@/visual-language/PsxVisualPalette";
+
+const VFX_RANDOM_SEED = 0x76667831;
 
 const POOL_SIZE = 500;
 
@@ -94,6 +97,14 @@ export class VfxModule implements RenderFrameModule {
   private previousMatchState: string | null = null;
   private previousPlayerScore = 0;
   private previousOpponentScore = 0;
+  /**
+   * Master Brief "Never Do These": "Never use Math.random() for
+   * gameplay." Particle cosmetics don't feed back into gameplay/physics,
+   * but a dedicated seeded stream (not the shared procedural-asset RNG)
+   * keeps the whole codebase's randomness policy uniform and this
+   * module's spawn variation reproducible run-to-run.
+   */
+  private readonly random = new SeededRandom(VFX_RANDOM_SEED);
 
   public constructor(
     private readonly physics: PhysicsFacade,
@@ -165,11 +176,15 @@ export class VfxModule implements RenderFrameModule {
         this.spawn({
           position: { x: behind.x, y: behind.y - 0.05, z: behind.z },
           velocity: V.add(
-            V.scale(forward, -3 - Math.random() * 2),
-            { x: (Math.random() - 0.5) * 1.5, y: (Math.random() - 0.5) * 1.5, z: (Math.random() - 0.5) * 1.5 }
+            V.scale(forward, -3 - this.random.range(0, 2)),
+            {
+              x: this.random.range(-0.75, 0.75),
+              y: this.random.range(-0.75, 0.75),
+              z: this.random.range(-0.75, 0.75)
+            }
           ),
           color,
-          size: 0.14 + Math.random() * 0.08,
+          size: 0.14 + this.random.range(0, 0.08),
           maxLife: 0.35,
           drag: 2.5
         });
@@ -189,15 +204,15 @@ export class VfxModule implements RenderFrameModule {
     const burstCount = 10;
     for (let i = 0; i < burstCount; i += 1) {
       const direction = V.normalize({
-        x: Math.random() - 0.5,
-        y: Math.random() - 0.5,
-        z: Math.random() - 0.5
+        x: this.random.range(-0.5, 0.5),
+        y: this.random.range(-0.5, 0.5),
+        z: this.random.range(-0.5, 0.5)
       });
       this.spawn({
         position: ball.position,
-        velocity: V.scale(direction, 3 + Math.random() * 4),
+        velocity: V.scale(direction, 3 + this.random.range(0, 4)),
         color: VISUAL_PALETTE.neutralAmber,
-        size: 0.1 + Math.random() * 0.06,
+        size: 0.1 + this.random.range(0, 0.06),
         maxLife: 0.4,
         drag: 3
       });
@@ -229,16 +244,16 @@ export class VfxModule implements RenderFrameModule {
     const burstCount = 60;
     for (let i = 0; i < burstCount; i += 1) {
       const direction = V.normalize({
-        x: Math.random() - 0.5,
-        y: Math.random() * 0.6,
-        z: Math.random() - 0.5
+        x: this.random.range(-0.5, 0.5),
+        y: this.random.range(0, 0.6),
+        z: this.random.range(-0.5, 0.5)
       });
       this.spawn({
         position: goalCentre,
-        velocity: V.scale(direction, 4 + Math.random() * 8),
+        velocity: V.scale(direction, 4 + this.random.range(0, 8)),
         color,
-        size: 0.16 + Math.random() * 0.12,
-        maxLife: 0.9 + Math.random() * 0.4,
+        size: 0.16 + this.random.range(0, 0.12),
+        maxLife: 0.9 + this.random.range(0, 0.4),
         drag: 1.2
       });
     }
