@@ -336,3 +336,24 @@
   existing `playerBoostAmount` plumbing exactly) so `GameplayHud`'s boost
   ring can show a white glow + "SUPERSONIC" label — the plan calls this
   out explicitly as the one exception to "CSS/class edits only".
+
+## Post-launch polish overhaul — summary (WS1-WS10, plan/POLISH_OVERHAUL_PLAN.md)
+
+Ten workstreams across gameplay correctness, camera, arena/graphics, AI,
+audio, and UI, executed sequentially with a full verify-then-commit
+cycle after each. The single biggest recurring risk across the whole
+pass was **kickoff-rotation ripple effects** (WS7.A): once cars stopped
+always spawning facing local -Z, several unrelated tests that had
+implicitly relied on that (camera FOV, VFX timing, driving-forward
+assertions) needed explicit rotation/position resets — each traced to
+its actual root cause rather than papered over with longer waits or
+retries. See `docs/physics-deviations.md`'s WS7 section for the full
+list. The environment itself was also unreliable mid-overhaul: the local
+git checkout twice silently reverted to a stale pre-plan commit with no
+corresponding command run (remote history was unaffected both times,
+recovered via `git merge --ff-only`); the mitigation adopted afterward —
+commit immediately once typecheck passes, rather than waiting for full
+Playwright verification — held for the rest of the pass. Final state:
+all ten workstreams complete, documented per-area in their respective
+`docs/*-deviations.md`, and verified via the full check in
+`docs/implementation-progress.md`'s closing entry.

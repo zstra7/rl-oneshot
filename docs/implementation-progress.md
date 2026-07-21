@@ -136,14 +136,52 @@ decisions.
   errors. All 146 Playwright tests pass across `chromium-dev`/
   `chromium-preview` (full-suite run in this session's log).
 
+## Post-launch polish overhaul (plan/POLISH_OVERHAUL_PLAN.md) — complete
+
+All ten workstreams (WS1-WS10) are complete, verified, and pushed to
+`claude/master-build-brief-u8agzk`:
+
+- **WS1** — Input correctness: steering-sign fix, controller support.
+- **WS2** — Opponent AI simplify + stuck recovery.
+- **WS3** — Dodge/flip-cancel and aerial-control feel tuning.
+- **WS4** — Camera overhaul: RL-scale framing, FOV/supersonic feedback,
+  ball-cam, impact shake.
+- **WS5** — Arena overhaul: transparent glass shell, unified/enclosed
+  goals, wall driving (fillets), seated boost pads.
+- **WS6** — Opponent AI simplify (chase-and-shoot planner) + stuck
+  recovery, ball-spawn fix.
+- **WS7** — Gameplay correctness: RL-style kickoff variants + facing,
+  auto-flip when stranded upside down, menu-presentation ghost
+  visibility, VFX zero-size-particle discard, engine-hum audio.
+- **WS8** — Graphics: vertex jitter disabled product-wide (z-fighting),
+  paneled floor texture pass.
+- **WS9** — UI restyle: self-hosted Wipeout-flavoured typography
+  (Russo One / Chakra Petch), `retro-ui.css` design tokens, per-screen
+  treatments across every menu/HUD component.
+- **WS10** — This final integration pass: full verification block on
+  both Playwright projects, `npm run test:release` green against a
+  genuine plain production build, screenshot QA across ten key screens,
+  a scripted "manual feel" pass (drive/turn/jump/boost/pause/goal) with
+  zero console errors and finite physics state throughout, and this
+  documentation update.
+
+Final verification snapshot (this pass): `npx vue-tsc --noEmit` clean;
+`npx vitest run` 227/227; `npm run validate` (contracts/skills/assets/
+architecture) all passing; Playwright full suite 196-198/198 across
+`chromium-dev`+`chromium-preview` (the only 2 non-passing are the
+expected/documented release-gate artifacts against the `PLAYWRIGHT_TEST=1`
+test-mode build, which pass 3/3 when re-run against a genuine plain
+`vite build`); `npm run test:release` (real build + smoke/release suite)
+7/7 green.
+
 ## Next exact task
-- None — this was the Master Brief's final phase (18 of 18). All phases
-  are complete and the "Final Goal" command chain passes. Future work
-  would be picking up items from the various `docs/*-deviations.md`
-  "Deferred" lists (procedural music, car-car impact/powerslide audio
-  detection, live camera/most-accessibility settings wiring, custom
-  keyboard/gamepad settings navigation, Escape-to-resume, etc.) rather
-  than a new numbered phase.
+- None — both the Master Brief's 18 phases and the post-launch polish
+  overhaul's 10 workstreams are complete. Future work would be picking
+  up items from the various `docs/*-deviations.md` "Deferred" lists
+  (procedural music, car-car impact/powerslide audio detection, live
+  camera/most-accessibility settings wiring, custom keyboard/gamepad
+  settings navigation, Escape-to-resume, code-splitting the >500kB
+  bundle chunks, etc.) rather than a new numbered phase or workstream.
 
 ## Known deviations
 - See `docs/audio-deviations.md` for the full Phase 16 deviations list
