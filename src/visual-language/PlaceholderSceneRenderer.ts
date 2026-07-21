@@ -6,15 +6,25 @@ import type {
   RenderFrameContext,
   RenderFrameModule
 } from "@/core/GameModule";
+import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
+import { PSX_RENDER_PRESETS, type VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
+import { PsxRenderPipeline } from "@/visual-language/PsxRenderPipeline";
+import { updateAllJitterHandles } from "@/visual-language/VertexJitter";
 
 /**
- * Minimal renderer module owned by GameRuntime so there is exactly one
- * Three.js renderer/scene/camera for the application. Replaced by the real
- * SceneRenderer/PSX pipeline in later phases (13, 14) — Phase 2 extends it
- * just enough to host the procedural placeholder world (basic key +
- * hemisphere lighting per threejs-lighting; scene content ownership stays
- * with GameRuntime via addToScene/removeFromScene, per the dependency
- * direction rule that assets/visual-language must not import each other).
+ * Renderer module owned by GameRuntime so there is exactly one Three.js
+ * renderer/scene/camera for the application. Phase 2 built enough to host
+ * the procedural placeholder world; Phase 13 adds the real PSX post-
+ * process pipeline (`PsxRenderPipeline` — low-resolution render target,
+ * Bayer dither/quantisation, nearest-neighbour upscale) in front of the
+ * same renderer/scene/camera, per PSX visual spec section 7. Scene
+ * content ownership stays with GameRuntime via addToScene/removeFromScene
+ * — this class only owns the render pipeline itself, per PSX visual spec
+ * section 2's module boundary ("visual-language module owns... vertex
+ * jitter, dither and colour quantisation... visual presets"). The asset
+ * factories in `src/assets/` call into `@/visual-language/VertexJitter`
+ * to tag their materials with a jitter category, a one-way dependency
+ * (assets -> visual-language) with no cycle back.
  */
 export class PlaceholderSceneRenderer
   implements GameModule, RenderFrameModule
@@ -22,6 +32,8 @@ export class PlaceholderSceneRenderer
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
   private camera: THREE.PerspectiveCamera | null = null;
+  private psxPipeline: PsxRenderPipeline | null = null;
+  private visualPreset: VisualPreset = "balanced";
 
   public constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -38,6 +50,8 @@ export class PlaceholderSceneRenderer
       this.canvas.clientHeight || 1,
       false
     );
+
+    this.psxPipeline = new PsxRenderPipeline(PSX_RENDER_PRESETS[this.visualPreset]);
 
     this.scene = new THREE.Scene();
 
@@ -77,8 +91,8 @@ export class PlaceholderSceneRenderer
   }
 
   public updateRenderFrame(_context: RenderFrameContext): void {
-    if (this.renderer && this.scene && this.camera) {
-      this.renderer.render(this.scene, this.camera);
+    if (this.renderer && this.scene && this.camera && this.psxPipeline) {
+      this.psxPipeline.render(this.renderer, this.scene, this.camera);
     }
   }
 
@@ -90,6 +104,18 @@ export class PlaceholderSceneRenderer
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
+  }
+
+  /** PSX visual spec section 39: `setVisualPreset`/`getVisualPreset`. */
+  public setVisualPreset(preset: VisualPreset): void {
+    this.visualPreset = preset;
+    const settings = PSX_RENDER_PRESETS[preset];
+    this.psxPipeline?.applySettings(settings);
+    updateAllJitterHandles(settings.jitterGrid, settings.jitterEnabled);
+  }
+
+  public getVisualPreset(): VisualPreset {
+    return this.visualPreset;
   }
 
   public getDiagnostics(): {
@@ -108,7 +134,19 @@ export class PlaceholderSceneRenderer
     };
   }
 
+  /** PSX visual spec section 39: `getVisualDiagnostics`. */
+  public getVisualDiagnostics(): VisualDiagnostics {
+    const settings = PSX_RENDER_PRESETS[this.visualPreset];
+    return {
+      preset: this.visualPreset,
+      internalResolution: this.psxPipeline?.getInternalResolution() ?? settings.internalResolution,
+      settings
+    };
+  }
+
   public dispose(): void {
+    this.psxPipeline?.dispose();
+    this.psxPipeline = null;
     this.renderer?.dispose();
     this.renderer = null;
     this.scene = null;

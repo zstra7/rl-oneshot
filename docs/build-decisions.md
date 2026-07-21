@@ -202,3 +202,18 @@
   `scripts/generate-texture-manifest.mjs`, not hand-written — see
   `docs/asset-pipeline-deviations.md` Phase 12 for the classification
   reasoning.
+
+## Phase 13
+
+- Governed by a different spec file
+  (`plan/psx_visual_stadium_game_loop_spec_v1_1_boost_pads.md`) than
+  Phases 0-12's core/asset-pipeline specs — its own deviations are
+  tracked separately in `docs/visual-language-deviations.md`, following
+  the same one-spec-per-deviations-doc pattern as
+  `docs/asset-pipeline-deviations.md`/`docs/physics-deviations.md`/etc.
+- `PlaceholderSceneRenderer.updateRenderFrame()` now renders through
+  `PsxRenderPipeline` instead of calling `renderer.render(scene, camera)`
+  directly — the class itself (constructed once by `GameRuntime`) is
+  unchanged, preserving the core architecture spec's "exactly one
+  renderer/scene/camera" invariant; only what happens inside
+  `updateRenderFrame` changed.

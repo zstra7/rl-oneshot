@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
+import { applyVertexJitter } from "@/visual-language/VertexJitter";
 
 export type BoostPadVisualType = "small" | "full";
 export type BoostPadVisualState = "active" | "inactive" | "respawning" | "collected-pulse";
@@ -34,6 +35,7 @@ export function createBoostPadVisual(
     "boost-pad-plate-v1",
     () => new THREE.MeshStandardMaterial({ color: 0x14161f, roughness: 0.6, metalness: 0.3 })
   );
+  applyVertexJitter(plateMaterial, "arenaMetal");
   const plate = new THREE.Mesh(plateGeometry, plateMaterial);
   plate.name = "PadPlate";
   plate.position.y = 0.03;
@@ -56,6 +58,7 @@ export function createBoostPadVisual(
     }
   );
 
+  applyVertexJitter(ringMaterial, "goalOutlines");
   const ring = new THREE.Mesh(ringGeometry, ringMaterial);
   ring.name = "PadRing";
   ring.rotation.x = Math.PI / 2;
@@ -71,6 +74,7 @@ export function createBoostPadVisual(
       "boost-pad-glyph-v1",
       () => new THREE.MeshBasicMaterial({ color: 0xffe9a8 })
     );
+    applyVertexJitter(glyphMaterial, "goalOutlines");
     const glyph = new THREE.Mesh(glyphGeometry, glyphMaterial);
     glyph.name = "PadGlyph";
     glyph.position.y = 0.35;
@@ -84,6 +88,7 @@ export function createBoostPadVisual(
       "boost-pad-cluster-v1",
       () => new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.85 })
     );
+    applyVertexJitter(clusterMaterial, "goalOutlines");
     const cluster = new THREE.Mesh(clusterGeometry, clusterMaterial);
     cluster.name = "PadEnergyCluster";
     cluster.position.y = ringRadius * 0.7;

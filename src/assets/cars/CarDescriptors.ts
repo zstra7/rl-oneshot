@@ -1,4 +1,5 @@
 import type { CarAssetDescriptor, CarTeamId, TeamVisualProfile } from "@/assets/cars/CarModelTypes";
+import { VISUAL_PALETTE } from "@/visual-language/PsxVisualPalette";
 
 /**
  * The single supplied `car.glb` (Sketchfab "PSX style Pontiac Ventura
@@ -78,20 +79,21 @@ function buildCarDescriptor(id: "player-car" | "opponent-car"): CarAssetDescript
 export const PLAYER_CAR_DESCRIPTOR: CarAssetDescriptor = buildCarDescriptor("player-car");
 export const OPPONENT_CAR_DESCRIPTOR: CarAssetDescriptor = buildCarDescriptor("opponent-car");
 
+/** PSX visual spec section 6: "Cyan body strips"/"Magenta body strips" team identity. */
 const TEAM_VISUAL_PROFILES: Record<CarTeamId, TeamVisualProfile> = {
   player: {
     teamId: "player",
-    primary: 0x3fa9ff,
-    secondary: 0x0c2a3d,
-    emissive: 0x1e5fff,
-    patternId: "default"
+    primary: VISUAL_PALETTE.playerCyan,
+    secondary: VISUAL_PALETTE.playerCyanDark,
+    emissive: VISUAL_PALETTE.playerCyan,
+    patternId: "chevron-a"
   },
   opponent: {
     teamId: "opponent",
-    primary: 0xff5a3f,
-    secondary: 0x3d150c,
-    emissive: 0xff3d1e,
-    patternId: "default"
+    primary: VISUAL_PALETTE.opponentMagenta,
+    secondary: VISUAL_PALETTE.opponentMagentaDark,
+    emissive: VISUAL_PALETTE.opponentMagenta,
+    patternId: "chevron-b"
   }
 };
 

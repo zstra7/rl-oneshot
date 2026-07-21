@@ -1,9 +1,11 @@
 import type { AiDebugState } from "@/ai/AiTypes";
 import type { AiDifficulty } from "@/ai/AiDifficulty";
+import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
 import type { AppState } from "@/core/ApplicationState";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
 import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
+import type { VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
 
 export interface BrowserRuntimeTestApi {
   getAppState(): AppState;
@@ -20,6 +22,10 @@ export interface BrowserRuntimeTestApi {
   getAiDifficulty(): AiDifficulty;
   setAiSeed(seed: number): void;
   getAiDebugState(): AiDebugState;
+  /** PSX visual spec section 39: `setVisualPreset`/`getVisualPreset`/`getVisualDiagnostics`. */
+  setVisualPreset(preset: VisualPreset): void;
+  getVisualPreset(): VisualPreset;
+  getVisualDiagnostics(): VisualDiagnostics;
 }
 
 /**

@@ -1,12 +1,15 @@
 import * as THREE from "three";
 
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
+import { VISUAL_PALETTE } from "@/visual-language/PsxVisualPalette";
+import { applyVertexJitter } from "@/visual-language/VertexJitter";
 
 export type CarTeam = "player" | "opponent";
 
+/** PSX visual spec section 6 team identity (cyan/magenta), same palette CarDescriptors.ts uses for the real GLB. */
 const TEAM_COLORS: Record<CarTeam, THREE.ColorRepresentation> = {
-  player: 0x3fa9ff,
-  opponent: 0xff5a3f
+  player: VISUAL_PALETTE.playerCyan,
+  opponent: VISUAL_PALETTE.opponentMagenta
 };
 
 const WHEEL_RADIUS = 0.32;
@@ -39,6 +42,7 @@ export function createProceduralCarFallback(
         metalness: 0.2
       })
   );
+  applyVertexJitter(bodyMaterial, "cars");
 
   const bodyGeometry = context.geometryRegistry.getOrCreate(
     "car-fallback-body-v1",
@@ -92,6 +96,7 @@ export function createProceduralCarFallback(
     "car-fallback-wheel",
     () => new THREE.MeshStandardMaterial({ color: 0x101014, roughness: 0.9 })
   );
+  applyVertexJitter(wheelMaterial, "cars");
   const wheelGeometry = context.geometryRegistry.getOrCreate(
     "car-fallback-wheel-v1",
     () => {
@@ -136,6 +141,7 @@ export function createProceduralCarFallback(
         opacity: 0.9
       })
   );
+  applyVertexJitter(boostSocketMaterial, "cars");
   const boostSocketGeometry = context.geometryRegistry.getOrCreate(
     "car-fallback-boost-socket-v1",
     () => new THREE.CircleGeometry(0.18, 8)

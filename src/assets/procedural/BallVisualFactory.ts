@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
+import { applyVertexJitter } from "@/visual-language/VertexJitter";
 
 const BALL_DETAIL = 2;
 
@@ -42,6 +43,9 @@ export function createBallVisual(context: ProceduralAssetContext): THREE.Group {
         opacity: 0.65
       })
   );
+
+  applyVertexJitter(bodyMaterial, "ball");
+  applyVertexJitter(seamMaterial, "ball");
 
   const group = new THREE.Group();
   group.name = "BallVisual";

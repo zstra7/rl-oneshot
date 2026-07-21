@@ -7,6 +7,7 @@ import type {
   LoadedCarSource,
   TeamVisualProfile
 } from "@/assets/cars/CarModelTypes";
+import { applyVertexJitter } from "@/visual-language/VertexJitter";
 
 interface CachedSource {
   readonly gltf: GLTF;
@@ -113,9 +114,11 @@ function applyTeamMaterials(
       return;
     }
     const materials = Array.isArray(node.material) ? node.material : [node.material];
-    const resolved = materials.map((material) =>
-      resolveMaterial(material, node, descriptor, team, cloneCache)
-    );
+    const resolved = materials.map((material) => {
+      const resolvedMaterial = resolveMaterial(material, node, descriptor, team, cloneCache);
+      applyVertexJitter(resolvedMaterial, "cars");
+      return resolvedMaterial;
+    });
     node.material = Array.isArray(node.material) ? resolved : (resolved[0] as THREE.Material);
   });
 }

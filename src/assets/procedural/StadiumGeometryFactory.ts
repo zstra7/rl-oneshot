@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
+import { applyVertexJitter } from "@/visual-language/VertexJitter";
 
 const WALL_THICKNESS = 1;
 
@@ -46,6 +47,9 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   if (wallTexture) {
     wallTexture.repeat.set(fieldLength / 2, interiorHeight / 2);
   }
+
+  applyVertexJitter(floorMaterial, "arenaMetal");
+  applyVertexJitter(wallMaterial, "arenaMetal");
 
   const floorGeometry = context.geometryRegistry.getOrCreate(
     "stadium-floor-panel-v1",

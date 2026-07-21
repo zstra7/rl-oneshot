@@ -31,6 +31,8 @@ import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
 import type { AiDifficulty } from "@/ai/AiDifficulty";
 import type { AiDebugState } from "@/ai/AiTypes";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
+import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
+import { PSX_RENDER_PRESETS, type VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
@@ -117,6 +119,17 @@ export interface GameRuntimeFacade {
 
   /** Populated once `initialise()` completes; used by the test API installer. */
   getGameFlowTestApi(): BrowserGameFlowTestApi;
+
+  /**
+   * PSX visual spec section 39. This project's existing `VisualPreset`
+   * (asset pipeline spec) is already a preset-id string selector, not a
+   * mergeable settings struct — `setVisualPreset` takes that id directly
+   * rather than the full spec's `DeepPartial<VisualPreset>` object-merge
+   * shape. See docs/visual-language-deviations.md.
+   */
+  setVisualPreset(preset: VisualPreset): void;
+  getVisualPreset(): VisualPreset;
+  getVisualDiagnostics(): VisualDiagnostics;
 }
 
 export class GameRuntime implements GameRuntimeFacade {
@@ -560,6 +573,24 @@ export class GameRuntime implements GameRuntimeFacade {
 
   public getCameraDiagnostics(): CameraDiagnostics | null {
     return this.cameraController?.getDiagnostics() ?? null;
+  }
+
+  public setVisualPreset(preset: VisualPreset): void {
+    this.sceneRenderer?.setVisualPreset(preset);
+  }
+
+  public getVisualPreset(): VisualPreset {
+    return this.sceneRenderer?.getVisualPreset() ?? "balanced";
+  }
+
+  public getVisualDiagnostics(): VisualDiagnostics {
+    return (
+      this.sceneRenderer?.getVisualDiagnostics() ?? {
+        preset: "balanced",
+        internalResolution: PSX_RENDER_PRESETS["balanced"].internalResolution,
+        settings: PSX_RENDER_PRESETS["balanced"]
+      }
+    );
   }
 
   public replayMatch(): void {
