@@ -1,5 +1,8 @@
+import * as THREE from "three";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { AssetPipeline } from "@/assets/AssetPipeline";
+import { BoostPadRenderBinding } from "@/integration/BoostPadRenderBinding";
 import { RL_CONSTANTS } from "@/physics/PhysicsConstants";
 import { PhysicsFacade } from "@/physics/PhysicsFacade";
 
@@ -233,5 +236,28 @@ describe("Boost pad system (Phase 6, physics spec section 21.13)", () => {
     const idsB = physics.getBoostPadStates().map((p) => p.id);
     expect(idsA).toEqual(idsB);
     expect(idsA).toHaveLength(16); // 12 small + 4 full
+  });
+});
+
+describe("WS5.D: boost pad visuals are seated on the floor", () => {
+  it("every pad visual's y position is 0, even though the sensor centre floats above the floor", async () => {
+    const physics = new PhysicsFacade();
+    await physics.initialise();
+
+    const stubAssets = {
+      createBoostPadVisual: () => new THREE.Group(),
+      applyBoostPadVisualState: () => {}
+    } as unknown as AssetPipeline;
+
+    const binding = new BoostPadRenderBinding(physics, stubAssets);
+    binding.updateRenderFrame({ timestampMs: 0, frameDeltaSeconds: 1 / 60, alpha: 1 });
+
+    const root = binding.getRoot();
+    expect(root.children.length).toBe(16);
+    for (const visual of root.children) {
+      expect(visual.position.y).toBe(0);
+    }
+
+    physics.dispose();
   });
 });

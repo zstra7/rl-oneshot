@@ -34,7 +34,13 @@ export class BoostPadRenderBinding implements RenderFrameModule {
     if (!this.built) {
       for (const pad of pads) {
         const visual = this.assets.createBoostPadVisual(pad.id, pad.type);
-        visual.position.set(pad.position.x, pad.position.y, pad.position.z);
+        // WS5.D (plan/POLISH_OVERHAUL_PLAN.md): `pad.position` is the
+        // *sensor* centre, which sits `pickupHalfHeight` above the floor
+        // (BoostPadLayout.ts) — the visual is authored floor-relative
+        // (plate at y=0.03 etc.), so it must be seated at y=0, not at the
+        // sensor's y. If pads are ever placed off-floor in future, seat
+        // at `pad.position.y - pickupHalfHeight` instead of a flat 0.
+        visual.position.set(pad.position.x, 0, pad.position.z);
         this.root.add(visual);
         this.padVisuals.set(pad.id, visual);
       }

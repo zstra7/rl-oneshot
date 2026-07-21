@@ -1,5 +1,6 @@
 import type * as RAPIER from "@dimforge/rapier3d-compat";
 
+import { RL_CONSTANTS } from "@/physics/PhysicsConstants";
 import type { PhysicsParameters } from "@/physics/PhysicsParameters";
 import * as V from "@/physics/Vec3Math";
 import type { CarEntity } from "@/physics/entities/CarRegistry";
@@ -46,6 +47,18 @@ export function prePhysicsTick(
     applyGroundDrive(car, input.throttle, forwardOnSurface, dt);
     applyGroundSteering(car, input.steer, forwardOnSurface, car.runtime.supportNormal, parameters, dt);
     applyLateralGrip(car, input.powerslide, rightOnSurface, parameters, dt);
+
+    // WS5.C (plan/POLISH_OVERHAUL_PLAN.md): while actively driving on a
+    // steep surface (wall or fillet), keep the suspension loaded against
+    // it — without this the car's own momentum can carry it off a near-
+    // vertical support before the suspension probes get a chance to
+    // re-establish contact. Gated on active throttle: an idle/coasting
+    // car must still be able to slide/fall off a wall under gravity, not
+    // be held there by an artificial magnet.
+    if (car.runtime.supportNormal.y < 0.7 && Math.abs(input.throttle) > 0.05) {
+      const impulse = V.scale(car.runtime.supportNormal, -RL_CONSTANTS.carMass * RL_CONSTANTS.stickyAcceleration * dt);
+      car.body.applyImpulse(impulse, true);
+    }
   } else {
     applyAirborneThrottle(car, carForwardWorld, dt);
 

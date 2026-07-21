@@ -410,3 +410,87 @@ settings, no supersonic FOV kick, and no impact shake.
   of the sampling window — a single injected delta decays below
   `shakeDecayRate`'s energy threshold well before a useful number of
   samples can be collected.
+
+## Post-launch polish pass — WS5 (arena overhaul)
+
+`plan/POLISH_OVERHAUL_PLAN.md` WS5: transparent glass shell, enclosed/
+unified goals, floor→wall fillets with wall driving, seated boost pads.
+
+- **Goal dimension unification**: `DEFAULT_STADIUM_DIMENSIONS.goalWidth`/
+  `goalHeight`/`goalDepth` (assets, purely visual) now import and mirror
+  `GOAL_HALF_WIDTH * 2`/`GOAL_HEIGHT`/`GOAL_DEPTH` (physics, authoritative)
+  directly rather than duplicating separate literals — previously the
+  visual opening was 10m wide while the physics opening was 14m, so cars/
+  balls could pass through what visually looked like solid wall.
+  `src/assets` importing from `src/physics` is explicitly allowed by
+  `scripts/validate-architecture.mjs` (only Vue stores are forbidden).
+- **Goal-box seam fix**: `TestArenaPresets.buildGoalEnd`'s goal-box side
+  walls/roof colliders are widened by 0.5 in z (their centre shifted to
+  match) so they overlap *inside* the end wall's plane instead of
+  meeting it edge-to-edge, and the two goal-post wall segments are
+  widened 0.25 toward the goal centreline for the same reason.
+  Overlapping static colliders are harmless in Rapier; this closes a
+  seam a fast-moving ball/car could otherwise phase through. Verified by
+  `tests/unit/goalIntegrity.spec.ts` firing the ball at all 8 goal-mouth
+  corner/seam combinations for 600 ticks each, asserting it never
+  exceeds a small margin outside the arena's physical bounds.
+- **Kickoff ball spawn**: `DEFAULT_BALL_SPAWN` changed from
+  `{x:0, y:8, z:0}` (falls for ~1.2s at every kickoff) to
+  `{x:0, y: RL_CONSTANTS.ballRadius, z:0}` (rests on the floor
+  immediately, matching real Rocket League kickoffs).
+- **Regression this uncovered**: several existing unit tests
+  (`drivingFeel.spec.ts`, `dodgeFlip.spec.ts`, `steeringDirection.spec.ts`,
+  `carController.spec.ts`) spawn their test car at the world origin
+  `(0, 1, 0)` for convenience. With the ball now resting at the origin
+  immediately at world init (rather than still falling from 8m), these
+  tests' cars instantly overlapped the ball at tick 0, producing a
+  violent collision impulse that sent the car tumbling and made every
+  downstream assertion fail (confirmed via a throwaway debug script
+  showing `grounded: false` and runaway `angularVelocity` from frame
+  one). Real kickoff car spawns (`DEFAULT_CAR_SPAWNS`, at `(±6, 1, ∓10)`)
+  never had this problem — only tests using the origin as a convenient
+  spawn point did. Fixed by having each affected test's `beforeEach`
+  call `physics.setBallState({ position: { x: 15, y: 5, z: 25 } })`
+  immediately after spawning the car, parking the ball out of the way
+  before settling — the same "park what you don't care about" pattern
+  already used for the opponent AI in WS2 (see above).
+- **Wall-stick assist must be gated on active throttle.** The plan's
+  suggested "small downward pull" (reusing `RL_CONSTANTS.stickyAcceleration`,
+  applied whenever `supportNormal.y < 0.7`, mirroring the jump-liftoff
+  sticky force in `JumpController.ts`) was first implemented
+  unconditionally inside the grounded branch. This produced an
+  unbreakable "glue" effect: a car resting motionless on the wall/fillet
+  with zero throttle stayed pinned at a constant x offset from the wall
+  indefinitely (confirmed via a throwaway debug trace stepping 240 ticks
+  and logging position/grounded/supportNormal every 10 ticks — x moved
+  by 0.01 units total). Disabling the assist entirely and re-running
+  showed the glue was actually coming from two sources: the assist
+  impulse itself (pushing the car *into* the surface every tick), and
+  separately from the existing lateral-grip model (`GripController.ts`,
+  tuned in WS2) treating gravity's wall-parallel component as ordinary
+  lateral slip and cancelling it — an idle car on a slope essentially
+  never loses grip in this simplified (non-friction-cone) grip model.
+  Gating the wall-stick assist on `Math.abs(input.throttle) > 0.05` fixed
+  the case the assist actually needs to help (a car actively driving up
+  onto a fillet, where losing suspension contact mid-climb from its own
+  momentum is the real problem) without making an idle car artificially
+  immovable. The residual "idle cars don't slide off vertical walls"
+  behaviour is a pre-existing property of the absolute (non-friction-
+  cone) lateral grip model, not something WS5.C introduces or attempts
+  to fix — `tests/unit/wallDriving.spec.ts`'s third test documents this
+  as a numerical-stability check rather than asserting detachment.
+- **Fillet collider/visual math**: both the physics fillets
+  (`TestArenaPresets.filletColliders`) and the visual quarter-cylinder
+  strips (`StadiumGeometryFactory.createWallFillets`) follow the plan's
+  arc parametrisation directly — `FILLET_RADIUS = 2.0`, 5 segments per
+  run, generalised into one `fillet()` helper parametrised by axis
+  (`"x"` for side walls, `"z"` for end walls) and a `sign` (the wall's
+  outward-normal sign along that axis) so the same formula covers all
+  four wall runs without four near-duplicate blocks. End-wall fillets
+  are split into two shorter runs either side of the goal mouth so the
+  goal opening stays clear, exactly mirroring the plan's spec.
+- **Boost pad seating**: `BoostPadRenderBinding` was placing every pad
+  visual at `pad.position` — the *sensor* centre, which sits
+  `pickupHalfHeight` above the floor (`BoostPadLayout.ts`) — so every pad
+  floated. Changed to seat at `y = 0` (pads are authored floor-relative),
+  with a comment for the (currently unused) case of a non-zero floor top.

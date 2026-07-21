@@ -16,6 +16,12 @@ describe("Car controller (Phase 5)", () => {
     physics = new PhysicsFacade();
     await physics.initialise();
     physics.spawnCar({ id: "car-a", transform: { x: 0, y: 1, z: 0 } });
+    // WS5.B: the ball now spawns resting on the floor at the arena
+    // centre (kickoff-accurate) instead of falling from 8m, which would
+    // otherwise instantly overlap a car spawned at the origin. Park it
+    // away by default; tests that care about the ball set their own
+    // position before stepping.
+    physics.setBallState({ position: { x: 15, y: 5, z: 25 } });
     // Let suspension settle before every test.
     physics.stepTicks(90);
   });

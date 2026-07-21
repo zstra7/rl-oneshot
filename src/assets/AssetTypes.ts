@@ -1,3 +1,5 @@
+import { GOAL_DEPTH, GOAL_HALF_WIDTH, GOAL_HEIGHT } from "@/physics/goal/GoalTypes";
+
 export type AssetPipelineState =
   | "IDLE"
   | "VALIDATING_SKILLS"
@@ -76,12 +78,21 @@ export interface StadiumGenerationDimensions {
   readonly cornerRadius: number;
 }
 
+/**
+ * WS5.B (plan/POLISH_OVERHAUL_PLAN.md): goal dimensions mirror the
+ * physics-authoritative `GOAL_HALF_WIDTH`/`GOAL_HEIGHT`/`GOAL_DEPTH` in
+ * `src/physics/goal/GoalTypes.ts` exactly, so the visual goal opening
+ * matches what cars/balls can actually pass through (previously the
+ * visual opening was 10m wide while the physics opening was 14m).
+ * `src/assets` importing from `src/physics` is allowed by
+ * `scripts/validate-architecture.mjs` (only Vue stores are forbidden).
+ */
 export const DEFAULT_STADIUM_DIMENSIONS: StadiumGenerationDimensions = {
   fieldLength: 60,
   fieldWidth: 40,
   interiorHeight: 20,
-  goalWidth: 10,
-  goalHeight: 6,
-  goalDepth: 4,
+  goalWidth: GOAL_HALF_WIDTH * 2,
+  goalHeight: GOAL_HEIGHT,
+  goalDepth: GOAL_DEPTH,
   cornerRadius: 4
 };

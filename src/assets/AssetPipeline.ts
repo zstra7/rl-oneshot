@@ -319,6 +319,40 @@ export class AssetPipeline implements GameModule {
     };
   }
 
+  /**
+   * WS5.A (plan/POLISH_OVERHAUL_PLAN.md): test-only introspection of the
+   * arena's transparent glass shell vs. the (still opaque) floor. Builds
+   * a throwaway stadium group against the live registries (materials are
+   * deduplicated by key, so this doesn't create new GPU resources beyond
+   * what a real stadium build already needs) purely to traverse it.
+   */
+  public getStadiumShellInfo(): { transparentMeshCount: number; floorMaterialOpaque: boolean } {
+    const context = this.requireContext();
+    const stadium = createStadiumBlockout(context);
+
+    let transparentMeshCount = 0;
+    let floorMaterialOpaque = true;
+
+    stadium.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!(mesh instanceof THREE.Mesh)) {
+        return;
+      }
+      const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+      const standardMaterial = material as THREE.MeshStandardMaterial | undefined;
+      const isTransparent = Boolean(standardMaterial?.transparent) && (standardMaterial?.opacity ?? 1) < 0.5;
+
+      if (isTransparent) {
+        transparentMeshCount += 1;
+      }
+      if (mesh.name === "FloorBase" && isTransparent) {
+        floorMaterialOpaque = false;
+      }
+    });
+
+    return { transparentMeshCount, floorMaterialOpaque };
+  }
+
   public dispose(): void {
     this.disposePreview();
     this.geometryRegistry.disposeAll();

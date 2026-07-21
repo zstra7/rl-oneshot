@@ -18,6 +18,8 @@ export interface BrowserAssetTestApi {
   getSceneResourceCounts(): AssetResourceCounts;
   getCarIntakeReports(): Record<CarTeamId, CarAssetInspectionReport | undefined>;
   isCarUsingFallback(team: CarTeamId): boolean;
+  /** WS5.A: transparent glass shell mesh count + whether the floor stayed opaque. */
+  getStadiumShellInfo(): { transparentMeshCount: number; floorMaterialOpaque: boolean };
 
   rebuildProceduralPreview(seed: number): AssetResourceCounts;
   disposePreview(): void;
@@ -45,6 +47,7 @@ export function installAssetTestApi(pipeline: AssetPipeline): void {
       return { player: reports.get("player"), opponent: reports.get("opponent") };
     },
     isCarUsingFallback: (team) => pipeline.isCarUsingFallback(team),
+    getStadiumShellInfo: () => pipeline.getStadiumShellInfo(),
     rebuildProceduralPreview: (seed: number) => {
       const preview = pipeline.setProceduralPreviewSeed(seed);
       let geometries = 0;

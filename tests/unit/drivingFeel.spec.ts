@@ -21,6 +21,10 @@ describe("Driving feel: grip and steering response", () => {
     physics = new PhysicsFacade();
     await physics.initialise();
     physics.spawnCar({ id: "car-a", transform: { x: 0, y: 1, z: 0 } });
+    // WS5.B: the ball now spawns resting at the arena centre (kickoff-
+    // accurate) instead of falling from 8m — park it away so it doesn't
+    // instantly overlap a car spawned at the origin.
+    physics.setBallState({ position: { x: 15, y: 5, z: 25 } });
     physics.stepTicks(90);
   });
 

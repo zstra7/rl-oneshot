@@ -38,7 +38,9 @@ import type {
 
 export const PHYSICS_MODULE_CONTRACT_VERSION = "2.1";
 
-const DEFAULT_BALL_SPAWN = { x: 0, y: 8, z: 0 };
+// WS5.B (plan/POLISH_OVERHAUL_PLAN.md): the ball used to fall 8m at every
+// kickoff — spawn it resting on the floor instead.
+const DEFAULT_BALL_SPAWN = { x: 0, y: RL_CONSTANTS.ballRadius, z: 0 };
 const DEFAULT_CAR_SPAWNS: Record<number, { x: number; y: number; z: number }> = {
   0: { x: -6, y: 1, z: -10 },
   1: { x: 6, y: 1, z: 10 }
@@ -156,13 +158,15 @@ export class PhysicsFacade implements GameModule {
     const definition = getArenaPresetDefinition(preset);
 
     for (const colliderSpec of definition.colliders) {
-      const body = world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(
-          colliderSpec.translation.x,
-          colliderSpec.translation.y,
-          colliderSpec.translation.z
-        )
+      const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(
+        colliderSpec.translation.x,
+        colliderSpec.translation.y,
+        colliderSpec.translation.z
       );
+      if (colliderSpec.rotation) {
+        bodyDesc.setRotation(colliderSpec.rotation);
+      }
+      const body = world.createRigidBody(bodyDesc);
 
       world.createCollider(
         RAPIER.ColliderDesc.cuboid(

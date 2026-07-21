@@ -169,3 +169,47 @@ Record deviations from `plan/psx_visual_stadium_game_loop_spec_v1_1_boost_pads.m
   `VISUAL_PALETTE.playerCyan`/`opponentMagenta` instead of the ad hoc hex
   values Phase 9-11 picked before this palette existed), not as a runtime
   post-process LUT.
+
+## Post-launch polish pass — WS5.A/B/C (arena shell, goals, fillets)
+
+`plan/POLISH_OVERHAUL_PLAN.md` WS5: the previously-deferred "curved
+corner/wall-ceiling transitions and segmented transparent glass shell"
+(originally called out as out of scope in this doc's Phase 14 section)
+are now implemented.
+
+- **Hex shell texture built as a `DataTexture`, not `CanvasTexture`.**
+  The plan's spec calls for `document.createElement("canvas")` +
+  `CanvasTexture`. `StadiumGeometryFactory.createStadiumBlockout` (and
+  therefore the new `HexPatternTexture.ts`) runs under both the browser
+  and Vitest's DOM-less Node environment (`vitest.config.ts` sets
+  `environment: "node"`) — `proceduralDeterminism.spec.ts` calls
+  `createStadiumBlockout` directly. `document` doesn't exist there.
+  Followed the same pattern already established by
+  `TextureAssetLoader.ts`'s `createCheckerTexture`: a raw pixel buffer
+  (`Uint8Array`) rasterised by a small software line-plotter (distance-
+  to-segment thresholding, one thick line per hexagon edge) instead of
+  the 2D canvas API, wrapped in a `THREE.DataTexture`. Fully
+  deterministic, same visual result, works in both environments.
+- **Goal box visuals mirror the physics goal-box colliders exactly** —
+  same `fieldLength/2`, `goalWidth/2`, `goalHeight`, `goalDepth` — so the
+  enclosed shell a scored ball visually disappears into matches where it
+  physically stops. A thin emissive frame (`playerCyan`/
+  `opponentMagenta`, per `VISUAL_PALETTE`) outlines each goal mouth.
+- **Wall fillet visual orientation is a best-effort derivation, not a
+  verified one** — the plan itself flags this ("Cylinder theta math is
+  fiddly — after implementing, verify orientation with the Playwright
+  screenshot... rather than by reasoning alone"). A screenshot pass
+  (a `node` script driving a real Playwright/Chromium page) did confirm
+  the arena renders without visible geometry errors and the goal frame
+  outline is correctly positioned; the fillet strips themselves share
+  the floor material at low contrast against the dark PSX background,
+  so their exact curvature isn't independently screenshot-verifiable at
+  this pass — the *physics* fillets (which drive actual gameplay) are
+  separately and directly verified by `tests/unit/wallDriving.spec.ts`
+  stepping real ticks and asserting the car's position/grounded state.
+- **What initially looked like a rendering bug during the screenshot
+  pass — a bright cyan hexagonal sphere near the car — turned out to be
+  the ball** (`BallVisualFactory.ts`'s faceted `IcosahedronGeometry` body
+  plus its cyan wireframe seam overlay), a pre-existing design unrelated
+  to WS5.A's hex shell texture. Traced via `BallVisualFactory.ts`'s
+  source before concluding it wasn't a regression.

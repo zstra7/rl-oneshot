@@ -176,16 +176,18 @@ function meanHighFrequencyDeviation(samples: Array<{ x: number; y: number; z: nu
     let sy = 0;
     let sz = 0;
     for (let j = i - windowSize; j < i; j++) {
-      sx += samples[j].x;
-      sy += samples[j].y;
-      sz += samples[j].z;
+      const sample = samples[j]!;
+      sx += sample.x;
+      sy += sample.y;
+      sz += sample.z;
     }
     const ax = sx / windowSize;
     const ay = sy / windowSize;
     const az = sz / windowSize;
-    const dx = samples[i].x - ax;
-    const dy = samples[i].y - ay;
-    const dz = samples[i].z - az;
+    const current = samples[i]!;
+    const dx = current.x - ax;
+    const dy = current.y - ay;
+    const dz = current.z - az;
     total += Math.sqrt(dx * dx + dy * dy + dz * dz);
     count++;
   }
