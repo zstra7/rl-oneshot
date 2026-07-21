@@ -76,6 +76,16 @@
   release gate later, consider splitting `test:release` into a
   test-API-independent smoke/release pass (plain production build) and a
   separate test-mode-build pass for `tests/integration/**`.
+  **Resolved in Phase 18**: `test:release` now runs only
+  `tests/smoke tests/release` against the plain production build (removed
+  `tests/integration` from that script) — `tests/release/release-gate.spec.ts`
+  is written test-API-independent from the start (real clicks/keyboard
+  events, `data-testid`/`data-app-state` DOM attributes, no
+  `window.__GAME_TEST__`) specifically so it's valid against the literal
+  artifact `npm run build` produces. `tests/integration/**` continues to
+  need a test-mode build (`PLAYWRIGHT_TEST=1`) and is exercised via
+  `npm run test:integration` or the full `chromium-dev`/`chromium-preview`
+  suite against a test-mode build, not via `test:release`.
 
 ## Phase 7
 
@@ -261,3 +271,50 @@
   scheduling, continuous voices, settings propagation) is Playwright-only,
   using `AudioDiagnostics` counters as the practical substitute for the
   spec's `BrowserAudioTestApi` virtual-scheduler inspection methods.
+
+## Phase 18
+
+- **Found and fixed a real gap while writing `tests/release`**: the
+  Escape-key "pause" input edge (`HumanGameplayInputFrame.system.pausePressed`,
+  built in Phase 4) was sampled every tick but never consumed anywhere —
+  no code path called `pauseMatch()` in response to it, so real end users
+  pressing Escape during a live match got no response at all (only the
+  Pause Menu's own on-screen RESUME/RESTART/RETURN buttons worked, and
+  those are only reachable once already paused via some other means).
+  Fixed in `GameRuntime.onFixedTick()`: `if (frame.system.pausePressed) {
+  this.pauseMatch(); }` right after sampling input, guarded implicitly by
+  `MatchFlowController.pause()`'s own `PAUSABLE_STATES` check (safe to
+  call unconditionally). Resuming via Escape a second time is not wired —
+  input sampling itself is skipped entirely while `PAUSED` (an early
+  return in `onFixedTick`, predating this phase), so only the Pause Menu's
+  RESUME button can un-pause; this is an acceptable smaller scope than a
+  full Escape-toggles-pause-and-resume behaviour and matches "smallest
+  compliant solution" (Master Brief "If You Become Stuck").
+- **Added a `<link rel="icon" href="data:,">` to `index.html`.** With no
+  favicon declared, every page load triggered an automatic
+  `GET /favicon.ico` that 404'd — harmless to gameplay, but a real,
+  previously-unnoticed console error (no prior Playwright suite in this
+  project checked `console` `"error"`-type messages, only uncaught
+  `pageerror`s, so it had never been caught). The inline `data:,` URI is a
+  zero-byte icon that suppresses the automatic request without needing an
+  actual icon asset.
+- **`test:release` split, per the Phase 1 deviation's own recommendation**
+  (see that section above): now runs only `tests/smoke tests/release`
+  against the literal plain-`npm run build` artifact.
+  `tests/release/release-gate.spec.ts` (new) drives the app exclusively
+  through real DOM interaction — clicks, keyboard events, `data-testid`/
+  `data-app-state` attributes — never `window.__GAME_TEST__`, so it
+  validates the actual shipped build rather than a test-mode stand-in.
+  Also asserts `window.__GAME_TEST__`/`__AUDIO_TEST__` are genuinely
+  `undefined` on that build (no debug hooks leaking into production) and
+  that a live match makes no third-party network requests.
+- **`tests/release` was empty until this phase** — `test:release`
+  silently matched zero tests for it since Playwright doesn't error on an
+  empty/missing test path, so the script "passed" without ever actually
+  gating a release on anything release-specific. This phase is what makes
+  that gate real.
+- Ran the Master Brief's literal Final Goal command chain end to end in
+  this session: `npm run validate` -> `npm run build` (which itself runs
+  `validate` -> `type-check` -> `test:unit` -> `vite build`) ->
+  `npm run test:release`, all passing with no manual fixes, confirming the
+  chain works from the current checkout state.

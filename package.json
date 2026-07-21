@@ -31,7 +31,7 @@
     "test:audio": "playwright test tests/ui/audio.spec.ts",
     "test:ui": "playwright test tests/ui",
     "test:integration": "playwright test tests/integration",
-    "test:release": "npm run build && playwright test --project=chromium-preview tests/smoke tests/integration tests/release",
+    "test:release": "npm run build && playwright test --project=chromium-preview tests/smoke tests/release",
     "report:assets": "node scripts/create-asset-report.mjs",
     "report:build": "node scripts/create-build-report.mjs"
   },

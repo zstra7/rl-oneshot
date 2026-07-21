@@ -372,6 +372,10 @@ export class GameRuntime implements GameRuntimeFacade {
     const frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
     this.cameraController?.consumeCameraInput(frame.camera);
 
+    if (frame.system.pausePressed) {
+      this.pauseMatch();
+    }
+
     if (modules.gameFlow.areControlsActive()) {
       modules.physics.setCarInput(PLAYER_CAR_ID, frame.car);
       modules.physics.setCarControlProfile(PLAYER_CAR_ID, frame.carControlProfile);

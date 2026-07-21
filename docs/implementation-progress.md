@@ -1,23 +1,40 @@
 # Current Phase
 
-Phase: 17 — Integration Hardening
-Status: Complete — exit criteria verified
+Phase: 18 — Final Build Gate
+Status: Complete — Master Brief "Final Goal" chain verified end to end
 Last verified commit: (this commit)
 
-## Phase 17 summary
-Phase 17 has no dedicated module spec — it's a cross-cutting audit against
-the Master Brief's own "Required Architecture"/"Never Do These" invariants
-and the `npm run test:<module>` convention. See
-`docs/integration-deviations.md` Phase 17 section for full detail. In
-short: found and fixed a real `Math.random()` violation in `VfxModule`
-(now uses a seeded `SeededRandom`, consistent with the rest of the
-codebase), fixed a broken `test:visual` script path and added missing
-`test:audio`/`test:ui` per-module scripts, audited and confirmed clean on
-every other "Never Do These" invariant (no reactive Three.js objects, no
-Rapier/Three in Pinia stores, no remote fetches, exactly one
-`AudioContext`/`requestAnimationFrame`/Rapier-world), and added a new
-cross-module Playwright suite (`tests/integration/hardening.spec.ts`)
-running physics+AI+camera+VFX+audio together through a full match.
+## Phase 18 summary
+Master Brief "Final Goal": a clean checkout supports `npm ci -> npm run
+validate -> npm run build -> npm run test:release` with no manual fixes.
+Ran that literal chain this session; it now passes cleanly. See
+`docs/build-decisions.md` Phase 18 section for full detail. In short:
+found and fixed a real gap where the Escape-key pause input edge was
+sampled but never consumed by any code path (`GameRuntime.onFixedTick()`
+now calls `pauseMatch()` on it), added `<link rel="icon" href="data:,">`
+to suppress a genuine (if harmless) favicon 404 console error, split
+`test:release` to run only `tests/smoke tests/release` against a literal
+plain production build (per the Phase 1 deviation's own recommendation —
+`tests/integration/**` needs a test-mode build and moved out), and
+populated the previously-empty `tests/release/` with
+`release-gate.spec.ts` — a suite that drives the app exclusively through
+real DOM interaction (no `window.__GAME_TEST__`) so it validates the
+actual shipped artifact: full menu-to-match-to-menu flow with zero
+console errors, no leaked debug hooks in production, and no third-party
+network requests during a live match.
+
+## Tests passing (Phase 18)
+- The literal `npm run test:release` command (plain `npm run build` ->
+  `playwright test --project=chromium-preview tests/smoke tests/release`)
+  passes: 5/5 tests (2 smoke + 3 new release-gate tests).
+- Full `chromium-dev`/`chromium-preview` suite against a test-mode build:
+  152/156 passed in one combined run; the 4 "failures" were either the
+  release-gate test's own plain-build-only assertion (correctly failing
+  against a test-mode build, verified separately passing against a plain
+  build) or transient resource-contention flakiness under heavy 2-worker
+  parallel load (`car-visual`/`texture-visual` timeouts), confirmed
+  non-reproducing when re-run in isolation (7/7 passed).
+- `npx vitest run`: 21 files, 190 tests, unchanged from Phase 17.
 
 ---
 
@@ -120,11 +137,13 @@ decisions.
   `chromium-preview` (full-suite run in this session's log).
 
 ## Next exact task
-- Begin Phase 18 (Final build gate) per `plan/MASTER_BUILD_BRIEF.md`'s
-  "Final Goal": a clean checkout should allow `npm ci` -> `npm run
-  validate` -> `npm run build` -> `npm run test:release` with no manual
-  fixes. `tests/release` (referenced by the `test:release` script) still
-  does not exist — see `docs/integration-deviations.md` Phase 17.
+- None — this was the Master Brief's final phase (18 of 18). All phases
+  are complete and the "Final Goal" command chain passes. Future work
+  would be picking up items from the various `docs/*-deviations.md`
+  "Deferred" lists (procedural music, car-car impact/powerslide audio
+  detection, live camera/most-accessibility settings wiring, custom
+  keyboard/gamepad settings navigation, Escape-to-resume, etc.) rather
+  than a new numbered phase.
 
 ## Known deviations
 - See `docs/audio-deviations.md` for the full Phase 16 deviations list
