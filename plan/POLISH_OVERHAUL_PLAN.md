@@ -133,7 +133,62 @@ right. Negate…").
 
 ### WS1.B Controller input doesn't work
 
-**Root causes (verified in `src/input/InputControlsModule.ts`):**
+**PRIMARY root cause (confirmed by live testing — fix this first):**
+`src/input/testing/BrowserInputTestApi.ts` installs whenever `__DEV__ || __TEST_BUILD__`
+(line 65 — i.e. every `npm run dev` session and every `PLAYWRIGHT_TEST=1` build), and at
+line 100 it **unconditionally** calls
+`input.useVirtualGamepadProvider(virtualGamepadProvider)`. Per
+`InputControlsModule.useVirtualGamepadProvider` (`InputControlsModule.ts:213-216`), that
+replaces the real `BrowserGamepadProvider` and clears the pad assignment — so
+`navigator.getGamepads()` is **never polled again** in any dev/test build. The virtual
+provider returns no gamepads unless a test explicitly connects one, so physical
+controllers are completely dead while keyboard/mouse (real DOM listeners) keep working —
+exactly the observed symptom. The call site is `GameRuntime.initialise`
+(`GameRuntime.ts:212` → `installInputTestApi(input, canvas)`), which runs on every boot.
+
+**Fix — swap to the virtual provider lazily, and restore on reset
+(`BrowserInputTestApi.ts` + one new module method):**
+1. Delete the unconditional `input.useVirtualGamepadProvider(virtualGamepadProvider);`
+   at line 100.
+2. Track state inside `installInputTestApi`: `let virtualProviderActive = false;`
+   In the `connectVirtualGamepad` API method, before delegating to the provider:
+   ```ts
+   if (!virtualProviderActive) {
+     input.useVirtualGamepadProvider(virtualGamepadProvider);
+     virtualProviderActive = true;
+   }
+   ```
+   (Existing Playwright/unit tests always call `connectVirtualGamepad` before
+   `setVirtualGamepadState`/`assignGamepad`, so lazy activation preserves their
+   behaviour — verify by reading `tests/input/foundation.spec.ts`'s virtual-gamepad
+   test before and after.)
+3. In the `reset()` API method, after `virtualGamepadProvider.reset()`: if
+   `virtualProviderActive`, restore real hardware and clear the flag. Add the matching
+   module method next to `useVirtualGamepadProvider` in `InputControlsModule.ts`:
+   ```ts
+   /** Test-only counterpart of useVirtualGamepadProvider: restore real hardware polling. */
+   public useBrowserGamepadProvider(): void {
+     this.gamepadProvider = new BrowserGamepadProvider();
+     this.assignGamepad(null);
+   }
+   ```
+4. Make the swap observable so it can be tested in a real browser: add
+   `gamepadProviderKind: "browser" | "virtual"` to `InputDiagnostics`
+   (`src/input/InputTypes.ts:138-144`) and report it from
+   `InputControlsModule.getDiagnostics()` (track a private field set by the two
+   `use*Provider` methods; initial value `"browser"`).
+
+**Tests for the primary fix:**
+- Playwright (add to `tests/input/foundation.spec.ts`): on boot, **before** any
+  virtual-gamepad call, `__INPUT_TEST__.getDiagnostics().gamepadProviderKind === "browser"`
+  — this is the regression gate proving dev builds keep polling real hardware. After
+  `connectVirtualGamepad(...)` it must be `"virtual"`; after `reset()` it must be
+  `"browser"` again.
+- The existing virtual-gamepad connect/disconnect Playwright test must stay green
+  (proves lazy activation didn't break the test path).
+
+**SECONDARY root causes (verified in `src/input/InputControlsModule.ts`; real once
+polling works, and they matter for feel/completeness — fix all three):**
 1. `activeDevice` only switches to `"gamepad"` on a *button press edge*
    (lines ~191-196). Moving a stick or squeezing a trigger never activates the pad, and
    any keyboard/mouse touch (including the one-time audio-resume gesture) flips it back
@@ -189,7 +244,8 @@ pattern from `tests/input/foundation.spec.ts` / the module's
   `__GAME_TEST__`/`__PHYSICS_TEST__` car state).
 
 **Manual verification note for the implementer:** real hardware can't be tested here;
-the virtual-provider tests plus the three root-cause fixes are the gate. Do not add
+the `gamepadProviderKind === "browser"` boot assertion plus the virtual-provider tests
+plus the four root-cause fixes (one primary + three secondary) are the gate. Do not add
 speculative per-browser hacks.
 
 ---
