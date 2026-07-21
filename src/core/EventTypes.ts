@@ -33,6 +33,8 @@ export interface RuntimeErrorEvent {
 export interface SessionStateChangedEvent {
   readonly session: GameSessionState;
   readonly playerBoostAmount: number;
+  /** WS9.C: HUD supersonic feedback on the boost ring. */
+  readonly playerSupersonic: boolean;
 }
 
 /**

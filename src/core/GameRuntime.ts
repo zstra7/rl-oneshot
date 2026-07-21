@@ -115,6 +115,9 @@ export interface GameRuntimeFacade {
   /** Boost 0-100 for the human player's car, or 0 before it has spawned. */
   getPlayerBoostAmount(): number;
 
+  /** WS9.C: whether the human player's car is currently supersonic, false before it has spawned. */
+  getPlayerSupersonic(): boolean;
+
   /** Null before the camera controller has been constructed. */
   getCameraDiagnostics(): CameraDiagnostics | null;
   /** WS4.B: live camera rig tuning from the settings panel/persisted store. */
@@ -469,7 +472,8 @@ export class GameRuntime implements GameRuntimeFacade {
     }
     this.dispatcher.emit("runtime:session-state-changed", {
       session: this.modules.gameFlow.getSessionState(),
-      playerBoostAmount: this.getPlayerBoostAmount()
+      playerBoostAmount: this.getPlayerBoostAmount(),
+      playerSupersonic: this.getPlayerSupersonic()
     });
   }
 
@@ -645,6 +649,14 @@ export class GameRuntime implements GameRuntimeFacade {
     return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
       ? modules.physics.getCarState(PLAYER_CAR_ID).boostAmount
       : 0;
+  }
+
+  /** WS9.C: HUD supersonic feedback on the boost ring. */
+  public getPlayerSupersonic(): boolean {
+    const modules = this.requireModules();
+    return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
+      ? modules.physics.getCarState(PLAYER_CAR_ID).supersonic
+      : false;
   }
 
   public selectAiDifficulty(difficulty: AiDifficulty): void {

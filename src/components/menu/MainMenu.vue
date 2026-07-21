@@ -16,12 +16,23 @@ function openSettings(): void {
 
 <template>
   <div class="menu-panel main-menu" data-testid="main-menu">
-    <h1 class="title">SPACE CARBALL</h1>
+    <h1 class="title">
+      <span class="wo-label title-kicker">SPACE</span>
+      <span class="wo-title title-main">CARBALL</span>
+    </h1>
     <nav class="menu-items">
-      <button type="button" class="menu-item" autofocus @click="openMatchSetup">
+      <button
+        type="button"
+        class="menu-item wo-item"
+        data-index="01"
+        autofocus
+        @click="openMatchSetup"
+      >
         PLAY
       </button>
-      <button type="button" class="menu-item" @click="openSettings">SETTINGS</button>
+      <button type="button" class="menu-item wo-item" data-index="02" @click="openSettings">
+        SETTINGS
+      </button>
     </nav>
   </div>
 </template>
@@ -44,11 +55,19 @@ function openSettings(): void {
 .title {
   pointer-events: none;
   margin: 0 0 2rem 0;
-  font-family: monospace;
-  font-size: clamp(2rem, 5vw, 3.5rem);
-  letter-spacing: 0.2em;
-  color: #4ff0ff;
-  text-shadow: 0 0 12px rgba(79, 240, 255, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+}
+
+.title-kicker {
+  color: var(--ui-cyan);
+}
+
+.title-main {
+  font-size: clamp(3rem, 8vw, 5.5rem);
+  color: var(--ui-ink);
+  line-height: 1;
 }
 
 .menu-items {
@@ -59,21 +78,19 @@ function openSettings(): void {
 }
 
 .menu-item {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 1.25rem;
   letter-spacing: 0.15em;
-  padding: 0.6rem 1.6rem;
-  background: rgba(10, 6, 20, 0.55);
-  border: 1px solid rgba(79, 240, 255, 0.4);
-  color: #e8f9ff;
+  padding: 0.6rem 1.6rem 0.6rem 1rem;
+  border: none;
+  color: var(--ui-ink);
   cursor: pointer;
   text-align: left;
-  transition: transform 0.08s ease, border-color 0.08s ease;
+  text-transform: uppercase;
 }
 
 .menu-item:hover,
 .menu-item:focus-visible {
-  border-color: #4ff0ff;
   transform: translateX(6px);
   outline: none;
 }

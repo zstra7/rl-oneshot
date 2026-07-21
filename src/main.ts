@@ -3,6 +3,7 @@ import { createPinia } from "pinia";
 
 import App from "@/App.vue";
 import { disposeGameRuntime } from "@/core/GameRuntimeFactory";
+import "@/styles/retro-ui.css";
 
 const app = createApp(App);
 const pinia = createPinia();

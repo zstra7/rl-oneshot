@@ -247,3 +247,23 @@ test("WS7.C: the menu-presentation ghost ball/cars hide during a live match and 
   });
   expect(await page.evaluate(() => window.__GAME_TEST__?.runtime.isMenuPresentationVisible())).toBe(true);
 });
+
+test("WS9.D: the boost ring's --boost-pct custom property tracks the store's boost amount", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
+
+  const reading = await page.evaluate(() => {
+    const boostMeter = document.querySelector('[data-testid="boost-meter"]') as HTMLElement | null;
+    const boostValue = document.querySelector('[data-testid="boost-meter"] .boost-value');
+    return {
+      boostPct: boostMeter?.style.getPropertyValue("--boost-pct"),
+      boostValue: boostValue?.textContent
+    };
+  });
+
+  expect(reading.boostPct).not.toBe("");
+  expect(reading.boostPct).toBe(reading.boostValue?.trim());
+});

@@ -23,7 +23,9 @@ const label = computed<string>(() => {
 
 <template>
   <div class="countdown" data-testid="countdown-overlay">
-    <span class="value" :data-value="label">{{ label }}</span>
+    <span :key="label" class="value wo-title" :class="{ go: label === 'GO' }" :data-value="label">{{
+      label
+    }}</span>
   </div>
 </template>
 
@@ -38,10 +40,24 @@ const label = computed<string>(() => {
 }
 
 .value {
-  font-family: monospace;
-  font-size: clamp(4rem, 12vw, 9rem);
-  color: #ffcf4d;
-  letter-spacing: 0.1em;
-  text-shadow: 0 0 24px rgba(255, 207, 77, 0.7);
+  font-size: clamp(4rem, 10vw, 7rem);
+  color: var(--ui-amber);
+  text-shadow: 0 0 24px rgba(255, 198, 95, 0.7);
+  animation: wo-pop 150ms ease-out;
+}
+
+.value.go {
+  color: var(--ui-amber);
+}
+
+@keyframes wo-pop {
+  0% {
+    transform: scale(1.35) skewX(var(--skew));
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1) skewX(var(--skew));
+    opacity: 1;
+  }
 }
 </style>

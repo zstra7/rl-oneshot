@@ -318,3 +318,21 @@
   `validate` -> `type-check` -> `test:unit` -> `vite build`) ->
   `npm run test:release`, all passing with no manual fixes, confirming the
   chain works from the current checkout state.
+
+## Post-launch polish pass — WS9 (UI restyle)
+
+- **PS1 Wipeout/Designers-Republic UI language**, applied as a new
+  `src/styles/retro-ui.css` (design tokens + `wo-` prefixed utility
+  classes) imported once from `main.ts`, plus per-component class/style
+  edits only — no DOM restructuring, no `data-testid` or visible-text
+  changes, so the entire existing Playwright UI/flow suite kept working
+  unmodified as the regression gate (per the plan's WS9.D instruction).
+- **Fonts self-hosted, not CDN-linked** — see
+  `docs/asset-attribution.md`'s new Fonts section for the acquisition/
+  licensing details; this is required by `tests/release/release-gate.spec.ts`'s
+  zero-external-requests assertion, not just a style preference.
+- **One intentional non-CSS change**: `GameRuntime`/`EventTypes`/
+  `matchFlowStore` gained a `playerSupersonic` field (mirroring the
+  existing `playerBoostAmount` plumbing exactly) so `GameplayHud`'s boost
+  ring can show a white glow + "SUPERSONIC" label — the plan calls this
+  out explicitly as the one exception to "CSS/class edits only".

@@ -117,14 +117,14 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
 
 <template>
   <div class="menu-panel settings-panel" data-testid="settings-panel">
-    <h2 class="heading">SETTINGS</h2>
+    <h2 class="heading wo-title">SETTINGS</h2>
 
     <div class="category-tabs" role="tablist" aria-label="Settings categories">
       <button
         v-for="category in categories"
         :key="category"
         type="button"
-        class="tab"
+        class="tab wo-item"
         :class="{ active: activeCategory === category }"
         :data-testid="`settings-tab-${category.toLowerCase()}`"
         role="tab"
@@ -461,7 +461,7 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
       </div>
     </div>
 
-    <button type="button" class="menu-item" @click="back()">BACK</button>
+    <button type="button" class="menu-item wo-item" data-index="03" @click="back()">BACK</button>
   </div>
 </template>
 
@@ -479,10 +479,9 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
 
 .heading {
   pointer-events: none;
-  font-family: monospace;
-  letter-spacing: 0.15em;
-  color: #4ff0ff;
+  color: var(--ui-ink);
   margin: 0 0 1rem 0;
+  font-size: 1.6rem;
 }
 
 .category-tabs {
@@ -494,19 +493,18 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
 }
 
 .tab {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.85rem;
   letter-spacing: 0.1em;
   padding: 0.4rem 0.8rem;
-  background: rgba(10, 6, 20, 0.55);
-  border: 1px solid rgba(159, 180, 200, 0.3);
-  color: #9fb4c8;
+  border: none;
+  color: var(--ui-dim);
   cursor: pointer;
 }
 
 .tab.active {
-  border-color: #4ff0ff;
-  color: #4ff0ff;
+  border-left-color: var(--ui-amber);
+  color: var(--ui-ink);
   background: rgba(79, 240, 255, 0.12);
 }
 
@@ -533,27 +531,28 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
 
 .slider-row input[type="range"] {
   flex: 1;
-  accent-color: #4ff0ff;
+  accent-color: var(--ui-cyan);
 }
 
 .row-label {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.8rem;
   letter-spacing: 0.08em;
-  color: #cfeeff;
+  color: var(--ui-ink);
   white-space: nowrap;
 }
 
 .binding {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.8rem;
-  color: #4ff0ff;
+  color: var(--ui-cyan);
 }
 
 .slider-value {
-  font-family: monospace;
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
   font-size: 0.75rem;
-  color: #9fb4c8;
+  color: var(--ui-dim);
   width: 2.5rem;
   text-align: right;
 }
@@ -564,45 +563,44 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
 }
 
 .chip {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.75rem;
   padding: 0.3rem 0.6rem;
   background: rgba(10, 6, 20, 0.55);
   border: 1px solid rgba(79, 240, 255, 0.3);
-  color: #cfeeff;
+  color: var(--ui-ink);
   cursor: pointer;
 }
 
 .chip.active {
-  border-color: #4ff0ff;
-  color: #4ff0ff;
-  background: rgba(79, 240, 255, 0.12);
+  border-color: var(--ui-cyan);
+  color: #050308;
+  background: var(--ui-cyan);
 }
 
 .hint {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.7rem;
-  color: #6d7a8c;
+  color: var(--ui-dim);
   margin: 0.25rem 0 0 0;
 }
 
 .menu-item {
   pointer-events: auto;
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 1.1rem;
   letter-spacing: 0.15em;
-  padding: 0.55rem 1.4rem;
-  background: rgba(10, 6, 20, 0.55);
-  border: 1px solid rgba(79, 240, 255, 0.4);
-  color: #e8f9ff;
+  padding: 0.55rem 1.4rem 0.55rem 1rem;
+  border: none;
+  color: var(--ui-ink);
   cursor: pointer;
   text-align: left;
   width: fit-content;
+  text-transform: uppercase;
 }
 
 .menu-item:hover,
 .menu-item:focus-visible {
-  border-color: #4ff0ff;
   outline: none;
 }
 </style>

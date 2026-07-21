@@ -25,13 +25,17 @@ function returnToMenu(): void {
 
 <template>
   <div class="pause-overlay" data-testid="pause-menu">
-    <div class="pause-panel">
-      <h2 class="heading">PAUSED</h2>
-      <button type="button" class="menu-item" autofocus @click="resumeMatch()">
+    <div class="pause-panel wo-panel">
+      <h2 class="heading wo-title">PAUSED</h2>
+      <button type="button" class="menu-item wo-item" data-index="01" autofocus @click="resumeMatch()">
         RESUME
       </button>
-      <button type="button" class="menu-item" @click="restartMatch()">RESTART MATCH</button>
-      <button type="button" class="menu-item" @click="returnToMenu()">RETURN TO MENU</button>
+      <button type="button" class="menu-item wo-item" data-index="02" @click="restartMatch()">
+        RESTART MATCH
+      </button>
+      <button type="button" class="menu-item wo-item" data-index="03" @click="returnToMenu()">
+        RETURN TO MENU
+      </button>
     </div>
   </div>
 </template>
@@ -51,32 +55,29 @@ function returnToMenu(): void {
   flex-direction: column;
   gap: 0.75rem;
   padding: 2rem 2.5rem;
-  background: rgba(10, 6, 20, 0.85);
-  border: 1px solid rgba(79, 240, 255, 0.4);
 }
 
 .heading {
-  font-family: monospace;
-  letter-spacing: 0.2em;
-  color: #4ff0ff;
+  color: var(--ui-ink);
   margin: 0 0 0.5rem 0;
   text-align: center;
+  font-size: 1.8rem;
 }
 
 .menu-item {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 1.1rem;
   letter-spacing: 0.15em;
-  padding: 0.55rem 1.4rem;
-  background: rgba(10, 6, 20, 0.55);
-  border: 1px solid rgba(79, 240, 255, 0.4);
-  color: #e8f9ff;
+  padding: 0.55rem 1.4rem 0.55rem 1rem;
+  border: none;
+  color: var(--ui-ink);
   cursor: pointer;
+  text-transform: uppercase;
+  text-align: left;
 }
 
 .menu-item:hover,
 .menu-item:focus-visible {
-  border-color: #4ff0ff;
   outline: none;
 }
 </style>

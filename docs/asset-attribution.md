@@ -62,3 +62,23 @@ Notes: see `docs/texture-intake-report.md` for the full per-file catalogue
 
 No other 3D models or images are used; everything else is generated in
 code (see `plan/asset_production_pipeline_module_spec.md` sections 28+).
+
+## Fonts (WS9.A, plan/POLISH_OVERHAUL_PLAN.md)
+
+Two Google Fonts families, both SIL Open Font License 1.1, downloaded
+during implementation and self-hosted at `public/fonts/` (never linked
+at runtime — `tests/release/release-gate.spec.ts` requires zero
+non-localhost requests from a live match).
+
+- **Russo One** (weight 400) — `public/fonts/russo-one-400.woff2`.
+  Display face: title lockup, countdown, GOAL/OVERTIME banners, results
+  screen. Source: https://github.com/google/fonts/tree/main/ofl/russoone
+  Licence: `public/fonts/OFL-RussoOne.txt`.
+- **Chakra Petch** (weights 400, 600, 700, 700-italic) —
+  `public/fonts/chakra-petch-{400,600,700,700i}.woff2`. UI face: menu
+  items, labels, HUD numerals, settings. Source:
+  https://github.com/google/fonts/tree/main/ofl/chakrapetch
+  Licence: `public/fonts/OFL-ChakraPetch.txt`.
+
+`@font-face` rules live in `src/styles/retro-ui.css`, imported once from
+`src/main.ts`.

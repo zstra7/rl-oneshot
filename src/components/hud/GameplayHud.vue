@@ -6,6 +6,7 @@ import { useMatchFlowStore } from "@/stores/matchFlowStore";
 const matchFlowStore = useMatchFlowStore();
 
 const boost = computed(() => Math.round(matchFlowStore.playerBoostAmount));
+const supersonic = computed(() => matchFlowStore.playerSupersonic);
 
 const session = computed(() => matchFlowStore.session);
 
@@ -31,18 +32,24 @@ function formatClock(totalSeconds: number): string {
 <template>
   <div class="hud" data-testid="gameplay-hud">
     <div class="scoreboard">
-      <span class="score player" data-testid="player-score">{{ session.playerScore }}</span>
-      <span class="timer" data-testid="match-timer">{{ timerLabel }}</span>
-      <span class="score opponent" data-testid="opponent-score">{{ session.opponentScore }}</span>
+      <span class="score player wo-numeral" data-testid="player-score">{{ session.playerScore }}</span>
+      <span class="timer wo-numeral" data-testid="match-timer">{{ timerLabel }}</span>
+      <span class="score opponent wo-numeral" data-testid="opponent-score">{{ session.opponentScore }}</span>
     </div>
 
     <div class="labels">
-      <span class="label player">YOU</span>
-      <span class="label opponent">CPU</span>
+      <span class="label wo-label player">YOU</span>
+      <span class="label wo-label opponent">CPU</span>
     </div>
 
-    <div class="boost-meter" :class="{ low: boost < 20 }" data-testid="boost-meter">
-      <span class="boost-value">{{ boost }}</span>
+    <div
+      class="boost-meter"
+      :class="{ low: boost < 20, supersonic }"
+      :style="{ '--boost-pct': boost }"
+      data-testid="boost-meter"
+    >
+      <span class="boost-value wo-numeral">{{ boost }}</span>
+      <span v-if="supersonic" class="supersonic-label wo-label">SUPERSONIC</span>
     </div>
   </div>
 </template>
@@ -52,8 +59,8 @@ function formatClock(totalSeconds: number): string {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  font-family: monospace;
-  color: #e8f9ff;
+  font-family: var(--font-ui);
+  color: var(--ui-ink);
 }
 
 .scoreboard {
@@ -69,16 +76,16 @@ function formatClock(totalSeconds: number): string {
 }
 
 .score.player {
-  color: #4ff0ff;
+  color: var(--ui-cyan);
 }
 
 .score.opponent {
-  color: #ff5fd8;
+  color: var(--ui-magenta);
 }
 
 .timer {
   font-size: 1.1rem;
-  color: #e8f9ff;
+  color: var(--ui-ink);
 }
 
 .labels {
@@ -89,8 +96,14 @@ function formatClock(totalSeconds: number): string {
   display: flex;
   gap: 4.2rem;
   font-size: 0.7rem;
-  letter-spacing: 0.2em;
-  color: #8fa4b8;
+}
+
+.label.player {
+  color: var(--ui-cyan);
+}
+
+.label.opponent {
+  color: var(--ui-magenta);
 }
 
 .boost-meter {
@@ -100,26 +113,42 @@ function formatClock(totalSeconds: number): string {
   width: 4.5rem;
   height: 4.5rem;
   border-radius: 50%;
-  border: 3px solid rgba(79, 240, 255, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
+  background:
+    radial-gradient(circle, rgba(6, 4, 14, 0.85) 62%, transparent 63%),
+    conic-gradient(var(--ui-amber) calc(var(--boost-pct) * 1%), rgba(255, 255, 255, 0.08) 0);
+}
+
+.boost-value {
   font-size: 1.6rem;
-  background: rgba(6, 4, 14, 0.5);
+  color: var(--ui-ink);
 }
 
 .boost-meter.low {
-  border-color: #ff5f5f;
-  animation: pulse 0.6s ease-in-out infinite;
+  animation: pulse 0.6s ease-in-out infinite alternate;
+}
+
+.boost-meter.supersonic {
+  box-shadow: 0 0 14px 3px rgba(255, 255, 255, 0.75);
+}
+
+.supersonic-label {
+  position: absolute;
+  bottom: -1.1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  color: var(--ui-ink);
 }
 
 @keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
+  0% {
+    filter: brightness(1);
   }
-  50% {
-    opacity: 0.55;
+  100% {
+    filter: brightness(0.65);
   }
 }
 </style>

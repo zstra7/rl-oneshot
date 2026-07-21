@@ -33,6 +33,7 @@ const unsubscribeAppState = runtime.onEvent("runtime:app-state-changed", (event)
 const unsubscribeSession = runtime.onEvent("runtime:session-state-changed", (event) => {
   matchFlowStore.setSession(event.session);
   matchFlowStore.setPlayerBoostAmount(event.playerBoostAmount);
+  matchFlowStore.setPlayerSupersonic(event.playerSupersonic);
 });
 
 onBeforeUnmount(() => {
@@ -58,6 +59,9 @@ const showGameplayHud = computed(
 
 <template>
   <div id="app-root" :data-app-state="applicationStore.appState">
+    <div class="wo-scanlines" aria-hidden="true"></div>
+    <div class="wo-vignette" aria-hidden="true"></div>
+
     <GameCanvas />
 
     <MainMenu v-if="matchState === 'MAIN_MENU'" />

@@ -43,41 +43,49 @@ function back(): void {
 
 <template>
   <div class="menu-panel match-setup" data-testid="match-setup">
-    <h2 class="heading">MATCH SETUP</h2>
+    <h2 class="heading wo-title">MATCH SETUP</h2>
 
+    <div class="wo-label row-label">DURATION</div>
     <div class="duration-row" role="group" aria-label="Match duration">
       <button
         v-for="minutes in durations"
         :key="minutes"
         type="button"
-        class="duration-item"
+        class="duration-item wo-chip"
         :class="{ active: selected === minutes }"
         :data-testid="`duration-${minutes}`"
         @click="selectDuration(minutes)"
       >
-        {{ minutes }} MIN
+        <span>{{ minutes }} MIN</span>
       </button>
     </div>
 
+    <div class="wo-label row-label">OPPONENT DIFFICULTY</div>
     <div class="difficulty-row" role="group" aria-label="Opponent difficulty">
       <button
         v-for="difficulty in difficulties"
         :key="difficulty"
         type="button"
-        class="duration-item"
+        class="duration-item wo-chip"
         :class="{ active: selectedDifficulty === difficulty }"
         :data-testid="`difficulty-${difficulty}`"
         @click="selectDifficulty(difficulty)"
       >
-        {{ difficulty.toUpperCase() }}
+        <span>{{ difficulty.toUpperCase() }}</span>
       </button>
     </div>
 
     <div class="menu-items">
-      <button type="button" class="menu-item" data-testid="start-match" @click="startMatch()">
+      <button
+        type="button"
+        class="menu-item wo-item start-item"
+        data-index="01"
+        data-testid="start-match"
+        @click="startMatch()"
+      >
         START MATCH
       </button>
-      <button type="button" class="menu-item" @click="back()">BACK</button>
+      <button type="button" class="menu-item wo-item" data-index="02" @click="back()">BACK</button>
     </div>
   </div>
 </template>
@@ -96,22 +104,26 @@ function back(): void {
 
 .heading {
   pointer-events: none;
-  font-family: monospace;
-  letter-spacing: 0.15em;
-  color: #4ff0ff;
+  color: var(--ui-ink);
   margin: 0 0 1.5rem 0;
+  font-size: 2rem;
+}
+
+.row-label {
+  pointer-events: none;
+  margin-bottom: 0.4rem;
 }
 
 .duration-row {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.6rem;
   margin-bottom: 1rem;
   pointer-events: auto;
 }
 
 .duration-item {
-  font-family: monospace;
-  padding: 0.5rem 1rem;
+  font-family: var(--font-ui);
+  padding: 0.5rem 1.1rem;
   background: rgba(10, 6, 20, 0.55);
   border: 1px solid rgba(79, 240, 255, 0.3);
   color: #cfeeff;
@@ -119,14 +131,12 @@ function back(): void {
 }
 
 .duration-item.active {
-  border-color: #4ff0ff;
-  color: #4ff0ff;
-  background: rgba(79, 240, 255, 0.12);
+  border-color: transparent;
 }
 
 .difficulty-row {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.6rem;
   margin-bottom: 1.5rem;
   pointer-events: auto;
 }
@@ -139,20 +149,24 @@ function back(): void {
 }
 
 .menu-item {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 1.1rem;
   letter-spacing: 0.15em;
-  padding: 0.55rem 1.4rem;
-  background: rgba(10, 6, 20, 0.55);
-  border: 1px solid rgba(79, 240, 255, 0.4);
-  color: #e8f9ff;
+  padding: 0.55rem 1.4rem 0.55rem 1rem;
+  border: none;
+  color: var(--ui-ink);
   cursor: pointer;
   text-align: left;
+  text-transform: uppercase;
+}
+
+.start-item {
+  border-left-color: var(--ui-amber);
+  font-size: 1.3rem;
 }
 
 .menu-item:hover,
 .menu-item:focus-visible {
-  border-color: #4ff0ff;
   outline: none;
 }
 </style>

@@ -7,7 +7,9 @@
 
 <template>
   <div class="goal-banner" data-testid="goal-banner">
-    <span class="text">GOAL!</span>
+    <div class="band">
+      <span class="text wo-title">GOAL!</span>
+    </div>
   </div>
 </template>
 
@@ -19,13 +21,34 @@
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  overflow: hidden;
+}
+
+.band {
+  width: 140%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.2rem 0;
+  transform: skewY(-2deg);
+  background: linear-gradient(90deg, rgba(79, 240, 255, 0.85), rgba(255, 95, 216, 0.85));
+  animation: wo-slide-in 200ms ease-out;
 }
 
 .text {
-  font-family: monospace;
   font-size: clamp(3rem, 10vw, 7rem);
-  letter-spacing: 0.15em;
-  color: #4ff0ff;
-  text-shadow: 0 0 30px rgba(79, 240, 255, 0.8);
+  color: #050308;
+  text-shadow: none;
+}
+
+@keyframes wo-slide-in {
+  0% {
+    transform: skewY(-2deg) translateX(-100%);
+    opacity: 0;
+  }
+  100% {
+    transform: skewY(-2deg) translateX(0);
+    opacity: 1;
+  }
 }
 </style>

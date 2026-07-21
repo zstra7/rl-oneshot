@@ -16,6 +16,8 @@ const BOOT_SESSION: GameSessionState = {
 export interface MatchFlowStoreState {
   session: GameSessionState;
   playerBoostAmount: number;
+  /** WS9.C: HUD supersonic feedback on the boost ring. */
+  playerSupersonic: boolean;
 }
 
 /**
@@ -29,7 +31,8 @@ export interface MatchFlowStoreState {
 export const useMatchFlowStore = defineStore("matchFlow", {
   state: (): MatchFlowStoreState => ({
     session: BOOT_SESSION,
-    playerBoostAmount: 0
+    playerBoostAmount: 0,
+    playerSupersonic: false
   }),
 
   getters: {
@@ -42,6 +45,9 @@ export const useMatchFlowStore = defineStore("matchFlow", {
     },
     setPlayerBoostAmount(amount: number): void {
       this.playerBoostAmount = amount;
+    },
+    setPlayerSupersonic(supersonic: boolean): void {
+      this.playerSupersonic = supersonic;
     }
   }
 });

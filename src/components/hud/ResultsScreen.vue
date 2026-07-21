@@ -30,19 +30,19 @@ function returnToMenu(): void {
 
 <template>
   <div class="results-overlay" data-testid="results-screen">
-    <div class="results-panel">
-      <h2 class="result" :class="resultLabel.toLowerCase()">{{ resultLabel }}</h2>
-      <div class="score" data-testid="final-score">
+    <div class="results-panel wo-panel">
+      <h2 class="result wo-title" :class="resultLabel.toLowerCase()">{{ resultLabel }}</h2>
+      <div class="score wo-numeral" data-testid="final-score">
         {{ session.playerScore }} - {{ session.opponentScore }}
       </div>
-      <div v-if="wasOvertime" class="overtime-indicator">OVERTIME</div>
-      <div class="duration">{{ session.selectedDurationMinutes }} MIN MATCH</div>
+      <div v-if="wasOvertime" class="overtime-indicator wo-label">OVERTIME</div>
+      <div class="duration wo-label">{{ session.selectedDurationMinutes }} MIN MATCH</div>
 
       <div class="actions">
-        <button type="button" class="menu-item" autofocus @click="replayMatch()">
+        <button type="button" class="menu-item wo-item" data-index="01" autofocus @click="replayMatch()">
           REPLAY
         </button>
-        <button type="button" class="menu-item" @click="returnToMenu()">
+        <button type="button" class="menu-item wo-item" data-index="02" @click="returnToMenu()">
           RETURN TO MENU
         </button>
       </div>
@@ -66,34 +66,32 @@ function returnToMenu(): void {
   align-items: center;
   gap: 0.5rem;
   padding: 2.5rem 3rem;
-  background: rgba(10, 6, 20, 0.85);
-  border: 1px solid rgba(79, 240, 255, 0.4);
-  font-family: monospace;
-  color: #e8f9ff;
+  color: var(--ui-ink);
 }
 
 .result {
-  font-size: 2.5rem;
-  letter-spacing: 0.2em;
+  font-size: 3rem;
   margin: 0;
 }
 
 .result.victory {
-  color: #4ff0ff;
+  color: var(--ui-cyan);
 }
 
 .result.defeat {
-  color: #ff5fd8;
+  color: var(--ui-magenta);
+}
+
+.result.draw {
+  color: var(--ui-amber);
 }
 
 .score {
-  font-size: 1.75rem;
+  font-size: 2.6rem;
 }
 
 .overtime-indicator,
 .duration {
-  color: #8fa4b8;
-  letter-spacing: 0.15em;
   font-size: 0.85rem;
 }
 
@@ -106,19 +104,19 @@ function returnToMenu(): void {
 }
 
 .menu-item {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 1.05rem;
   letter-spacing: 0.15em;
-  padding: 0.5rem 1.2rem;
-  background: rgba(10, 6, 20, 0.55);
-  border: 1px solid rgba(79, 240, 255, 0.4);
-  color: #e8f9ff;
+  padding: 0.5rem 1.2rem 0.5rem 1rem;
+  border: none;
+  color: var(--ui-ink);
   cursor: pointer;
+  text-transform: uppercase;
+  text-align: left;
 }
 
 .menu-item:hover,
 .menu-item:focus-visible {
-  border-color: #4ff0ff;
   outline: none;
 }
 </style>

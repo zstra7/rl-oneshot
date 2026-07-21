@@ -1,0 +1,151 @@
+/**
+ * WS9 (plan/POLISH_OVERHAUL_PLAN.md): PS1-era Wipeout/Designers-Republic
+ * flavoured UI language — angular neon signage on near-black, 45° corner
+ * cuts, diagonal slashes, chevrons, oversized italic numerals, tight
+ * uppercase tracking, cyan/magenta team coding with amber for energy.
+ * Fonts are self-hosted (public/fonts/, committed) rather than linked at
+ * runtime — see docs/asset-attribution.md.
+ */
+
+@font-face {
+  font-family: "Russo One";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/russo-one-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/chakra-petch-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/chakra-petch-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/chakra-petch-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/chakra-petch-700i.woff2") format("woff2");
+}
+
+:root {
+  --ui-cyan: #4ff0ff;
+  --ui-magenta: #ff5fd8;
+  --ui-amber: #ffc65f;
+  --ui-ink: #e8f9ff;
+  --ui-dim: #8fa4b8;
+  --ui-bg: rgba(8, 6, 18, 0.82);
+  --font-display: "Russo One", Impact, sans-serif;
+  --font-ui: "Chakra Petch", "Segoe UI", Arial, sans-serif;
+  --skew: -8deg;
+  --cut: 14px;
+}
+
+.wo-panel {
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--cut)) 0,
+    100% var(--cut),
+    100% 100%,
+    var(--cut) 100%,
+    0 calc(100% - var(--cut))
+  );
+  background: var(--ui-bg);
+  box-shadow: inset 0 0 0 1px rgba(79, 240, 255, 0.35);
+}
+
+.wo-title {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  transform: skewX(var(--skew));
+  letter-spacing: 0.08em;
+  text-shadow:
+    2px 0 rgba(255, 95, 216, 0.55),
+    -2px 0 rgba(79, 240, 255, 0.55);
+}
+
+.wo-label {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  font-size: 0.72rem;
+  color: var(--ui-dim);
+}
+
+.wo-numeral {
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.wo-item {
+  position: relative;
+  border-left: 3px solid var(--ui-cyan);
+  background: linear-gradient(90deg, rgba(79, 240, 255, 0.1), transparent 60%);
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.wo-item::before {
+  content: attr(data-index);
+  color: var(--ui-amber);
+  font: 600 0.7rem var(--font-ui);
+  margin-right: 0.8em;
+}
+
+.wo-item:hover,
+.wo-item:focus-visible {
+  border-left-color: var(--ui-ink);
+}
+
+.wo-chip {
+  transform: skewX(var(--skew));
+}
+
+.wo-chip > * {
+  display: inline-block;
+  transform: skewX(calc(-1 * var(--skew)));
+}
+
+.wo-chip.active {
+  background: var(--ui-cyan);
+  color: #050308;
+}
+
+.wo-scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.14) 0 1px, transparent 1px 3px);
+  mix-blend-mode: multiply;
+}
+
+.wo-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(2, 0, 8, 0.55) 100%);
+}
