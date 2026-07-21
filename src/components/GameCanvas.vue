@@ -30,6 +30,24 @@ onMounted(async () => {
     disableDithering: settings.accessibility.disableDithering
   });
   runtime.selectMatchDuration(settings.gameplay.defaultDurationMinutes);
+  runtime.setAudioSettings({
+    enabled: settings.audio.enabled,
+    masterVolume: settings.audio.master,
+    effectsVolume: settings.audio.effects,
+    musicVolume: settings.audio.music,
+    musicEnabled: settings.audio.musicEnabled
+  });
+
+  // Retro audio module spec section 5: the AudioContext stays suspended
+  // until a real user gesture resumes it (browser autoplay policy) — a
+  // one-time listener on the very first pointer/keyboard interaction
+  // covers every entry point (clicking PLAY, pressing a key) without
+  // every button having to remember to call this itself.
+  const resumeAudioOnce = () => {
+    void runtime.resumeAudioFromGesture();
+  };
+  window.addEventListener("pointerdown", resumeAudioOnce, { once: true });
+  window.addEventListener("keydown", resumeAudioOnce, { once: true });
 
   runtime.start();
 

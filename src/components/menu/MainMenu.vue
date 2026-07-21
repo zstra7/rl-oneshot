@@ -2,16 +2,26 @@
 import { useGameRuntime } from "@/core/useGameRuntime";
 
 const runtime = useGameRuntime();
+
+function openMatchSetup(): void {
+  runtime.playUiSound("confirm");
+  runtime.openMatchSetup();
+}
+
+function openSettings(): void {
+  runtime.playUiSound("confirm");
+  runtime.openSettings();
+}
 </script>
 
 <template>
   <div class="menu-panel main-menu" data-testid="main-menu">
     <h1 class="title">SPACE CARBALL</h1>
     <nav class="menu-items">
-      <button type="button" class="menu-item" autofocus @click="runtime.openMatchSetup()">
+      <button type="button" class="menu-item" autofocus @click="openMatchSetup">
         PLAY
       </button>
-      <button type="button" class="menu-item" @click="runtime.openSettings()">SETTINGS</button>
+      <button type="button" class="menu-item" @click="openSettings">SETTINGS</button>
     </nav>
   </div>
 </template>

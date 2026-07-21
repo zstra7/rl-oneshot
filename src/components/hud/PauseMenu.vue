@@ -3,14 +3,21 @@ import { useGameRuntime } from "@/core/useGameRuntime";
 
 const runtime = useGameRuntime();
 
+function resumeMatch(): void {
+  runtime.playUiSound("confirm");
+  runtime.resumeMatch();
+}
+
 function restartMatch(): void {
   if (window.confirm("Restart the current match?")) {
+    runtime.playUiSound("confirm");
     runtime.restartMatch();
   }
 }
 
 function returnToMenu(): void {
   if (window.confirm("Return to the main menu? Match progress will be lost.")) {
+    runtime.playUiSound("cancel");
     runtime.returnToMenu();
   }
 }
@@ -20,7 +27,7 @@ function returnToMenu(): void {
   <div class="pause-overlay" data-testid="pause-menu">
     <div class="pause-panel">
       <h2 class="heading">PAUSED</h2>
-      <button type="button" class="menu-item" autofocus @click="runtime.resumeMatch()">
+      <button type="button" class="menu-item" autofocus @click="resumeMatch()">
         RESUME
       </button>
       <button type="button" class="menu-item" @click="restartMatch()">RESTART MATCH</button>

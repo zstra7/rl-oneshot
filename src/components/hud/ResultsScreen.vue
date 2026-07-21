@@ -16,6 +16,16 @@ const resultLabel = computed(() => {
 });
 
 const wasOvertime = computed(() => session.value.overtimeElapsed > 0);
+
+function replayMatch(): void {
+  runtime.playUiSound("confirm");
+  runtime.replayMatch();
+}
+
+function returnToMenu(): void {
+  runtime.playUiSound("cancel");
+  runtime.returnToMenu();
+}
 </script>
 
 <template>
@@ -29,10 +39,10 @@ const wasOvertime = computed(() => session.value.overtimeElapsed > 0);
       <div class="duration">{{ session.selectedDurationMinutes }} MIN MATCH</div>
 
       <div class="actions">
-        <button type="button" class="menu-item" autofocus @click="runtime.replayMatch()">
+        <button type="button" class="menu-item" autofocus @click="replayMatch()">
           REPLAY
         </button>
-        <button type="button" class="menu-item" @click="runtime.returnToMenu()">
+        <button type="button" class="menu-item" @click="returnToMenu()">
           RETURN TO MENU
         </button>
       </div>

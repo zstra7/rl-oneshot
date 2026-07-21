@@ -34,6 +34,10 @@ import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRend
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import { PSX_RENDER_PRESETS, type VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
 import { VfxModule } from "@/vfx/VfxModule";
+import { RetroAudioModule } from "@/audio/RetroAudioModule";
+import { installAudioTestApi } from "@/audio/testing/BrowserAudioTestApi";
+import { AudioEventAdapter } from "@/integration/AudioEventAdapter";
+import { DEFAULT_AUDIO_SETTINGS, type AudioDiagnostics, type AudioSettings } from "@/audio/AudioTypes";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
@@ -137,6 +141,14 @@ export interface GameRuntimeFacade {
 
   /** Settings spec section 25 accessibility category: applies on top of whichever preset is selected. */
   setAccessibilityOverrides(options: { reducedJitter: boolean; disableDithering: boolean }): void;
+
+  /** Retro audio module spec section 5: call on the first Play/Confirm user gesture. Safe to call repeatedly. */
+  resumeAudioFromGesture(): Promise<void>;
+  setAudioSettings(settings: AudioSettings): void;
+  getAudioSettings(): AudioSettings;
+  getAudioDiagnostics(): AudioDiagnostics;
+  /** UI sound helper (retro audio module spec section 18): components call this instead of importing RetroAudioModule directly. */
+  playUiSound(kind: "navigate" | "confirm" | "cancel"): void;
 }
 
 export class GameRuntime implements GameRuntimeFacade {
@@ -148,6 +160,9 @@ export class GameRuntime implements GameRuntimeFacade {
   private gameFlowTestApi: BrowserGameFlowTestApi | null = null;
   private cameraController: ChaseCameraController | null = null;
   private vfxModule: VfxModule | null = null;
+  private audioModule: RetroAudioModule | null = null;
+  private audioEventAdapter: AudioEventAdapter | null = null;
+  private pendingAudioSettings: AudioSettings | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -239,6 +254,15 @@ export class GameRuntime implements GameRuntimeFacade {
     this.vfxModule = new VfxModule(this.modules.physics, gameFlow);
     this.frameCoordinator.register(this.vfxModule);
     this.sceneRenderer.addToScene(this.vfxModule.getRoot());
+
+    this.audioModule = new RetroAudioModule();
+    this.moduleStatus["audio"] = "initialising";
+    await this.audioModule.initialise();
+    this.moduleStatus["audio"] = "ready";
+    this.audioModule.setSettings(this.pendingAudioSettings ?? DEFAULT_AUDIO_SETTINGS);
+    this.audioEventAdapter = new AudioEventAdapter(this.modules.physics, gameFlow, this.audioModule);
+    this.frameCoordinator.register(this.audioEventAdapter);
+    installAudioTestApi(this.audioModule);
 
     const camera = this.sceneRenderer.getCamera();
     if (camera) {
@@ -603,6 +627,58 @@ export class GameRuntime implements GameRuntimeFacade {
     this.sceneRenderer?.setAccessibilityOverrides(options);
   }
 
+  public async resumeAudioFromGesture(): Promise<void> {
+    await this.audioModule?.resumeFromUserGesture();
+  }
+
+  public setAudioSettings(settings: AudioSettings): void {
+    if (this.audioModule) {
+      this.audioModule.setSettings(settings);
+    } else {
+      // initialise() hasn't finished constructing the real audio module
+      // yet (e.g. a setting is applied before the async boot sequence
+      // reaches it) — remember it and apply it once initialise() does.
+      this.pendingAudioSettings = settings;
+    }
+  }
+
+  public getAudioSettings(): AudioSettings {
+    return this.audioModule?.getSettings() ?? this.pendingAudioSettings ?? DEFAULT_AUDIO_SETTINGS;
+  }
+
+  public getAudioDiagnostics(): AudioDiagnostics {
+    return (
+      this.audioModule?.getDiagnostics() ?? {
+        supported: false,
+        contextState: "unavailable",
+        awaitingUserGesture: false,
+        activeContinuousVoices: [],
+        scheduledOneShots: 0,
+        cooldownCount: 0,
+        musicState: "silent",
+        settings: DEFAULT_AUDIO_SETTINGS,
+        lastError: null
+      }
+    );
+  }
+
+  public playUiSound(kind: "navigate" | "confirm" | "cancel"): void {
+    if (!this.audioModule) {
+      return;
+    }
+    switch (kind) {
+      case "navigate":
+        this.audioModule.consumeEvent({ type: "audio:ui-navigate" });
+        return;
+      case "confirm":
+        this.audioModule.consumeEvent({ type: "audio:ui-confirm" });
+        return;
+      case "cancel":
+        this.audioModule.consumeEvent({ type: "audio:ui-cancel" });
+        return;
+    }
+  }
+
   public getVisualDiagnostics(): VisualDiagnostics {
     return (
       this.sceneRenderer?.getVisualDiagnostics() ?? {
@@ -650,6 +726,11 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.vfxModule?.dispose();
     this.vfxModule = null;
+
+    this.audioEventAdapter?.dispose();
+    this.audioEventAdapter = null;
+    this.audioModule?.dispose();
+    this.audioModule = null;
 
     this.gameFlowTestApi = null;
 

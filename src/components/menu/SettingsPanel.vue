@@ -26,6 +26,16 @@ const presets: VisualPreset[] = ["authentic", "balanced", "clean"];
 const densities: DensityLevel[] = ["low", "normal", "high"];
 const intensities: CelebrationIntensity[] = ["low", "normal", "high"];
 
+function selectCategory(category: Category): void {
+  runtime.playUiSound("navigate");
+  activeCategory.value = category;
+}
+
+function back(): void {
+  runtime.playUiSound("cancel");
+  runtime.openMainMenu();
+}
+
 function setGraphicsPreset(preset: VisualPreset): void {
   settingsStore.update({ graphics: { preset } });
   runtime.setVisualPreset(preset);
@@ -65,8 +75,25 @@ function setCameraSlider(key: "fov" | "distance" | "height" | "stiffness" | "bal
   settingsStore.update({ camera: { [key]: value } });
 }
 
+function applyLiveAudioSettings(): void {
+  const audio = settingsStore.settings.audio;
+  runtime.setAudioSettings({
+    enabled: audio.enabled,
+    masterVolume: audio.master,
+    effectsVolume: audio.effects,
+    musicVolume: audio.music,
+    musicEnabled: audio.musicEnabled
+  });
+}
+
 function setAudioSlider(key: "master" | "music" | "effects" | "ui", value: number): void {
   settingsStore.update({ audio: { [key]: value } });
+  applyLiveAudioSettings();
+}
+
+function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
+  settingsStore.update({ audio: { [key]: !settings.value.audio[key] } });
+  applyLiveAudioSettings();
 }
 </script>
 
@@ -84,7 +111,7 @@ function setAudioSlider(key: "master" | "music" | "effects" | "ui", value: numbe
         :data-testid="`settings-tab-${category.toLowerCase()}`"
         role="tab"
         :aria-selected="activeCategory === category"
-        @click="activeCategory = category"
+        @click="selectCategory(category)"
       >
         {{ category }}
       </button>
@@ -278,6 +305,12 @@ function setAudioSlider(key: "master" | "music" | "effects" | "ui", value: numbe
       </div>
 
       <div v-else-if="activeCategory === 'AUDIO'" class="rows">
+        <div class="row">
+          <span class="row-label">AUDIO</span>
+          <button type="button" class="chip" :class="{ active: settings.audio.enabled }" data-testid="toggle-audio-enabled" @click="toggleAudioFlag('enabled')">
+            {{ settings.audio.enabled ? "ON" : "OFF" }}
+          </button>
+        </div>
         <label class="slider-row">
           <span class="row-label">MASTER</span>
           <input
@@ -290,8 +323,14 @@ function setAudioSlider(key: "master" | "music" | "effects" | "ui", value: numbe
           />
           <span class="slider-value">{{ Math.round(settings.audio.master * 100) }}</span>
         </label>
-        <label class="slider-row">
+        <div class="row">
           <span class="row-label">MUSIC</span>
+          <button type="button" class="chip" :class="{ active: settings.audio.musicEnabled }" data-testid="toggle-music-enabled" @click="toggleAudioFlag('musicEnabled')">
+            {{ settings.audio.musicEnabled ? "ON" : "OFF" }}
+          </button>
+        </div>
+        <label class="slider-row">
+          <span class="row-label">MUSIC VOLUME</span>
           <input
             type="range"
             min="0"
@@ -326,7 +365,6 @@ function setAudioSlider(key: "master" | "music" | "effects" | "ui", value: numbe
           />
           <span class="slider-value">{{ Math.round(settings.audio.ui * 100) }}</span>
         </label>
-        <p class="hint">Audio module not yet implemented — levels are saved and will take effect once it is.</p>
       </div>
 
       <div v-else-if="activeCategory === 'CONTROLS'" class="rows">
@@ -399,7 +437,7 @@ function setAudioSlider(key: "master" | "music" | "effects" | "ui", value: numbe
       </div>
     </div>
 
-    <button type="button" class="menu-item" @click="runtime.openMainMenu()">BACK</button>
+    <button type="button" class="menu-item" @click="back()">BACK</button>
   </div>
 </template>
 

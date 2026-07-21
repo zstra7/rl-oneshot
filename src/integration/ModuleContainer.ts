@@ -1,6 +1,6 @@
 import { OpponentAiController } from "@/ai/OpponentAiController";
 import { AssetPipeline } from "@/assets/AssetPipeline";
-import type { AudioModule } from "@/audio/AudioModule";
+import type { AudioModule } from "@/audio/AudioTypes";
 import { NullAudioModule } from "@/audio/NullAudioModule";
 import { NullCameraModule } from "@/camera/NullCameraModule";
 import type { GameModule } from "@/core/GameModule";

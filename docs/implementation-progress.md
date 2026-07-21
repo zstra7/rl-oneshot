@@ -1,97 +1,115 @@
 # Current Phase
 
-Phase: 15 — UI and Settings Polish
+Phase: 16 — Audio Module
 Status: Complete — exit criteria verified
 Last verified commit: (this commit)
 
 ## Working
-- `src/stores/settingsStore.ts`: a real, persisted `AppSettings` object
-  (`localStorage` key `space-carball-settings-v1`, spec section 25) with
-  `validateSettings()` sanitising every field individually against
-  `DEFAULT_SETTINGS` — a corrupted/edited/older-schema stored value
-  degrades field by field instead of discarding the whole object.
-- `src/components/menu/SettingsPanel.vue`: replaces the Phase 7
-  placeholder with the real 6-category UI (GAMEPLAY/CAMERA/GRAPHICS/
-  AUDIO/CONTROLS/ACCESSIBILITY, spec section 25) with functional controls
-  for every listed field. Two categories are fully live end-to-end:
-  GRAPHICS' pixel preset (`runtime.setVisualPreset`) and ACCESSIBILITY's
-  "reduced jitter"/"disable dithering" (new
-  `PlaceholderSceneRenderer.setAccessibilityOverrides`, applied on top of
-  whichever preset is selected). GAMEPLAY's default match length is also
-  live (`runtime.selectMatchDuration`). CONTROLS shows the default
-  keyboard/mouse/gamepad bindings read-only (spec explicitly permits
-  deferring rebinding). Every field across every category is real UI,
-  real state, and real persistence even where not yet live-wired to an
-  engine effect — see Known deviations.
-- `GameCanvas.vue`: loads persisted settings right after
-  `runtime.initialise()` and applies the visual preset, accessibility
-  overrides, and default match duration before the first rendered frame.
-- `PlaceholderSceneRenderer.setAccessibilityOverrides()`: layers
-  jitter/dither overrides on top of the active preset rather than
-  requiring the user to give up the preset's resolution/colour-level
-  choice to get them; `getVisualDiagnostics()` now reports the effective
-  (preset + overrides) settings, not just the raw preset.
-- `window.__GAME_TEST__.runtime.setAccessibilityOverrides()`: new test
-  hook mirroring the above.
+- `src/audio/AudioTypes.ts`: full spec-accurate type system —
+  `AudioSettings`/`DEFAULT_AUDIO_SETTINGS`/`clampAudioSettings`, the 15-type
+  `AudioGameEvent` discriminated union (spec section 6), `AudioDiagnostics`
+  (spec section 20), and the `AudioModule` interface (spec section 2).
+- `src/audio/synth/RetroSynth.ts` (`WebAudioRetroSynth`): real Web Audio
+  synthesis — `tone`/`sweep`/`noise`/`chord`, exponential envelope shaping,
+  a shared deterministic (non-`Math.random()`) noise buffer.
+- `src/audio/synth/ContinuousVoice.ts` (`ContinuousNoiseVoice`): a
+  persistent, idempotent-start/stop looping voice for boost/powerslide
+  hums (spec section 14 — "never restart a source every frame").
+- `src/audio/AudioCooldownRegistry.ts`: per-key rate limiting with
+  merge-strongest-wins semantics (spec section 13).
+- `src/audio/RetroAudioModule.ts`: the real `AudioModule` — a 7-node gain
+  graph (`master -> {effectsMaster{ui,vehicle,impact,match}, musicMaster}`,
+  spec section 4), full synthesis recipes for all 16 required sound types
+  (spec section 9) plus intensity-mapped gain (`gain = min + i² * (max -
+  min)`, spec section 12), context lifecycle (create suspended, resume on
+  gesture, suspend), settings application via `setTargetAtTime` ramps.
+- `src/integration/AudioEventAdapter.ts`: converts physics/game-flow
+  observations into `AudioGameEvent`s every render frame — jump/dodge
+  (grounded/dodge-state edges), boost consumption (tick-over-tick
+  boost-amount delta), ball-hit (velocity delta threshold), boost pad
+  pickup/respawn (active-state diff with a near-player distance gate),
+  countdown/goal/overtime/match-end (match-state transitions). Uses Page
+  Visibility (not `document.hasFocus()`) to detect backgrounding — see
+  `docs/audio-deviations.md`.
+- `src/audio/testing/BrowserAudioTestApi.ts`
+  (`window.__AUDIO_TEST__`): resume/suspend/emit/setSettings/
+  getDiagnostics/stopAll, installed only in dev/test builds.
+- `src/core/GameRuntime.ts`: constructs `RetroAudioModule` and
+  `AudioEventAdapter` in `initialise()`, applies persisted settings before
+  the adapter starts running, exposes `resumeAudioFromGesture`/
+  `setAudioSettings`/`getAudioSettings`/`getAudioDiagnostics`/
+  `playUiSound(kind)` on the facade — the single chokepoint Vue components
+  use (spec section 17: "do not let modules import RetroAudioModule
+  directly").
+- Every interactive menu/HUD surface (`MainMenu`, `MatchSetup`,
+  `SettingsPanel`, `PauseMenu`, `ResultsScreen`) now plays a navigate/
+  confirm/cancel sound via `runtime.playUiSound(...)`.
+- `GameCanvas.vue`: applies persisted audio settings at boot and installs a
+  one-time first-gesture (`pointerdown`/`keydown`) listener that resumes
+  the `AudioContext` (spec section 5's browser-autoplay-policy handling).
+- `settingsStore.ts`: `AppSettings.audio` extended with `enabled`/
+  `musicEnabled` booleans (spec section 19's on/off toggles), defaults
+  aligned exactly to `DEFAULT_AUDIO_SETTINGS`.
+- `SettingsPanel.vue`'s AUDIO tab: live AUDIO ON/OFF and MUSIC ON/OFF
+  toggles alongside the four volume sliders, all wired to
+  `runtime.setAudioSettings(...)` immediately on change.
 
 ## Failing
-- None. All Phase 15 exit criteria verified locally in this session.
+- None. All implemented Phase 16 functionality verified locally in this
+  session.
 
 ## Deferred
-- Live wiring for camera settings (FOV/distance/height/stiffness/ball-
-  look/shake) — `ChaseCameraController` reads module-level constants, not
-  a per-instance settings input yet.
-- Live wiring for audio settings (master/music/effects/UI) — the audio
-  module is still `NullAudioModule` (Phase 16).
-- Live wiring for the remaining accessibility toggles (reduced shake,
-  reduced flashes, high-contrast ball, team-pattern mode, larger HUD),
-  graphics particle/star density, and glow — persisted and shown in the
-  UI, no backing engine effect yet.
-- Keybind rebinding UI (spec explicitly permits deferring this).
-- Full custom keyboard/gamepad menu navigation (spec section 22's focus
-  chevron/scan animation) — native browser Tab order and `:focus-visible`
-  styling are used instead of a custom nav system.
+- Procedural music (spec section 10) — bus and settings exist, no
+  sequencer.
+- `BrowserAudioTestApi`'s `getScheduleLog`/`clearScheduleLog`/
+  `advanceVirtualTime` (spec section 21's virtual scheduler).
+- Fine-ear gain/frequency calibration (spec section 6's calibration pass).
+- Car-car impact sound (`audio:car-impact` has a synthesis recipe but no
+  adapter-side collision-pair detection — physics doesn't expose one).
+- Powerslide continuous voice (`audio:powerslide-state` has a synthesis
+  recipe but no adapter-side detection — physics state has no
+  powerslide/slip observation, only the last input flag).
+
+See `docs/audio-deviations.md` for the full rationale on each of the above,
+plus the Page Visibility vs. `hasFocus()` and Vitest/Playwright testing-split
+decisions.
 
 ## Tests passing
 - `npm run validate` — all four validators pass.
 - `npm run type-check` (`vue-tsc --noEmit`) — zero errors.
-- `npm run test:unit` (Vitest) — 20 files, 175 tests, all passing,
-  including a new `settingsStore.spec.ts` (7 tests): defaults for
-  undefined/null/garbage/empty input, field-by-field fallback under
-  partial corruption, enum rejection, numeric clamping, schema-version
-  stamping, and idempotency. All 168 prior tests (Phases 1-14) still pass
-  unchanged.
+- `npm run test:unit` (Vitest) — 21 files, 190 tests, all passing,
+  including a new `audioCore.spec.ts` (15 tests) covering
+  `AudioCooldownRegistry`'s cooldown/merge-strongest-wins semantics and
+  `clampAudioSettings`'s clamping/fallback behaviour (the only audio logic
+  that runs without a real `AudioContext`). All 175 prior tests (Phases
+  1-15) still pass unchanged.
 - `npm run build` (validate -> type-check -> unit -> `vite build`) —
   passes on a plain production build.
-- Playwright: a new `tests/ui/settings.spec.ts` (6 tests): all six
-  category tabs render with GAMEPLAY default-selected, a graphics preset
-  change takes effect on the live renderer immediately, accessibility
-  jitter/dither toggles apply live, settings persist across a full page
-  reload (verified via both the live diagnostics and the raw
-  `localStorage` value), a corrupted `localStorage` value falls back to
-  defaults with zero console errors, and changing the default match
-  length in Settings changes Match Setup's selected duration. All prior
-  Playwright tests still pass — see the full-suite run in this session's
-  log (63 tests total across `chromium-dev`/`chromium-preview`).
+- Playwright: a new `tests/ui/audio.spec.ts` (10 tests): diagnostics report
+  `supported: true` on boot, `resumeFromUserGesture()` transitions the
+  context to `running`, clicking PLAY resumes it via the first-gesture
+  listener, emitting a one-shot event increments `scheduledOneShots`,
+  rapid duplicate navigate events are rate-limited by the cooldown window,
+  a boost-state continuous voice starts and stops with activity,
+  `setSettings` updates reported diagnostics, `stopAll` clears active
+  voices, the Settings panel's audio toggles drive live diagnostics, and a
+  full live match produces scheduled audio activity with zero console
+  errors. All 146 Playwright tests pass across `chromium-dev`/
+  `chromium-preview` (full-suite run in this session's log).
 
 ## Next exact task
-- Begin Phase 16 (audio module) per `plan/MASTER_BUILD_BRIEF.md` and
-  `plan/retro_audio_module_spec.md`. Required reading before starting:
-  that spec file in full (not yet read this session). The settings
-  store's `audio.master/music/effects/ui` fields already exist and are
-  persisted, ready for the real audio module to read once it exists — do
-  not re-invent a second audio-settings surface.
+- Begin Phase 17 (Integration hardening) per `plan/MASTER_BUILD_BRIEF.md`.
+  Required reading before starting: whichever spec file(s) that phase
+  references (not yet read this session).
 
 ## Known deviations
-- Settings-spec's rich `VisualPreset` deep-partial-merge API was not
-  implemented; only two named accessibility overrides were added instead
-  — see `docs/visual-language-deviations.md` Phase 15 section.
-- Camera/audio/most-accessibility settings are real+persisted UI without
-  a live engine effect yet — see Deferred above.
-- No custom keyboard/gamepad settings-navigation system.
-- Carried over from Phase 1-14: `window.__GAME_TEST__`/`__ASSET_TEST__`/
-  `__PHYSICS_TEST__`/`__INPUT_TEST__` only install when `__TEST_BUILD__`
-  is true, which the literal `test:release` script (plain `npm run
-  build`) does not set — see `docs/build-decisions.md`. A benign
-  `@dimforge/rapier3d-compat`-internal console warning is still observed
-  at boot.
+- See `docs/audio-deviations.md` for the full Phase 16 deviations list
+  (deferred music, deferred virtual scheduler, un-implemented car-impact/
+  powerslide detection, Page Visibility vs. focus, Vitest/Playwright test
+  split).
+- Carried over from Phase 1-15: `window.__GAME_TEST__`/`__ASSET_TEST__`/
+  `__PHYSICS_TEST__`/`__INPUT_TEST__`/`__AUDIO_TEST__` only install when
+  `__TEST_BUILD__` is true, which the literal `test:release` script (plain
+  `npm run build`) does not set — see `docs/build-decisions.md`. A benign
+  `@dimforge/rapier3d-compat`-internal console warning is still observed at
+  boot.

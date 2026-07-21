@@ -20,8 +20,24 @@ const selected = computed(() => matchFlowStore.session.selectedDurationMinutes);
 const selectedDifficulty = ref<AiDifficulty>(runtime.getAiDifficulty());
 
 function selectDifficulty(difficulty: AiDifficulty): void {
+  runtime.playUiSound("navigate");
   selectedDifficulty.value = difficulty;
   runtime.selectAiDifficulty(difficulty);
+}
+
+function selectDuration(minutes: MatchDurationMinutes): void {
+  runtime.playUiSound("navigate");
+  runtime.selectMatchDuration(minutes);
+}
+
+function startMatch(): void {
+  runtime.playUiSound("confirm");
+  runtime.startMatch();
+}
+
+function back(): void {
+  runtime.playUiSound("cancel");
+  runtime.openMainMenu();
 }
 </script>
 
@@ -37,7 +53,7 @@ function selectDifficulty(difficulty: AiDifficulty): void {
         class="duration-item"
         :class="{ active: selected === minutes }"
         :data-testid="`duration-${minutes}`"
-        @click="runtime.selectMatchDuration(minutes)"
+        @click="selectDuration(minutes)"
       >
         {{ minutes }} MIN
       </button>
@@ -58,10 +74,10 @@ function selectDifficulty(difficulty: AiDifficulty): void {
     </div>
 
     <div class="menu-items">
-      <button type="button" class="menu-item" data-testid="start-match" @click="runtime.startMatch()">
+      <button type="button" class="menu-item" data-testid="start-match" @click="startMatch()">
         START MATCH
       </button>
-      <button type="button" class="menu-item" @click="runtime.openMainMenu()">BACK</button>
+      <button type="button" class="menu-item" @click="back()">BACK</button>
     </div>
   </div>
 </template>

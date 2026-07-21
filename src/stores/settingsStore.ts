@@ -32,8 +32,10 @@ export interface AppSettings {
     readonly fullscreen: boolean;
   };
   readonly audio: {
+    readonly enabled: boolean;
     readonly master: number;
     readonly music: number;
+    readonly musicEnabled: boolean;
     readonly effects: number;
     readonly ui: number;
   };
@@ -71,9 +73,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fullscreen: false
   },
   audio: {
+    enabled: true,
     master: 0.8,
-    music: 0.6,
-    effects: 0.8,
+    music: 0.35,
+    musicEnabled: true,
+    effects: 0.85,
     ui: 0.8
   },
   accessibility: {
@@ -160,8 +164,10 @@ export function validateSettings(raw: unknown): AppSettings {
       fullscreen: isBoolean(graphics["fullscreen"]) ? graphics["fullscreen"] : DEFAULT_SETTINGS.graphics.fullscreen
     },
     audio: {
+      enabled: isBoolean(audio["enabled"]) ? audio["enabled"] : DEFAULT_SETTINGS.audio.enabled,
       master: clampNumber(audio["master"], 0, 1, DEFAULT_SETTINGS.audio.master),
       music: clampNumber(audio["music"], 0, 1, DEFAULT_SETTINGS.audio.music),
+      musicEnabled: isBoolean(audio["musicEnabled"]) ? audio["musicEnabled"] : DEFAULT_SETTINGS.audio.musicEnabled,
       effects: clampNumber(audio["effects"], 0, 1, DEFAULT_SETTINGS.audio.effects),
       ui: clampNumber(audio["ui"], 0, 1, DEFAULT_SETTINGS.audio.ui)
     },

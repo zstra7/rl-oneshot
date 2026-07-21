@@ -232,3 +232,32 @@
   environment has no `localStorage` global) — the store's `load()`/
   `update()` actions are thin `localStorage` read/write wrappers around
   it, exercised by Playwright instead.
+
+## Phase 16
+
+- Governed by `plan/retro_audio_module_spec.md` — its own deviations are
+  tracked separately in `docs/audio-deviations.md`, following the same
+  one-spec-per-deviations-doc pattern as the other phase-specific specs.
+- `src/audio/AudioModule.ts` (an earlier, incompatible placeholder type
+  file — different `AudioSettings` shape, `kind`-discriminated events,
+  `setVolumes`/`resumeAudioContextFromUserGesture` methods) was deleted
+  and its two consumers (`NullAudioModule.ts`, `ModuleContainer.ts`)
+  repointed at the new spec-accurate `src/audio/AudioTypes.ts` — the same
+  "check consumers, then consolidate onto the new spec-accurate type file"
+  pattern used for `CarAssetDescriptor` (Phase 11) and
+  `TextureAssetDescriptor` (Phase 12).
+- `RetroAudioModule` is constructed directly by `GameRuntime`, exactly
+  like `PlaceholderSceneRenderer`/`VfxModule` — `NullAudioModule` stays a
+  permanent no-op fallback (used only before `initialise()` completes),
+  not something the real module ever routes through.
+- `AudioEventAdapter` is a `RenderFrameModule` registered with
+  `FrameCoordinator` alongside `VfxModule`, independently re-deriving the
+  same physics/game-flow observations (boost consumption, ball-impact
+  velocity delta, match-state transitions) rather than depending on
+  `src/vfx` — see `docs/audio-deviations.md` for the full rationale.
+- Vitest cannot exercise real Web Audio synthesis (no `AudioContext` in
+  Node) — `AudioCooldownRegistry`/`clampAudioSettings` are unit-tested in
+  Vitest; everything requiring a real `AudioContext` (context lifecycle,
+  scheduling, continuous voices, settings propagation) is Playwright-only,
+  using `AudioDiagnostics` counters as the practical substitute for the
+  spec's `BrowserAudioTestApi` virtual-scheduler inspection methods.
