@@ -1,57 +1,46 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import * as THREE from "three";
 
-import { assertThreeRevision } from "@/core/BuildInfo";
+import { useGameRuntime } from "@/core/useGameRuntime";
+import { installTestApis } from "@/testing/TestApiInstaller";
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 
-let renderer: THREE.WebGLRenderer | null = null;
-let scene: THREE.Scene | null = null;
-let camera: THREE.PerspectiveCamera | null = null;
-let frameHandle: number | null = null;
+const runtime = useGameRuntime();
 
-function renderPlaceholderFrame(): void {
-  if (!renderer || !scene || !camera) {
-    return;
-  }
+let resizeObserver: ResizeObserver | null = null;
 
-  renderer.render(scene, camera);
-  frameHandle = requestAnimationFrame(renderPlaceholderFrame);
-}
-
-onMounted(() => {
+onMounted(async () => {
   const canvas = canvasRef.value;
 
   if (!canvas) {
     throw new Error("Game canvas was not mounted.");
   }
 
-  assertThreeRevision();
+  await runtime.initialise(canvas);
+  runtime.start();
 
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
-  renderer.setClearColor(0x05010a, 1);
-  renderer.setSize(canvas.clientWidth || 1, canvas.clientHeight || 1, false);
+  installTestApis(runtime);
 
-  scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
-  camera.position.set(0, 0, 5);
-
-  document.documentElement.dataset["threeRevision"] = THREE.REVISION;
-
-  renderPlaceholderFrame();
+  resizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (!entry) {
+      return;
+    }
+    const { width, height } = entry.contentRect;
+    const pixelWidth = Math.max(1, Math.round(width));
+    const pixelHeight = Math.max(1, Math.round(height));
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+    runtime.notifyResize(pixelWidth, pixelHeight);
+  });
+  resizeObserver.observe(canvas);
 });
 
 onBeforeUnmount(() => {
-  if (frameHandle !== null) {
-    cancelAnimationFrame(frameHandle);
-    frameHandle = null;
-  }
-
-  renderer?.dispose();
-  renderer = null;
-  scene = null;
-  camera = null;
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+  runtime.dispose();
 });
 </script>
 

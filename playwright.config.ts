@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const chromiumPath = process.env["PLAYWRIGHT_CHROMIUM_PATH"];
+
 export default defineConfig({
   testDir: "./tests",
   testIgnore: ["**/unit/**"],
@@ -14,9 +16,9 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
-    launchOptions: {
-      executablePath: process.env["PLAYWRIGHT_CHROMIUM_PATH"] ?? undefined
-    }
+    ...(chromiumPath
+      ? { launchOptions: { executablePath: chromiumPath } }
+      : {})
   },
 
   webServer: [

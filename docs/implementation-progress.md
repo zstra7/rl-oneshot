@@ -1,78 +1,118 @@
 # Current Phase
 
-Phase: 0 — Repository Foundation
+Phase: 1 — Core Runtime and Fixed-Step Loop
 Status: Complete — exit criteria verified
 Last verified commit: (this commit)
 
 ## Working
-- Vite + Vue 3 + TypeScript scaffold with pinned exact dependency versions
-  (see `docs/build-decisions.md` for two version pins that had to deviate
-  from the spec's literal numbers to actually work together).
-- `App.vue` / `GameCanvas.vue` placeholder canvas that constructs a
-  `THREE.WebGLRenderer` and reports `THREE.REVISION` for the boot smoke
-  test.
-- Pinia `applicationStore` with `AppState` (`BOOT` -> `MENU` on mount).
-- `src/core/ContractRegistry.ts` with `CORE_APPLICATION_CONTRACT_VERSION`
-  and `REQUIRED_MODULE_CONTRACTS`, covered by a Vitest unit test.
-- `NullAudioModule` placeholder implementing the real `AudioModule`
-  interface.
-- Validation scripts: `validate-contracts`, `validate-threejs-skills`,
-  `validate-assets`, `validate-architecture` — all pass.
-- Ten `.claude/skills/threejs-*/SKILL.md` files (project-authored, since the
-  external `CloudAI-X/threejs-skills` collection is not fetchable from this
-  environment — see Known deviations).
-- Playwright smoke test (`tests/smoke/boot.spec.ts`) verifying the canvas
-  mounts, `THREE.REVISION === "160"`, and the app reaches `MENU` state —
-  passing against both the dev server and the production preview server.
-- Vitest unit tests for the contract registry and the skill-validation
-  helper (including a "fails correctly when a skill is missing" case,
-  manually re-verified by temporarily removing a skill file and confirming
-  `validate:threejs-skills` exits non-zero).
+- `GameRuntime` (`src/core/GameRuntime.ts`): the single application
+  coordinator. Owns the one `requestAnimationFrame` loop, the one
+  `FixedStepCoordinator` (120 Hz), a `FrameCoordinator` for render-frame
+  consumers, a typed `EventDispatcher<TypedEventMap>`, a `ModuleContainer`
+  of null/placeholder modules, and the one `PlaceholderSceneRenderer`
+  (Three.js renderer/scene/camera — replaces the Phase 0 inline canvas
+  logic).
+- `GameRuntimeFactory` singleton (`getGameRuntime()`/`disposeGameRuntime()`)
+  and a `useGameRuntime()` composable; `main.ts` disposes it on
+  `import.meta.hot.dispose` so HMR cannot duplicate the RAF loop or
+  listeners.
+- `FixedStepCoordinator` (accumulator, `MAX_FRAME_DELTA=0.25s`,
+  `MAX_CATCH_UP_STEPS=8`, spiral-of-death protection) with a `stepOnce()`
+  escape hatch for deterministic manual/Playwright stepping that bypasses
+  RAF entirely.
+- `RuntimeClock`, `FrameCoordinator`, `EventDispatcher`/`EventTypes`
+  (`runtime:app-state-changed`, `runtime:fixed-tick`, `runtime:error` —
+  extended as later phases' modules land), `ErrorReporter`
+  (`DefaultErrorReporter`), `RuntimeDiagnostics`, `ApplicationLifecycle`
+  (`classifyStartupFailure`).
+- `ModuleContainer` (`src/integration/ModuleContainer.ts`) wired to null
+  placeholders: `NullAssetPipeline`, `NullPhysicsModule`, `NullInputModule`,
+  `NeutralOpponentAi`, `NullGameFlowController`, `NullStadiumModule`,
+  `NullCameraModule`, `NullVfxModule`, `NullAudioModule` (from Phase 0).
+- `App.vue`/`GameCanvas.vue` now delegate entirely to `GameRuntime` —
+  `GameCanvas.vue` only owns the `<canvas>`, calls
+  `initialise()`/`start()`/`dispose()`, and forwards `ResizeObserver`
+  events via `runtime.notifyResize()`. `App.vue` subscribes to
+  `runtime:app-state-changed` during `<script setup>` (before any child
+  `onMounted`) to keep the Pinia `applicationStore` in sync without a race.
+- `window.__GAME_TEST__` (`src/testing/TestApiInstaller.ts`,
+  `BrowserCombinedTestApi.ts`) installed only under `__DEV__ ||
+  __TEST_BUILD__`, exposing `ready()` and a `runtime` sub-API
+  (`getAppState`, `getDiagnostics`, `isRunning`, `start`, `stop`,
+  `stepFixedTicks`). `physics`/`input`/`ai`/`assets`/`gameFlow` sub-APIs are
+  typed as optional and will be filled in as those phases land.
 
 ## Failing
-- None. All Phase 0 exit criteria verified locally in this session.
+- None. All Phase 1 exit criteria verified locally in this session.
 
 ## Deferred
-- Everything from Phase 1 onward (runtime loop, physics, input, AI,
-  visuals, audio). No gameplay code exists yet, per Phase 0 exit criteria
-  ("no game logic yet").
+- Phase 2 onward: real asset pipeline, physics, input, AI, game flow,
+  camera, VFX, stadium, PSX rendering, audio, and their real
+  `ModuleContainer` types (currently all typed as the generic `GameModule`
+  contract — see Known deviations).
+- `RuntimeDiagnostics.matchState` (present in the core spec's diagnostics
+  shape) is deferred until the game-flow module (Phase 7) exists; there is
+  no match state to report yet.
 
 ## Tests passing
-- `npm run validate` — contracts, threejs-skills, assets, architecture: all
-  pass.
-- `npm run type-check` (`vue-tsc --noEmit`) — passes with zero errors.
-- `npm run test:unit` (Vitest) — 2 files, 6 tests, all passing.
+- `npm run validate` — all four validators pass.
+- `npm run type-check` (`vue-tsc --noEmit`) — zero errors.
+- `npm run test:unit` (Vitest) — 4 files, 15 tests, all passing, including:
+  - `FixedStepCoordinator` survives 10,000 fixed ticks deterministically
+    (steady-60fps simulation) with zero tick-count drift and a bounded
+    catch-up-step cap on huge frame deltas (spiral-of-death guard).
+  - `EventDispatcher` unsubscribe/dispose/listener-count behaviour (leak
+    tests per spec section 53).
 - `npm run build` (validate -> type-check -> unit -> `vite build`) —
-  passes; `dist/` produced with expected `vue`/`three` manual chunks.
-- `npx playwright test --project=chromium-dev tests/smoke` — 2/2 passing.
-- `npx playwright test --project=chromium-preview tests/smoke` — 2/2
-  passing (against `vite preview`).
+  passes end to end on a plain production build.
+- Playwright `tests/smoke/**` — 2/2 passing on both `chromium-dev` and
+  `chromium-preview` (against a plain production build).
+- Playwright `tests/integration/runtime.spec.ts` — 4/4 passing on
+  `chromium-dev`, and on `chromium-preview` against a `PLAYWRIGHT_TEST=1`
+  test-mode production build (see Known deviations for why). Covers:
+  exactly one `requestAnimationFrame` ever pending at a time; fixed tick
+  advances while running and halts immediately after `stop()`; manual
+  `stepFixedTicks(10_000)` advances deterministically while stopped and
+  the page stays responsive afterward.
 
 ## Next exact task
-- Begin Phase 1 (core runtime and fixed-step loop) per
+- Begin Phase 2 (asset & procedural foundation) per
   `plan/MASTER_BUILD_BRIEF.md` and
-  `plan/core_application_architecture_build_integration_spec.md` sections
-  9, 14, 23-26, 46-53, 57. Required reading before starting: Core
-  Architecture spec + this progress file only (per the brief's context
-  limitation rule) — do not read the other five module specs yet.
-  Implement `GameRuntime`, `GameRuntimeFactory`, `RuntimeClock`,
-  `FixedStepCoordinator`, `FrameCoordinator`, `EventDispatcher`/
-  `EventTypes`, `ErrorReporter`, `RuntimeDiagnostics`, the `ModuleContainer`
-  wired to null/placeholder modules, HMR-safe disposal, and a manual
-  fixed-tick Playwright test API (`window.__GAME_TEST__`) that can drive
-  10,000 empty ticks deterministically without RAF.
+  `plan/asset_production_pipeline_module_spec.md`. Required reading before
+  starting: Core Architecture spec (already read) + this progress file +
+  the asset pipeline module spec only. Implement the loading manager,
+  asset manifest, procedural registries, procedural fallback car,
+  procedural ball, a basic stadium blockout, a basic material set, a basic
+  star background, and an asset test API — replacing `NullAssetPipeline`
+  and `NullStadiumModule` with real (if minimal) implementations, and
+  registering real content with the `PlaceholderSceneRenderer` (or its
+  Phase 2 successor) instead of an empty scene. Do not begin physics
+  (Phase 3) until Phase 2's exit criteria pass.
 
 ## Known deviations
-- The `CloudAI-X/threejs-skills` GitHub repository referenced by the asset
-  pipeline specification is not accessible from this session (network/repo
-  scope is limited to `zstra7/rl-oneshot`). The ten required
-  `.claude/skills/threejs-*/SKILL.md` files were authored directly against
-  the pinned `three@0.160.0` API surface instead of vendored from that
-  collection. They cover the same ten topics and satisfy
-  `validate-threejs-skills.mjs`. If the real collection becomes available
-  later, replace these files and re-run visual regression per the spec's
-  Three.js upgrade procedure.
-- See `docs/build-decisions.md` and `docs/integration-deviations.md` for
-  the `typescript`, `vitest`, and `@types/three`/`@types/node` version
-  deviations required to make the pinned toolchain actually compile and
-  type-check together.
+- `ModuleContainer` (`src/integration/ModuleContainer.ts`) types every
+  slot except `audio` as the generic `GameModule` contract rather than the
+  richer per-module interfaces shown in core architecture spec section 13
+  (`AssetPipeline`, `PhysicsFacade`, `InputControlsModule`,
+  `OpponentAiModule`, `MatchFlowController`, `StadiumModule`,
+  `CameraModule`, `VfxModule`). Those richer interfaces require reading
+  each module's own specification first (per the brief's "read only the
+  module required for this phase" rule) — inventing them now would risk
+  conflicting with the real specs. Each phase narrows its own slot's type
+  when it reads that module's spec.
+- The core spec's `ModuleContainer` also lists a `renderer: SceneRenderer`
+  slot. Phase 1 instead has `GameRuntime` own a `PlaceholderSceneRenderer`
+  directly and register it with the `FrameCoordinator`, rather than routing
+  it through `ModuleContainer`, since a real `SceneRenderer` module
+  interface does not exist yet. This will likely be reconciled when the
+  asset/visual-language phases define the real renderer module.
+- `window.__GAME_TEST__` only installs when `__TEST_BUILD__` is true, which
+  the literal `test:release` script (plain `npm run build`) does not set.
+  See `docs/build-decisions.md` Phase 1 entry for detail and the
+  `PLAYWRIGHT_TEST=1` workaround used to verify
+  `tests/integration/**` against the preview server in this session.
+- Carried over from Phase 0: the `CloudAI-X/threejs-skills` collection is
+  not fetchable from this session; `.claude/skills/threejs-*` files remain
+  project-authored. See `docs/build-decisions.md` and
+  `docs/integration-deviations.md` for the `typescript`/`vitest`/
+  `@types/three`/`@types/node` toolchain version deviations.

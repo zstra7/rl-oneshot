@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 
 import App from "@/App.vue";
+import { disposeGameRuntime } from "@/core/GameRuntimeFactory";
 
 const app = createApp(App);
 const pinia = createPinia();
@@ -17,4 +18,7 @@ app.mount("#app");
 
 if (import.meta.hot) {
   import.meta.hot.accept();
+  import.meta.hot.dispose(() => {
+    disposeGameRuntime();
+  });
 }

@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onBeforeUnmount } from "vue";
 
 import GameCanvas from "@/components/GameCanvas.vue";
+import { useGameRuntime } from "@/core/useGameRuntime";
 import { useApplicationStore } from "@/stores/applicationStore";
 
 const applicationStore = useApplicationStore();
+const runtime = useGameRuntime();
 
-onMounted(() => {
-  applicationStore.setAppState("MENU");
+// Registered during setup (before any child onMounted hooks run) so no
+// early "runtime:app-state-changed" event from GameCanvas's initialise()
+// can be missed regardless of mount order.
+const unsubscribe = runtime.onEvent("runtime:app-state-changed", (event) => {
+  applicationStore.setAppState(event.next);
+});
+
+onBeforeUnmount(() => {
+  unsubscribe();
 });
 </script>
 

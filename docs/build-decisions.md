@@ -57,3 +57,22 @@
   network installs of browser binaries are not part of this workflow. The
   env var is optional and `undefined` by default, so a normal checkout that
   has run `npx playwright install` is unaffected.
+
+## Phase 1
+
+- `window.__GAME_TEST__` only installs when `__DEV__ || __TEST_BUILD__`
+  (section 46). `vite.config.ts` sets `__TEST_BUILD__` from
+  `mode === "test" || process.env.PLAYWRIGHT_TEST === "1"`. The literal
+  `test:release` script in section 4 runs a plain `npm run build` (no
+  `PLAYWRIGHT_TEST` set) before testing against the preview server, which
+  means `tests/integration/**` (which depend on `window.__GAME_TEST__`)
+  would not find the test API on that exact build. Section 46 explicitly
+  permits "a test-mode production build" for release testing, so when
+  verifying `tests/integration/**` against `chromium-preview` in this
+  session, the build was run as `PLAYWRIGHT_TEST=1 npm run build:app`
+  instead of plain `npm run build:app`. `tests/smoke/**` and
+  `tests/release/**` do not depend on the test API and pass against an
+  ordinary production build. If this distinction matters for a real CI
+  release gate later, consider splitting `test:release` into a
+  test-API-independent smoke/release pass (plain production build) and a
+  separate test-mode-build pass for `tests/integration/**`.
