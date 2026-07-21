@@ -29,7 +29,10 @@ export const PSX_RENDER_PRESETS: Record<VisualPreset, PsxRenderSettings> = {
     ditherStrength: 0.045,
     colourLevels: 20,
     contrastBoost: 1.08,
-    jitterEnabled: true,
+    // WS8.A (plan/POLISH_OVERHAUL_PLAN.md): jitter disabled product-wide
+    // due to z-fighting; shader infrastructure and the accessibility
+    // "reduced jitter" toggle are retained. See docs/visual-language-deviations.md.
+    jitterEnabled: false,
     ditherEnabled: true
   },
   balanced: {
@@ -39,7 +42,7 @@ export const PSX_RENDER_PRESETS: Record<VisualPreset, PsxRenderSettings> = {
     ditherStrength: 0.03,
     colourLevels: 32,
     contrastBoost: 1.05,
-    jitterEnabled: true,
+    jitterEnabled: false,
     ditherEnabled: true
   },
   clean: {

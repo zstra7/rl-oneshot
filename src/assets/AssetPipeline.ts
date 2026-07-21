@@ -65,7 +65,13 @@ export class AssetPipeline implements GameModule {
   private readonly carIntakeReports = new Map<CarTeamId, CarAssetInspectionReport>();
 
   private readonly textureLoader = new TextureAssetLoader();
-  private stadiumTextures: { floor?: THREE.Texture; wall?: THREE.Texture } = {};
+  private stadiumTextures: {
+    floor?: THREE.Texture;
+    wall?: THREE.Texture;
+    floorPanelSet?: THREE.Texture[];
+    floorAccentPlayer?: THREE.Texture;
+    floorAccentOpponent?: THREE.Texture;
+  } = {};
 
   public async initialise(): Promise<void> {
     this.setState("VALIDATING_SKILLS");
@@ -180,6 +186,26 @@ export class AssetPipeline implements GameModule {
     }
     if (wallDescriptor) {
       this.stadiumTextures.wall = await this.loadTexture(wallDescriptor);
+    }
+
+    // WS8.B (plan/POLISH_OVERHAUL_PLAN.md): paneled floor — two plain
+    // concrete variants tiled across the field, plus a painted accent
+    // variant near each goal (player-side blue, opponent-side red).
+    const floorPanelDescriptors = [manifest["ConcreteFloor-01_64"], manifest["ConcreteFloor-02_64"]];
+    this.stadiumTextures.floorPanelSet = [];
+    for (const descriptor of floorPanelDescriptors) {
+      if (descriptor) {
+        this.stadiumTextures.floorPanelSet.push(await this.loadTexture(descriptor));
+      }
+    }
+
+    const accentPlayerDescriptor = manifest["ConcreteFloorPainted-C16x32B_64"];
+    if (accentPlayerDescriptor) {
+      this.stadiumTextures.floorAccentPlayer = await this.loadTexture(accentPlayerDescriptor);
+    }
+    const accentOpponentDescriptor = manifest["ConcreteFloorPainted-C16x32R_64"];
+    if (accentOpponentDescriptor) {
+      this.stadiumTextures.floorAccentOpponent = await this.loadTexture(accentOpponentDescriptor);
     }
   }
 
@@ -335,12 +361,17 @@ export class AssetPipeline implements GameModule {
    * deduplicated by key, so this doesn't create new GPU resources beyond
    * what a real stadium build already needs) purely to traverse it.
    */
-  public getStadiumShellInfo(): { transparentMeshCount: number; floorMaterialOpaque: boolean } {
+  public getStadiumShellInfo(): {
+    transparentMeshCount: number;
+    floorMaterialOpaque: boolean;
+    floorPanelCount: number;
+  } {
     const context = this.requireContext();
     const stadium = createStadiumBlockout(context);
 
     let transparentMeshCount = 0;
     let floorMaterialOpaque = true;
+    let floorPanelCount = 0;
 
     stadium.traverse((object) => {
       const mesh = object as THREE.Mesh;
@@ -357,9 +388,12 @@ export class AssetPipeline implements GameModule {
       if (mesh.name === "FloorBase" && isTransparent) {
         floorMaterialOpaque = false;
       }
+      if (mesh.name === "FloorPanel") {
+        floorPanelCount += 1;
+      }
     });
 
-    return { transparentMeshCount, floorMaterialOpaque };
+    return { transparentMeshCount, floorMaterialOpaque, floorPanelCount };
   }
 
   public dispose(): void {

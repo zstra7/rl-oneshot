@@ -213,3 +213,46 @@ are now implemented.
   plus its cyan wireframe seam overlay), a pre-existing design unrelated
   to WS5.A's hex shell texture. Traced via `BallVisualFactory.ts`'s
   source before concluding it wasn't a regression.
+
+## Post-launch polish pass — WS8 (graphics fixes)
+
+- **WS8.A jitter removal**: `jitterEnabled` is now `false` in all three
+  PSX presets (`authentic`, `balanced`, `clean`) — z-fighting from the
+  vertex jitter shader was visible enough to be a net negative
+  product-wide. The shader infrastructure (`VertexJitter.ts`, the
+  per-category strength table) and the accessibility "reduced jitter"
+  toggle are retained as-is (the toggle is now a no-op against a
+  baseline that's already off, but still composes correctly —
+  `base.jitterEnabled && !reducedJitter` stays `false` either way).
+  `tests/visual-language/psx-pipeline.spec.ts`'s preset-switch test
+  updated its `authentic`-preset assertion from `true` to `false`
+  accordingly. Floor-marking z-fighting (a separate, narrower issue) was
+  fixed independently: `MARKING_HEIGHT_OFFSET` raised 0.011 → 0.02, plus
+  `depthWrite: false` + `polygonOffset` on the marking-line material as
+  belt-and-braces.
+- **WS8.B paneled floor**: the single tiled `ConcreteFloor-01_64`
+  material on `FloorBase` is now a flat, unmapped dark base (used for
+  the box's sides/underside only — its top face sits under the new
+  panels) plus a separate `FloorPanels` group: a 4×6 grid of 10×10m
+  `PlaneGeometry` tiles, each randomly assigned one of two plain
+  concrete variants (`ConcreteFloor-01_64`/`-02_64`) and a random
+  quarter-turn spin via `context.random` (deterministic, seeded — no
+  `Math.random()`), with painted accent tiles
+  (`ConcreteFloorPainted-C16x32B_64` blue / `…R_64` red) within 10m of
+  the player/opponent goal lines respectively. `stadiumTextures.floor`
+  is still loaded (unused by any mesh material now, same as
+  `stadiumTextures.wall` has been since WS5.A) rather than removed —
+  keeping it exercises the manifest-load/validation path the same way
+  an actually-consumed texture would, and removing it wasn't asked for.
+- **Panel in-place rotation needed `Object3D.rotateZ()`, not
+  `mesh.rotation.z = …`.** The plan's suggested "rotate the plane mesh
+  around Y by k·π/2" doesn't directly apply here: these panels are
+  already flattened via `rotation.x = -Math.PI/2` (matching the existing
+  floor-marking convention in this file) to lie flat with their normal
+  pointing up, and setting `.rotation.z` as a second Euler component
+  composes with that X rotation in world space rather than spinning the
+  tile in its own surface plane. `rotateZ(angle)` (an `Object3D` method,
+  not an Euler-component assignment) rotates around the object's own
+  local Z axis — its normal, wherever it currently points in world
+  space — which is exactly "spin the tile" regardless of the prior
+  flattening rotation.

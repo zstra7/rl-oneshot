@@ -18,8 +18,8 @@ export interface BrowserAssetTestApi {
   getSceneResourceCounts(): AssetResourceCounts;
   getCarIntakeReports(): Record<CarTeamId, CarAssetInspectionReport | undefined>;
   isCarUsingFallback(team: CarTeamId): boolean;
-  /** WS5.A: transparent glass shell mesh count + whether the floor stayed opaque. */
-  getStadiumShellInfo(): { transparentMeshCount: number; floorMaterialOpaque: boolean };
+  /** WS5.A/WS8.B: transparent glass shell mesh count, whether the floor stayed opaque, and the paneled-floor tile count. */
+  getStadiumShellInfo(): { transparentMeshCount: number; floorMaterialOpaque: boolean; floorPanelCount: number };
 
   rebuildProceduralPreview(seed: number): AssetResourceCounts;
   disposePreview(): void;

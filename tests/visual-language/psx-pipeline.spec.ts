@@ -26,7 +26,9 @@ test("setVisualPreset switches the internal resolution and settings live, with n
   let diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVisualDiagnostics());
   expect(diagnostics?.preset).toBe("authentic");
   expect(diagnostics?.internalResolution).toEqual({ width: 320, height: 180 });
-  expect(diagnostics?.settings.jitterEnabled).toBe(true);
+  // WS8.A: jitter disabled product-wide (z-fighting) — all three presets
+  // now report false; infrastructure/toggle wiring stays intact.
+  expect(diagnostics?.settings.jitterEnabled).toBe(false);
 
   await page.evaluate(() => window.__GAME_TEST__?.runtime.setVisualPreset("clean"));
   await page.waitForTimeout(200);

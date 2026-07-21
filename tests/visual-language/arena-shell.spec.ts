@@ -15,6 +15,12 @@ test("the arena shell has at least 6 transparent glass meshes and the floor stay
   expect(info!.floorMaterialOpaque).toBe(true);
 });
 
+test("WS8.B: the floor is paneled with individually textured tiles", async ({ page }) => {
+  const info = await page.evaluate(() => window.__ASSET_TEST__?.getStadiumShellInfo());
+  expect(info).toBeTruthy();
+  expect(info!.floorPanelCount).toBeGreaterThanOrEqual(20);
+});
+
 test("a live match with the glass shell renders with no console errors", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (msg) => {

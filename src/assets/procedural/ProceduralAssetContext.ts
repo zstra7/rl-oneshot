@@ -17,6 +17,11 @@ export type VisualPreset = "authentic" | "balanced" | "clean";
 export interface StadiumSurfaceTextures {
   readonly floor?: THREE.Texture;
   readonly wall?: THREE.Texture;
+  /** WS8.B: the two plain-concrete floor-panel variants, tiled across the paneled floor. */
+  readonly floorPanelSet?: readonly THREE.Texture[];
+  /** WS8.B: painted accent panels used within 10m of each goal (player-side, opponent-side). */
+  readonly floorAccentPlayer?: THREE.Texture;
+  readonly floorAccentOpponent?: THREE.Texture;
 }
 
 export interface ProceduralAssetContext {

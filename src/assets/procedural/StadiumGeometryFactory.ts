@@ -23,23 +23,19 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   const root = new THREE.Group();
   root.name = "StadiumVisualRoot";
 
-  const floorTexture = context.stadiumTextures?.floor;
-
-  const floorMaterial = context.materialRegistry.getOrCreate(
-    `stadium-floor-v2-${floorTexture ? "textured" : "flat"}`,
-    () =>
-      new THREE.MeshStandardMaterial({
-        color: floorTexture ? 0xffffff : 0x11131a,
-        map: floorTexture ?? null,
-        roughness: 0.85,
-        metalness: 0.05
-      })
-  );
-  if (floorTexture) {
-    floorTexture.repeat.set(fieldWidth / 2, fieldLength / 2);
-  }
-
-  applyVertexJitter(floorMaterial, "arenaMetal");
+  // WS8.B (plan/POLISH_OVERHAUL_PLAN.md): the floor box itself is now a
+  // flat, unmapped base (sides/underside only — its top face sits under
+  // the paneled floor below) so it no longer needs the single tiled
+  // floor texture `stadiumTextures.floor` provided.
+  const floorMaterial = context.materialRegistry.getOrCreate("stadium-floor-base-v3", () => {
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x11131a,
+      roughness: 0.85,
+      metalness: 0.05
+    });
+    applyVertexJitter(material, "arenaMetal");
+    return material;
+  });
 
   // WS5.A: side walls, ceiling and end walls are a shared transparent
   // "glass shell" material (hex-pattern texture) instead of the old
@@ -69,6 +65,8 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   floor.name = "FloorBase";
   floor.position.set(0, -WALL_THICKNESS / 2, 0);
   root.add(floor);
+
+  root.add(createPaneledFloor(context));
 
   const sideWallGeometry = context.geometryRegistry.getOrCreate(
     "stadium-side-wall-v1",
@@ -108,6 +106,93 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   root.add(createWallFillets(context, floorMaterial));
 
   return root;
+}
+
+const FLOOR_PANEL_COLUMNS = 4;
+const FLOOR_PANEL_ROWS = 6;
+const FLOOR_PANEL_HEIGHT_OFFSET = 0.005;
+/** WS8.B: panels within this distance of either goal line use the painted accent texture. */
+const FLOOR_ACCENT_DISTANCE = 10;
+
+/**
+ * WS8.B (plan/POLISH_OVERHAUL_PLAN.md): replaces the single tiled floor
+ * texture with a `FLOOR_PANEL_COLUMNS`x`FLOOR_PANEL_ROWS` grid of
+ * individually textured/rotated panels for PS1-style visual interest —
+ * two plain concrete variants across the field, painted accent panels
+ * (player-side blue / opponent-side red) within `FLOOR_ACCENT_DISTANCE`
+ * of each goal line. Falls back to the flat `FloorBase` box's own
+ * material (no panels added) if no supplied textures are available,
+ * matching every other texture-optional surface in this factory.
+ */
+function createPaneledFloor(context: ProceduralAssetContext): THREE.Group {
+  const { fieldLength, fieldWidth } = context.stadiumDimensions;
+  const { floorPanelSet, floorAccentPlayer, floorAccentOpponent } = context.stadiumTextures ?? {};
+
+  const group = new THREE.Group();
+  group.name = "FloorPanels";
+
+  if (!floorPanelSet || floorPanelSet.length === 0) {
+    return group;
+  }
+
+  const panelWidth = fieldWidth / FLOOR_PANEL_COLUMNS;
+  const panelDepth = fieldLength / FLOOR_PANEL_ROWS;
+  const panelGeometry = context.geometryRegistry.getOrCreate(
+    "stadium-floor-panel-plane-v1",
+    () => new THREE.PlaneGeometry(panelWidth, panelDepth)
+  );
+
+  const panelMaterials = floorPanelSet.map((texture, index) =>
+    context.materialRegistry.getOrCreate(`stadium-floor-panel-plain-v1-${index}`, () => {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      return new THREE.MeshStandardMaterial({ map: texture, roughness: 0.9, metalness: 0.05 });
+    })
+  );
+  const accentPlayerMaterial = floorAccentPlayer
+    ? context.materialRegistry.getOrCreate(
+        "stadium-floor-panel-accent-player-v1",
+        () => new THREE.MeshStandardMaterial({ map: floorAccentPlayer, roughness: 0.9, metalness: 0.05 })
+      )
+    : null;
+  const accentOpponentMaterial = floorAccentOpponent
+    ? context.materialRegistry.getOrCreate(
+        "stadium-floor-panel-accent-opponent-v1",
+        () => new THREE.MeshStandardMaterial({ map: floorAccentOpponent, roughness: 0.9, metalness: 0.05 })
+      )
+    : null;
+
+  for (let column = 0; column < FLOOR_PANEL_COLUMNS; column += 1) {
+    for (let row = 0; row < FLOOR_PANEL_ROWS; row += 1) {
+      const x = -fieldWidth / 2 + panelWidth * (column + 0.5);
+      const z = -fieldLength / 2 + panelDepth * (row + 0.5);
+
+      const distanceToPlayerGoal = z - -fieldLength / 2;
+      const distanceToOpponentGoal = fieldLength / 2 - z;
+
+      let material = panelMaterials[context.random.integer(0, panelMaterials.length)]!;
+      if (accentPlayerMaterial && distanceToPlayerGoal < FLOOR_ACCENT_DISTANCE) {
+        material = accentPlayerMaterial;
+      } else if (accentOpponentMaterial && distanceToOpponentGoal < FLOOR_ACCENT_DISTANCE) {
+        material = accentOpponentMaterial;
+      }
+
+      const panel = new THREE.Mesh(panelGeometry, material);
+      panel.name = "FloorPanel";
+      panel.rotation.x = -Math.PI / 2;
+      // Free per-panel visual variety: spin the plane about its own
+      // normal (a local-Z rotation, applied via `rotateZ` rather than
+      // setting the Euler `.rotation.z` component directly, since the
+      // latter would compose with the flattening X-rotation above in
+      // world space instead of spinning in the panel's own surface
+      // plane) instead of cloning/rotating the texture.
+      panel.rotateZ((Math.PI / 2) * context.random.integer(0, 4));
+      panel.position.set(x, FLOOR_PANEL_HEIGHT_OFFSET, z);
+      group.add(panel);
+    }
+  }
+
+  return group;
 }
 
 const FILLET_RADIUS = 2.0;
@@ -169,7 +254,10 @@ function createWallFillets(context: ProceduralAssetContext, floorMaterial: THREE
   return group;
 }
 
-const MARKING_HEIGHT_OFFSET = 0.011;
+// WS8.A (plan/POLISH_OVERHAUL_PLAN.md): raised from 0.011 and paired with
+// polygon-offset below — the small original gap still z-fought against
+// the floor at grazing camera angles.
+const MARKING_HEIGHT_OFFSET = 0.02;
 const MARKING_LINE_WIDTH = 0.35;
 
 /**
@@ -185,7 +273,17 @@ function createFloorMarkings(context: ProceduralAssetContext): THREE.Group {
 
   const lineMaterial = context.materialRegistry.getOrCreate(
     "stadium-marking-line-v1",
-    () => new THREE.MeshBasicMaterial({ color: VISUAL_PALETTE.paleMetal, transparent: true, opacity: 0.55 })
+    () =>
+      new THREE.MeshBasicMaterial({
+        color: VISUAL_PALETTE.paleMetal,
+        transparent: true,
+        opacity: 0.55,
+        // WS8.A: belt-and-braces alongside the raised MARKING_HEIGHT_OFFSET.
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2
+      })
   );
   applyVertexJitter(lineMaterial, "goalOutlines");
 
