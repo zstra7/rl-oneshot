@@ -221,3 +221,29 @@ test("return to menu hides the HUD, shows the main menu, and resets score", asyn
   expect(session?.matchState).toBe("MAIN_MENU");
   expect(session?.playerScore).toBe(0);
 });
+
+test("WS7.C: the menu-presentation ghost ball/cars hide during a live match and reappear back at menu", async ({
+  page
+}) => {
+  expect(await page.evaluate(() => window.__GAME_TEST__?.runtime.isMenuPresentationVisible())).toBe(true);
+
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(1);
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
+  const session = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(session?.matchState).toBe("PLAYING");
+  expect(await page.evaluate(() => window.__GAME_TEST__?.runtime.isMenuPresentationVisible())).toBe(false);
+
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.returnToMenu();
+    // The RAF loop is paused (see beforeEach) for deterministic manual
+    // ticking — app-state sync (and therefore this visibility toggle)
+    // happens inside onFixedTick, so it needs one more manual tick to
+    // pick up the state change returnToMenu() just made.
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(1);
+  });
+  expect(await page.evaluate(() => window.__GAME_TEST__?.runtime.isMenuPresentationVisible())).toBe(true);
+});

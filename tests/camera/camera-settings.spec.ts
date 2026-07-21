@@ -94,6 +94,11 @@ test("WS4.C: FOV widens at supersonic speed and returns to baseline", async ({ p
     window.__GAME_TEST__?.gameFlow?.openMatchSetup();
     window.__GAME_TEST__?.gameFlow?.startMatch();
     window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+    // WS7.A: kickoff spawns with a rotation facing the ball from a
+    // (round-robin) kickoff spot, not always identity — reset to facing
+    // -Z so the injected -Z velocity below is the car's own forward
+    // direction, not fought by lateral grip.
+    window.__PHYSICS_TEST__?.setCarState("car-player", { rotation: { x: 0, y: 0, z: 0, w: 1 } });
   });
 
   const baseFov = (await page.evaluate(() => window.__GAME_TEST__?.runtime.getCameraDiagnostics()?.fov)) ?? 77;

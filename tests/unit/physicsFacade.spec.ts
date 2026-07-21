@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { RL_CONSTANTS } from "@/physics/PhysicsConstants";
 import { PhysicsFacade } from "@/physics/PhysicsFacade";
+import * as V from "@/physics/Vec3Math";
 
 describe("PhysicsFacade (Phase 3 foundation)", () => {
   let physics: PhysicsFacade;
@@ -188,6 +189,40 @@ describe("PhysicsFacade (Phase 3 foundation)", () => {
 
     expect(midpoint).toBeGreaterThan(Math.min(before, after) - 1e-6);
     expect(midpoint).toBeLessThan(Math.max(before, after) + 1e-6);
+  });
+
+  /** How aligned a car's forward vector is with the direction toward the ball. */
+  function facingBallDot(carId: string): number {
+    const car = physics.getCarState(carId);
+    const ball = physics.getBallState();
+    const forward = V.applyQuaternion(V.LOCAL_FORWARD, car.rotation);
+    const toBall = V.normalize({ x: ball.position.x - car.position.x, y: 0, z: ball.position.z - car.position.z });
+    return V.dot({ x: forward.x, y: 0, z: forward.z }, toBall);
+  }
+
+  it("WS7.A: after a kickoff reset, both cars spawn facing the centred ball", () => {
+    physics.resetWorld({ carCreationOrder: ["car-player", "car-opponent"] });
+    expect(facingBallDot("car-player")).toBeGreaterThan(0.95);
+    expect(facingBallDot("car-opponent")).toBeGreaterThan(0.95);
+  });
+
+  it("WS7.A-2: all 5 kickoff variants give distinct player positions, all still facing the ball", () => {
+    const positions: Array<{ x: number; z: number }> = [];
+
+    for (let variant = 0; variant < 5; variant += 1) {
+      physics.resetWorld({
+        carCreationOrder: ["car-player", "car-opponent"],
+        kickoffVariantIndex: variant
+      });
+      expect(facingBallDot("car-player")).toBeGreaterThan(0.95);
+      expect(facingBallDot("car-opponent")).toBeGreaterThan(0.95);
+
+      const player = physics.getCarState("car-player").position;
+      positions.push({ x: player.x, z: player.z });
+    }
+
+    const distinctKeys = new Set(positions.map((p) => `${p.x.toFixed(2)},${p.z.toFixed(2)}`));
+    expect(distinctKeys.size).toBe(5);
   });
 });
 

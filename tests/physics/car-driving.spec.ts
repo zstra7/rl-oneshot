@@ -20,7 +20,13 @@ test("driving forward with real keyboard input moves the player car and it can h
     window.__GAME_TEST__?.gameFlow?.startMatch();
     window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
     window.__PHYSICS_TEST__?.setCarState("car-player", {
-      position: { x: 0, y: 1, z: 8 }
+      position: { x: 0, y: 1, z: 8 },
+      // WS7.A: kickoff now spawns cars with a rotation facing the ball
+      // from the (round-robin, variant-dependent) kickoff spot, not
+      // always identity — reset to facing -Z (straight toward the ball
+      // from this position) explicitly rather than inheriting whatever
+      // this run's kickoff variant happened to be.
+      rotation: { x: 0, y: 0, z: 0, w: 1 }
     });
     window.__PHYSICS_TEST__?.setBallState({
       position: { x: 0, y: 1, z: 0 },

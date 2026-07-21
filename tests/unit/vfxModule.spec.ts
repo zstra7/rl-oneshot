@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type * as THREE from "three";
+
 import { MatchFlowController } from "@/game-flow/MatchFlowController";
 import { PhysicsFacade } from "@/physics/PhysicsFacade";
 import { NEUTRAL_CAR_INPUT } from "@/physics/PhysicsTypes";
@@ -121,6 +123,29 @@ describe("VfxModule (PSX visual spec sections 18-20)", () => {
     }
 
     expect(vfx.getActiveParticleCount()).toBe(0);
+  });
+
+  /** WS7.D (plan/POLISH_OVERHAUL_PLAN.md): particles must not linger as stray visible dots after they die. */
+  it("inactive particle slots are driven to zero size and moved far off-screen", () => {
+    physics.resetWorld({ carCreationOrder: ["car-player", "car-opponent"] });
+    vfx.updateRenderFrame(FRAME);
+    physics.setBallState({ position: { x: 0, y: 1, z: 0 }, linearVelocity: { x: 20, y: 0, z: 0 } });
+    vfx.updateRenderFrame(FRAME);
+    expect(vfx.getActiveParticleCount()).toBeGreaterThan(0);
+
+    for (let i = 0; i < 120; i += 1) {
+      vfx.updateRenderFrame(FRAME);
+    }
+    expect(vfx.getActiveParticleCount()).toBe(0);
+
+    const points = vfx.getRoot().getObjectByName("VfxParticles") as THREE.Points;
+    const sizeAttr = points.geometry.getAttribute("size");
+    const positionAttr = points.geometry.getAttribute("position");
+
+    for (let i = 0; i < sizeAttr.count; i += 1) {
+      expect(sizeAttr.getX(i)).toBeLessThanOrEqual(0);
+      expect(positionAttr.getY(i)).toBe(-10000);
+    }
   });
 
   it("never exceeds the pool size even under sustained heavy spawning", () => {

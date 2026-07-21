@@ -105,6 +105,41 @@ test("boost-state continuous voice starts and stops with activity", async ({ pag
   expect(after).toBeLessThan(during!);
 });
 
+test("WS7.E: engine-state continuous voice starts and stops with activity", async ({ page }) => {
+  await page.evaluate(() => window.__AUDIO_TEST__?.resume());
+  await page.evaluate(() => window.__GAME_TEST__?.runtime.stop());
+
+  // Not asserting on the pre-emit voice list here: the menu-presentation
+  // ghost player car (WS7.A) can have a brief non-zero settle velocity
+  // right at boot, which — combined with engine-state being emitted
+  // unconditionally every frame (unlike boost, which is naturally never
+  // active at boot) — can occasionally latch the hysteresis "active"
+  // state before runtime.stop() takes effect. The behaviour this test
+  // actually cares about (does OUR emit turn it on, does OUR emit turn
+  // it off) is unaffected by that.
+  await page.evaluate(() =>
+    window.__AUDIO_TEST__?.emit({
+      type: "audio:engine-state",
+      carId: "car-player",
+      active: true,
+      speed: 12
+    })
+  );
+  const during = await page.evaluate(() => window.__AUDIO_TEST__?.getDiagnostics().activeContinuousVoices ?? []);
+  expect(during).toContain("engine:car-player");
+
+  await page.evaluate(() =>
+    window.__AUDIO_TEST__?.emit({
+      type: "audio:engine-state",
+      carId: "car-player",
+      active: false,
+      speed: 0
+    })
+  );
+  const after = await page.evaluate(() => window.__AUDIO_TEST__?.getDiagnostics().activeContinuousVoices ?? []);
+  expect(after).not.toContain("engine:car-player");
+});
+
 test("setSettings updates the reported diagnostics settings", async ({ page }) => {
   await page.evaluate(() => window.__AUDIO_TEST__?.setSettings({ masterVolume: 0.25, musicEnabled: false }));
 
@@ -171,4 +206,30 @@ test("playing a live match produces scheduled audio activity without console err
   const after = await page.evaluate(() => window.__AUDIO_TEST__?.getDiagnostics().scheduledOneShots ?? 0);
   expect(after).toBeGreaterThan(before!);
   expect(pageErrors).toEqual([]);
+});
+
+test("WS7.E: driving during a live match produces the player's engine hum voice", async ({ page }) => {
+  await page.evaluate(() => window.__AUDIO_TEST__?.resume());
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.openMatchSetup());
+  await page.getByTestId("start-match").click();
+
+  await expect
+    .poll(() => page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState().matchState), {
+      timeout: 10_000
+    })
+    .toBe("PLAYING");
+
+  await page.keyboard.down("KeyW");
+
+  let sawEngineVoice = false;
+  for (let i = 0; i < 40 && !sawEngineVoice; i += 1) {
+    await page.waitForTimeout(100);
+    const diagnostics = await page.evaluate(() => window.__AUDIO_TEST__?.getDiagnostics());
+    sawEngineVoice = diagnostics?.activeContinuousVoices.includes("engine:car-player") ?? false;
+  }
+
+  await page.keyboard.up("KeyW");
+
+  expect(sawEngineVoice).toBe(true);
 });

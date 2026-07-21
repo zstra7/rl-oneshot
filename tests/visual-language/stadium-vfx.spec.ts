@@ -19,20 +19,19 @@ test("stadium shows floor markings and structural ribs with no console errors", 
 });
 
 test("boosting spawns pooled VFX particles that later decay back to zero", async ({ page }) => {
+  // Park the opponent far from the play area *before* the countdown
+  // ticks run, not after: post-WS2's much snappier AI driving (and,
+  // post-WS7.A, kickoff spawn spots closer to the arena centre than the
+  // old fixed far-back pose) it can hold boost while chasing the ball
+  // during the 460-tick countdown window itself, leaving its own boost-
+  // trail VFX still decaying when "before" is sampled below — this test
+  // is about the player's own boost-trail VFX lifecycle, not AI activity.
   await page.evaluate(() => {
     window.__GAME_TEST__?.gameFlow?.openMatchSetup();
     window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } });
     window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
   });
-  // Park the opponent far from the play area: post-WS2's much snappier
-  // AI driving, it can reach and collide with the ball/player during this
-  // test's live-simulation window, spawning extra ball-impact VFX bursts
-  // that are still decaying when the test samples the particle count —
-  // this test is about the player's own boost-trail VFX lifecycle, not
-  // AI-triggered impacts.
-  await page.evaluate(() =>
-    window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } })
-  );
 
   const before = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVfxActiveParticleCount());
   expect(before).toBe(0);
