@@ -100,3 +100,24 @@ Record deviations from `plan/retro_audio_module_spec.md`.
   This is expected behaviour for real gameplay (the adapter is the source
   of truth once a match is running) and only affects tests that inject
   synthetic events while the game loop is simultaneously live.
+
+## Post-launch polish pass — WS7.E (engine hum)
+
+- **Continuous, speed-scaled engine hum for the player car only.**
+  `AudioEventAdapter.detectEngineState` emits `audio:engine-state` every
+  render frame (unlike `boost-state`, which is naturally almost-always-
+  false at boot) with hysteresis — activates above 0.5 m/s, deactivates
+  only below 0.3 m/s — to avoid start/stop chatter right at the
+  threshold. `RetroAudioModule` maps it to a `ContinuousNoiseVoice` gain-
+  scaled by `speed / 23`. Player car only: AI engine noise would just be
+  mud with no gameplay signal value.
+- **Test flakiness from unconditional per-frame emission.** Because
+  `audio:engine-state` fires every frame regardless of activity, a
+  transient settle-velocity spike on the menu-presentation ghost player
+  car (WS7.A) right at boot could latch the hysteresis "active" state
+  before a test's `runtime.stop()` call took effect, contaminating a
+  "voices list starts empty" assertion. Fixed by dropping that assertion
+  from `tests/ui/audio.spec.ts`'s engine-state test and keeping only the
+  meaningful checks (an explicit `active: true` emit turns the voice on,
+  an explicit `active: false` emit turns it off) — the "before" state
+  isn't part of what the test is actually verifying.

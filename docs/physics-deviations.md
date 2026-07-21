@@ -494,3 +494,55 @@ unified goals, floor→wall fillets with wall driving, seated boost pads.
   `pickupHalfHeight` above the floor (`BoostPadLayout.ts`) — so every pad
   floated. Changed to seat at `y = 0` (pads are authored floor-relative),
   with a comment for the (currently unused) case of a non-zero floor top.
+
+## Post-launch polish pass — WS7 (gameplay correctness fixes)
+
+- **RL-style kickoff spawns and facing.** `SpawnCarOptions.rotation` and
+  `ResetWorldOptions.kickoffVariantIndex` were added so `resetWorld()` can
+  place cars at one of 5 RL-style kickoff spots (`KICKOFF_VARIANTS` in
+  `PhysicsFacade.ts`), round-robin selected (not random) by
+  `MatchFlowController.kickoffCounter`, both cars facing the (centred)
+  ball. The facing quaternion is derived, not authored, via
+  `V.yawFacing(from, to)`: solved from `applyQuaternion`'s existing
+  rotate-about-Y convention (a yaw of `theta` maps local forward
+  `(0,0,-1)` to `(-sin(theta), 0, -cos(theta))`), verified against the
+  two known reference poses (yaw 0 keeps facing -Z, yaw pi flips to face
+  +Z) and against a passing test asserting `dot(carForward, towardBall) >
+  0.95` for all 5 variants, both cars.
+- **Auto-flip cannot be gated on `!grounded` as the plan's pseudocode
+  suggested.** A car resting upside down on the floor still reads
+  `grounded: true` with a downward-pointing `supportNormal` within a
+  couple of ticks of landing — confirmed via a throwaway Vitest debug
+  trace stepping ticks and logging `grounded`/`wheelContactCount`/
+  `supportNormal`. The suspension probes rotate with the body and don't
+  distinguish "wheels down" from "roof down" for this symmetric car
+  collider. `applyAutoFlipIfStranded` (`PhysicsFacade.ts`) instead relies
+  only on `up.y < -0.35` plus linear/angular speed gates — `up.y` this
+  negative already excludes every normal driving/aerial orientation, so
+  the speed gates alone are enough to avoid misfiring mid-dodge or
+  mid-recovery. This is a deliberate product deviation from real Rocket
+  League, which has no auto-flip (players dodge out themselves),
+  requested for this game.
+- **Kickoff-rotation regression in unrelated tests.** Several existing
+  tests implicitly assumed every kickoff-spawned car always faces -Z
+  (true before this change, no longer true with variant-dependent
+  facing): `tests/physics/car-driving.spec.ts`'s "driving forward" test
+  and `tests/camera/camera-settings.spec.ts`'s supersonic-FOV test both
+  repositioned a car via `setCarState({ position })` without also
+  resetting `rotation`, so the car's actual (now non-identity) facing
+  fought the test's injected velocity via lateral grip. Fixed by
+  explicitly resetting `rotation: { x: 0, y: 0, z: 0, w: 1 }` alongside
+  the position override in both.
+- **VFX boost-trail test timing, twice-over.** New kickoff spots sit
+  farther from the arena centre than the old fixed pose, which shifted
+  when a player's drive-and-hit-the-ball VFX burst lands in real time
+  relative to a Playwright test's fixed `waitForTimeout` calls, in two
+  different directions: `stadium-vfx.spec.ts`'s "boosting spawns..."
+  test's *before*-count assertion started seeing the opponent AI's own
+  boost trail (still decaying from countdown-window activity) — fixed by
+  parking the opponent before `advanceGameTicks(460)` runs, not after;
+  the same test's *after*-settling assertion started seeing a
+  late-arriving ball-impact burst that hadn't fully decayed by a fixed
+  1500ms wait — fixed by replacing that fixed wait with
+  `expect.poll(...).toBe(0)` so a late burst still gets time to decay
+  before the assertion runs.

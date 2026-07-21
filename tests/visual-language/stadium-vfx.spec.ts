@@ -49,13 +49,19 @@ test("boosting spawns pooled VFX particles that later decay back to zero", async
 
   await page.keyboard.up("w");
   await canvas.dispatchEvent("mouseup", { button: 0 });
-  await page.waitForTimeout(1500);
-  await page.evaluate(() => window.__GAME_TEST__?.runtime.stop());
 
-  const afterSettling = await page.evaluate(() =>
-    window.__GAME_TEST__?.runtime.getVfxActiveParticleCount()
-  );
-  expect(afterSettling).toBe(0);
+  // WS7.A: kickoff spawns are farther from the arena centre than the old
+  // fixed pose, so the player's drive-in-and-hit-the-ball moment (which
+  // can itself spawn a short-lived ball-impact VFX burst) now sometimes
+  // lands later in real time — poll instead of a single fixed wait so a
+  // late-arriving burst still gets to fully decay before this asserts.
+  await expect
+    .poll(() => page.evaluate(() => window.__GAME_TEST__?.runtime.getVfxActiveParticleCount()), {
+      timeout: 5_000
+    })
+    .toBe(0);
+
+  await page.evaluate(() => window.__GAME_TEST__?.runtime.stop());
 });
 
 test("a goal spawns a celebratory VFX burst", async ({ page }) => {
