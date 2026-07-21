@@ -1,3 +1,4 @@
+import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
 import type { AppState } from "@/core/ApplicationState";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
 import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
@@ -10,6 +11,8 @@ export interface BrowserRuntimeTestApi {
   stop(): void;
   /** Bypasses requestAnimationFrame; deterministic fixed-tick stepping. */
   stepFixedTicks(count: number): void;
+  /** Phase 8: chase camera position/target/mode, or null before it exists. */
+  getCameraDiagnostics(): CameraDiagnostics | null;
 }
 
 /**

@@ -16,7 +16,8 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       start: () => runtime.start(),
       stop: () => runtime.stop(),
       stepFixedTicks: (count: number) =>
-        runtime.stepFixedTicksForTesting(count)
+        runtime.stepFixedTicksForTesting(count),
+      getCameraDiagnostics: () => runtime.getCameraDiagnostics()
     },
     gameFlow: runtime.getGameFlowTestApi()
   };

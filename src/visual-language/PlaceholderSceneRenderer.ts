@@ -62,6 +62,16 @@ export class PlaceholderSceneRenderer
     this.scene?.add(object);
   }
 
+  /**
+   * The single Three.js camera (core architecture spec: exactly one
+   * renderer/scene/camera). Phase 8's `ChaseCameraController` drives this
+   * camera's transform/fov every render frame; nothing else should create
+   * a second `THREE.Camera`.
+   */
+  public getCamera(): THREE.PerspectiveCamera | null {
+    return this.camera;
+  }
+
   public removeFromScene(object: THREE.Object3D): void {
     this.scene?.remove(object);
   }

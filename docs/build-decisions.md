@@ -109,3 +109,26 @@
   also fires correctly when ticks are driven by
   `stepFixedTicksForTesting`/`advanceGameTicks` while the rAF loop itself
   is paused.
+
+## Phase 8
+
+- **`ModuleContainer.camera` was deliberately left as `NullCameraModule`**
+  rather than swapped for a concrete `ChaseCameraController` type (the
+  pattern used for `gameFlow`/`input` in earlier phases). The camera
+  controller needs two things that do not exist when `ModuleContainer`'s
+  generic slots are eagerly constructed: the `THREE.PerspectiveCamera`
+  created by `PlaceholderSceneRenderer.initialise()`, and the ready
+  `MatchFlowController`. Rather than threading those through the
+  container, it is constructed and registered directly in
+  `GameRuntime.initialise()` as an integration binding — the exact same
+  pattern already used for `PhysicsRenderBinding` and
+  `BoostPadRenderBinding` (both of which also need post-construction
+  wiring the generic container can't provide). See
+  `src/camera/NullCameraModule.ts`'s doc comment.
+- **Gameplay input is now sampled once per fixed tick unconditionally**,
+  not only when `gameFlow.areControlsActive()`. Camera-relevant edges
+  (ball-camera toggle, swivel, rear view) need to reach the camera
+  controller even during countdown/pause/celebration (real games let you
+  toggle ball-cam or look around while waiting for kickoff); only the
+  `CarInput` half of the sampled frame is still gated behind
+  `areControlsActive()` before being handed to physics.

@@ -26,6 +26,8 @@ import type {
   MatchState
 } from "@/game-flow/MatchFlowTypes";
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
+import { ChaseCameraController } from "@/camera/ChaseCameraController";
+import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
 
 export type UiRequestedAction = { readonly kind: "noop" };
@@ -101,6 +103,9 @@ export interface GameRuntimeFacade {
   /** Boost 0-100 for the human player's car, or 0 before it has spawned. */
   getPlayerBoostAmount(): number;
 
+  /** Null before the camera controller has been constructed. */
+  getCameraDiagnostics(): CameraDiagnostics | null;
+
   /** Populated once `initialise()` completes; used by the test API installer. */
   getGameFlowTestApi(): BrowserGameFlowTestApi;
 }
@@ -112,6 +117,7 @@ export class GameRuntime implements GameRuntimeFacade {
   private physicsRenderBinding: PhysicsRenderBinding | null = null;
   private boostPadRenderBinding: BoostPadRenderBinding | null = null;
   private gameFlowTestApi: BrowserGameFlowTestApi | null = null;
+  private cameraController: ChaseCameraController | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -198,6 +204,19 @@ export class GameRuntime implements GameRuntimeFacade {
     this.moduleStatus["gameFlow"] = "initialising";
     gameFlow.initialise({ physics: this.modules.physics });
     this.moduleStatus["gameFlow"] = "ready";
+
+    const camera = this.sceneRenderer.getCamera();
+    if (camera) {
+      this.cameraController = new ChaseCameraController(
+        this.modules.physics,
+        gameFlow,
+        camera,
+        () => this.fixedStepCoordinator.alpha,
+        PLAYER_CAR_ID
+      );
+      this.frameCoordinator.register(this.cameraController);
+    }
+
     this.gameFlowTestApi = createGameFlowTestApi(
       gameFlow,
       this.modules.physics,
@@ -280,22 +299,24 @@ export class GameRuntime implements GameRuntimeFacade {
       return;
     }
 
-    if (modules.gameFlow.areControlsActive()) {
-      // Sample input for this exact tick and hand it to physics before
-      // stepping (core architecture spec section 25: sample input ->
-      // submit CarInput -> step physics). Grounded state comes from the
-      // real Phase 5 suspension/ground-contact state (falls back to true
-      // before the car has spawned/settled).
-      const grounded = modules.physics.getCarIds().includes(PLAYER_CAR_ID)
-        ? modules.physics.getCarState(PLAYER_CAR_ID).grounded
-        : true;
+    // Sample input once per tick regardless of match state (input spec:
+    // one sample per tick) so camera toggles/swivel still respond during
+    // countdown/pause, then either apply or neutralise the CarInput half
+    // of the frame depending on whether controls are currently live
+    // (core architecture spec section 25: sample input -> submit CarInput
+    // -> step physics; game-flow spec section 27: controls are
+    // neutralised before GO and during any non-live match state).
+    const grounded = modules.physics.getCarIds().includes(PLAYER_CAR_ID)
+      ? modules.physics.getCarState(PLAYER_CAR_ID).grounded
+      : true;
 
-      const frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
+    const frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
+    this.cameraController?.consumeCameraInput(frame.camera);
+
+    if (modules.gameFlow.areControlsActive()) {
       modules.physics.setCarInput(PLAYER_CAR_ID, frame.car);
       modules.physics.setCarControlProfile(PLAYER_CAR_ID, frame.carControlProfile);
     } else {
-      // game-flow spec section 27: controls are neutralised before GO and
-      // during any non-live match state (countdown, celebration, results).
       modules.physics.clearAllInputs();
     }
 
@@ -492,6 +513,10 @@ export class GameRuntime implements GameRuntimeFacade {
       : 0;
   }
 
+  public getCameraDiagnostics(): CameraDiagnostics | null {
+    return this.cameraController?.getDiagnostics() ?? null;
+  }
+
   public replayMatch(): void {
     this.requireModules().gameFlow.replayMatch();
     this.emitSessionStateChanged();
@@ -523,6 +548,9 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.boostPadRenderBinding?.dispose();
     this.boostPadRenderBinding = null;
+
+    this.cameraController?.dispose();
+    this.cameraController = null;
 
     this.gameFlowTestApi = null;
 

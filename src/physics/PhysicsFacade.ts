@@ -606,6 +606,37 @@ export class PhysicsFacade implements GameModule {
     return sensor ? sensor.definition.centre : null;
   }
 
+  /**
+   * Camera-collision avoidance (game-flow spec section 21): casts a ray
+   * from `origin` toward `direction` (normalised) and returns the
+   * distance to the nearest *arena* collider hit within `maxDistance`, or
+   * null if nothing is hit. Filtered to arena colliders only (not cars,
+   * the ball, boost pads, or goal sensors) via `filterPredicate`, since
+   * Rapier collision groups are not otherwise in use in this project.
+   */
+  public raycastArena(
+    origin: { x: number; y: number; z: number },
+    direction: { x: number; y: number; z: number },
+    maxDistance: number
+  ): number | null {
+    const world = this.requireWorld();
+    const ray = new RAPIER.Ray(origin, direction);
+    const arenaBodies = this.arenaBodies;
+
+    const hit = world.castRay(
+      ray,
+      maxDistance,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (collider) => arenaBodies.includes(collider.parent() as RAPIER.RigidBody)
+    );
+
+    return hit ? hit.timeOfImpact : null;
+  }
+
   public clearGoalEvents(): void {
     this.goalEvents = [];
   }
