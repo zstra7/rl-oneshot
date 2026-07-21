@@ -112,7 +112,15 @@ test("WS4.C: FOV widens at supersonic speed and returns to baseline", async ({ p
   const sustain = (async () => {
     while (sustaining) {
       await page.evaluate(() => {
-        window.__PHYSICS_TEST__?.setCarState("car-player", { linearVelocity: { x: 0, y: 0, z: -25 } });
+        // Re-assert rotation alongside velocity each cycle: at this speed
+        // and with WS7.A's farther-from-centre kickoff spawns, the car
+        // can reach and bounce off the back wall multiple times over this
+        // loop's several-second window, which (via lateral grip) can spin
+        // it off its -Z heading and drop it out of supersonic mid-poll.
+        window.__PHYSICS_TEST__?.setCarState("car-player", {
+          linearVelocity: { x: 0, y: 0, z: -25 },
+          rotation: { x: 0, y: 0, z: 0, w: 1 }
+        });
       });
       await page.waitForTimeout(50);
     }

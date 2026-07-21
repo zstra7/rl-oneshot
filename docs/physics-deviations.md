@@ -532,7 +532,13 @@ unified goals, floor→wall fillets with wall driving, seated boost pads.
   resetting `rotation`, so the car's actual (now non-identity) facing
   fought the test's injected velocity via lateral grip. Fixed by
   explicitly resetting `rotation: { x: 0, y: 0, z: 0, w: 1 }` alongside
-  the position override in both.
+  the position override in both. The supersonic-FOV test needed this
+  reset on *every* iteration of its multi-second velocity-sustaining
+  loop, not just once up front: WS7.A's farther-from-centre kickoff
+  spawns mean the car can reach and bounce off the back wall several
+  times within the test's window, re-spinning it off its -Z heading via
+  lateral grip and intermittently dropping it out of supersonic mid-poll
+  (observed as ~3/8 flaky failures before the fix, 0/8 after).
 - **VFX boost-trail test timing, twice-over.** New kickoff spots sit
   farther from the arena centre than the old fixed pose, which shifted
   when a player's drive-and-hit-the-ball VFX burst lands in real time
