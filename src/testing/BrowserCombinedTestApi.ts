@@ -26,6 +26,7 @@ export interface BrowserRuntimeTestApi {
   setVisualPreset(preset: VisualPreset): void;
   getVisualPreset(): VisualPreset;
   getVisualDiagnostics(): VisualDiagnostics;
+  getVfxActiveParticleCount(): number;
 }
 
 /**

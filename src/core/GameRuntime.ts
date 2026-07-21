@@ -33,6 +33,7 @@ import type { AiDebugState } from "@/ai/AiTypes";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import { PSX_RENDER_PRESETS, type VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
+import { VfxModule } from "@/vfx/VfxModule";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
@@ -130,6 +131,9 @@ export interface GameRuntimeFacade {
   setVisualPreset(preset: VisualPreset): void;
   getVisualPreset(): VisualPreset;
   getVisualDiagnostics(): VisualDiagnostics;
+
+  /** Test/diagnostic hook: how many pooled VFX particles are currently alive. */
+  getVfxActiveParticleCount(): number;
 }
 
 export class GameRuntime implements GameRuntimeFacade {
@@ -140,6 +144,7 @@ export class GameRuntime implements GameRuntimeFacade {
   private boostPadRenderBinding: BoostPadRenderBinding | null = null;
   private gameFlowTestApi: BrowserGameFlowTestApi | null = null;
   private cameraController: ChaseCameraController | null = null;
+  private vfxModule: VfxModule | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -227,6 +232,10 @@ export class GameRuntime implements GameRuntimeFacade {
     this.moduleStatus["gameFlow"] = "initialising";
     gameFlow.initialise({ physics: this.modules.physics });
     this.moduleStatus["gameFlow"] = "ready";
+
+    this.vfxModule = new VfxModule(this.modules.physics, gameFlow);
+    this.frameCoordinator.register(this.vfxModule);
+    this.sceneRenderer.addToScene(this.vfxModule.getRoot());
 
     const camera = this.sceneRenderer.getCamera();
     if (camera) {
@@ -583,6 +592,10 @@ export class GameRuntime implements GameRuntimeFacade {
     return this.sceneRenderer?.getVisualPreset() ?? "balanced";
   }
 
+  public getVfxActiveParticleCount(): number {
+    return this.vfxModule?.getActiveParticleCount() ?? 0;
+  }
+
   public getVisualDiagnostics(): VisualDiagnostics {
     return (
       this.sceneRenderer?.getVisualDiagnostics() ?? {
@@ -627,6 +640,9 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.cameraController?.dispose();
     this.cameraController = null;
+
+    this.vfxModule?.dispose();
+    this.vfxModule = null;
 
     this.gameFlowTestApi = null;
 

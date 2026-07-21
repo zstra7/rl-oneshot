@@ -73,6 +73,64 @@ Record deviations from `plan/psx_visual_stadium_game_loop_spec_v1_1_boost_pads.m
   jitter and uses the lightest dither, which doubles as a reasonable
   accessibility-leaning option) — a dedicated accessibility settings UI
   is Phase 15 ("UI and settings polish").
+## Phase 14
+
+- **Stadium field dimensions were NOT resized to this spec's 72x48/18-tall
+  footprint** (section 12's `STADIUM_DIMENSIONS`). The current 40x60/20-
+  tall footprint (`DEFAULT_STADIUM_DIMENSIONS` in `src/assets/AssetTypes.ts`)
+  is a pre-existing, already-documented deviation from Phase 3 onward
+  (`docs/physics-deviations.md` Phase 7 section: "resizing the field to
+  72x48 now would be a recalibration exercise out of scope" — car speed
+  curves, suspension, boost pad layout, camera clamping, and AI awareness
+  radii across Phases 3-10 are all tuned against the current footprint).
+  Phase 14's stadium art (floor markings, structural ribs) was scaled to
+  fit the *existing* dimensions rather than the spec's literal numbers.
+- **VFX is scoped to three effects with an unambiguous, physics-
+  observation-only trigger** — boost trail (a car's `boostAmount`
+  decreasing tick-over-tick), a ball-impact burst (the ball's velocity
+  changing abruptly frame-to-frame), and a goal-celebration burst
+  (entering the `GOAL_CELEBRATION` match state, team identified by which
+  score increased). Car-car impact particles, jump bursts, and powerslide
+  sparks (spec section 19) need either a dedicated collision-event
+  channel or per-tick input-edge tracking neither of which exist yet
+  without extending the physics/input module surface — deferred rather
+  than approximated with a worse heuristic. The full goal-celebration
+  choreography (shockwave, shards, arena pulse, star streak, banner,
+  camera impulse — spec section 20) is reduced to a single team-coloured
+  particle burst; the other five sub-effects are separate systems
+  (shader-based arena pulse, a dedicated banner component, a camera
+  controller hook) each substantial enough to warrant their own pass.
+- **A single shared, fixed-size (500) particle pool rendered as one
+  `THREE.Points` draw call**, not a separate system per effect type —
+  satisfies spec section 18's "pooling" requirement directly. Uses a
+  custom `THREE.ShaderMaterial` (not the built-in `THREE.PointsMaterial`,
+  which only supports one uniform point size for an entire draw call, not
+  a per-vertex size attribute) so each particle can shrink/fade over its
+  own lifetime and an inactive pooled particle can be driven to
+  `gl_PointSize = 0` (genuinely invisible) instead of rendering as a
+  stray fixed-size dot sitting at the origin.
+- **Floor markings (centre line, centre circle, goal-box outlines) and
+  structural ribs were added to `StadiumGeometryFactory.ts`**; curved
+  floor-to-wall/wall-to-ceiling transitions, the segmented transparent
+  glass shell, and the floating mechanical base (spec section 13) were
+  not — each is a substantially larger geometry-authoring task (curved
+  transitions need new procedural geometry generation entirely; the
+  glass shell needs the spec's 3-layer material system section 11
+  describes) than the flat/thin marking geometry and instanced rib boxes
+  built here.
+- **Starfield goal response** (spec section 16: "radial star streak, team-
+  colour pulse, brief exposure lift, return within 0.5 seconds") was not
+  built — the existing 3-layer starfield from Phase 2 is unchanged. The
+  new goal-celebration VFX burst (above) covers the moment visually; the
+  starfield-specific response is deferred alongside the rest of the full
+  goal-celebration choreography.
+- New jitter categories were exercised on the new geometry: floor
+  markings and boost pads share the `goalOutlines` category ("thin
+  gameplay lines use reduced jitter" — an exact semantic match for floor
+  markings, unlike boost pads' looser fit noted in Phase 13); structural
+  ribs use `arenaMetal` (maximum jitter, matching the wall/floor/ceiling
+  they extend).
+
 - **Colour quantisation is per-RGB-channel** (`floor(colour * levels +
   0.5) / levels` on the raw `vec3` colour), matching section 6's "32
   levels per RGB channel" default exactly — not a fixed indexed/LUT
