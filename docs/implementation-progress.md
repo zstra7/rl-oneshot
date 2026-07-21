@@ -1,115 +1,150 @@
 # Current Phase
 
-Phase: 8 — Camera and Gameplay HUD
+Phase: 9 — Basic Opponent AI
 Status: Complete — exit criteria verified
 Last verified commit: (this commit)
 
 ## Working
-- `src/camera/ChaseCameraController.ts`: the real gameplay chase camera
-  (game-flow spec section 21 / core architecture spec section 64),
-  driving the single `THREE.PerspectiveCamera` owned by
-  `PlaceholderSceneRenderer` (`getCamera()`, new this phase) rather than
-  creating a second camera. Reads only physics render snapshots plus
-  match-flow state; never steps or mutates physics.
-  - Chase framing: smoothed position/target (frame-rate-independent
-    exponential smoothing), velocity-free look-ahead along the car's
-    forward vector, distance/height widened as the ball separates from
-    the car ("ball framing" / "ball remains visible in normal play").
-  - Camera collision: `PhysicsFacade.raycastArena()` (new) casts a ray
-    from the look target to the desired camera position, filtered to
-    arena colliders only (not cars/ball/boost pads/goal sensors); pulls
-    the camera inward on a hit.
-  - Ball-camera toggle (Space, edge-tracked by the input module since
-    Phase 4): flips a persistent `ballCameraEnabled` flag that biases the
-    look target strongly toward the ball.
-  - Rear view (held): swaps the chase direction to look back along the
-    way the car came, without altering the ball-camera toggle state.
-  - Camera swivel: a temporary yaw/pitch offset from `CameraInput.swivelX/Y`
-    that eases back to the default framing via the same smoothing used
-    for the rest of the rig — no separate "return" logic needed.
-  - Menu camera: a slow orbit around the field for the main-menu/match-
-    setup/settings presentation, distinct from the live chase camera.
-- `GameRuntime.onFixedTick` now samples gameplay input once per tick
-  unconditionally (previously only when controls were active) so
-  `CameraInput` edges (ball-camera toggle, swivel, rear view) still reach
-  the camera controller during countdown/pause, while `CarInput` is still
-  gated by `areControlsActive()` as before.
-- `GameplayHud`/menu components unchanged in substance from Phase 7 —
-  already satisfied "Score/time HUD", "Boost meter", "Countdown overlay",
-  and "Pause/results basics" per this phase's exit list; Phase 8 only
-  needed to add the camera work around them.
-- `window.__GAME_TEST__.runtime.getCameraDiagnostics()`: camera
-  position/target/fov/ballCameraEnabled/rearViewHeld, for deterministic
-  Playwright verification of "camera does not leave valid space".
+- `src/ai/OpponentAiController.ts`: a real opponent AI producing `CarInput`
+  for `car-opponent` every fixed tick, replacing the `NeutralOpponentAi`
+  placeholder. Implements core architecture spec section 65's ordered
+  checklist, one fixed "Medium-like" parameter set (`src/ai/AiConstants.ts`)
+  — no difficulty tiers or humanisation yet (Phase 10):
+  1. **Ground target driving** (`GroundManeuverController.driveTowardPoint`):
+     a heading-error proportional steering controller outputting the
+     normalised `throttle`/`steer`/`boost`/`powerslide` the physics
+     module's own yaw-rate servo already knows how to consume.
+  2. **Recovery** (`computeRecoveryInput`): drives `pitch`/`roll` to
+     right an airborne/flipped car via the same `CarInput` channel the
+     human aerial controller uses — no special-cased physics path.
+  3. **Ball prediction** (`BallPredictor.predictBallTrajectory`): the AI
+     spec's explicitly-permitted analytical fallback (gravity + a single
+     floor-bounce reflection), not a second Rapier world.
+  4. **Reachability** (`Reachability.estimateReachSeconds`): the spec's
+     explicitly-recommended flat heuristic (distance/speed + turn
+     penalty) — deliberately not an iterative/exact solver.
+  5. **Basic intercept**: samples the predicted trajectory for the
+     earliest point the AI can reach at or before the ball does.
+  6. **Shoot open goal**: approaches from the far side of the ball
+     (opposite the target goal) so contact sends it goalward.
+  7. **Retreat**: holds a goal-side holding position, loosely shadowing
+     the ball's lateral position, when neither attacking nor defending
+     nor low on boost.
+  8. **Basic defence**: goal-side shadow position between the ball and
+     the AI's own goal, triggered by an actual goal-threat (ball heading
+     toward the danger zone) or the human being clearly closer/faster.
+  9. **Kickoff**: a *committed* state (AI spec section 27) entered on the
+     `MatchState` transition into `PLAYING`/`OVERTIME_PLAYING`, not
+     re-derived from ball physics every tick (see Known deviations).
+  10. **Boost-pad collection**: routes to the nearest active pad
+      (preferring full pads when critically low) when boost is low and
+      neither attacking nor defending is more urgent, gated by an
+      absolute reach-time cutoff so it isn't crowded out by a
+      relative-only "faster than human" comparison (see Known deviations).
+- `PhysicsFacade` unchanged; AI reads only public `CarSerializableState`/
+  `BallSerializableState`/`BoostPadObservation` plus goal-sensor centres
+  already exposed for the camera (Phase 8) — no new physics surface.
+- `GameRuntime.onFixedTick`: when controls are active, gathers an
+  `AiUpdateContext` from live physics/match-flow state each tick and
+  applies `OpponentAiController.update()`'s result via
+  `physics.setCarInput("car-opponent", ...)`, mirroring exactly how the
+  human player's `CarInput` is applied.
+- `ModuleContainer.ai` is now the concrete `OpponentAiController` (was
+  the generic `GameModule`-typed `NeutralOpponentAi` placeholder).
 
 ## Failing
-- None. All Phase 8 exit criteria verified locally in this session.
+- None. All Phase 9 exit criteria verified locally in this session.
 
 ## Deferred
-- Camera shake (spec: Off/Low/Full, default Low, triggered by goals and
-  car-ball/car-car impacts) — no canonical impact-event stream exists yet
-  (Phase 5/9 territory, see `docs/physics-deviations.md`), and shake
-  settings have no persistence system until Phase 15. Not implemented
-  this phase; the camera rig is otherwise fully functional without it.
-- Full HUD art direction (angular segmented boost meter, display
-  typography, glow/scanline treatment) — Phase 13 (PSX visual language)
-  and Phase 15 (UI polish) scope; the Phase 7 HUD components already
-  satisfy this phase's "HUD is readable" exit criterion as plain,
-  legible placeholders.
-- Camera settings (FOV/distance/height/stiffness/ball-look-strength/shake
-  from the settings spec section 25) are not exposed in the Settings UI
-  — no settings persistence exists yet (Phase 15).
+- Difficulty tiers (easy/medium/hard), reaction delay, perception noise/
+  history, humanisation/mistake modelling, utility-scored tactical
+  planning (possession/threat assessment, candidate scoring), shot
+  power/dodge shots, 50/50 planning, boost denial/contested-pad logic,
+  wall/ceiling driving, aerial play, and score/time-aware strategy shifts
+  — all explicitly AI spec sections beyond core architecture spec section
+  65's Phase 9 list; Phase 10 ("AI difficulty and tactics") scope.
+- No jump/dodge/aerial decision-making at all (ground-only): not in the
+  Phase 9 checklist. The AI will still get airborne from ball/car
+  impacts and recovers correctly, it just never *chooses* to jump.
+- No canonical `PhysicsEvent` stream exists yet (see
+  `docs/physics-deviations.md`), so `AiUpdateContext` omits
+  `recentPhysicsEvents` from the full spec section 3 interface, and
+  `AiMatchContext.scoreFor/scoreAgainst`/time fields are omitted (score/
+  time awareness is AI spec section 35, Phase 10 scope).
+- No `getTelemetry()`/`clearTelemetry()`/`setSeed()`/`setEnabled()` from
+  the full `OpponentAiModule` public API (spec section 3) — only
+  `update()`, `getDebugState()`, `initialise()`, `dispose()` exist.
+  Telemetry/seeding are meaningful once difficulty/humanisation (Phase
+  10) introduce actual randomness to seed.
 
 ## Tests passing
 - `npm run validate` — all four validators pass.
 - `npm run type-check` (`vue-tsc --noEmit`) — zero errors.
-- `npm run test:unit` (Vitest) — unchanged at 95/95 (camera logic is
-  render-frame/THREE-driven, not meaningfully unit-testable without a
-  browser; verified via Playwright instead, per established precedent
-  for render-only code).
+- `npm run test:unit` (Vitest) — 14 files, 103 tests, all passing,
+  including a new `opponentAi.spec.ts` (8 tests, real Rapier world, no
+  mocking): recovery from a near-exact 180-degree flip, ground driving +
+  basic intercept reaching a stationary ball, a shot approach that sends
+  the ball toward the target goal (not sideways), goal-side defensive
+  shadowing when the ball threatens, kickoff commitment holding even
+  while the ball is still settling from its drop, boost-pad collection
+  when low and not urgent, retreat holding a goal-side position, and a
+  900-tick mixed-scenario run producing only finite `CarInput` values
+  (no NaN).
 - `npm run build` (validate -> type-check -> unit -> `vite build`) —
   passes on a plain production build.
-- Playwright: all 35 prior tests still pass, plus a new
-  `tests/camera/chase-camera.spec.ts` (3 tests): the menu camera reports
-  a sane finite position/fov at boot, the chase camera stays within
-  arena bounds and tracks within a normal chase distance of the player
-  car while driving with real keyboard input, and Space toggles
-  `ballCameraEnabled` through the live input pipeline — 38/38 total on
-  `chromium-dev` and `chromium-preview` (test-mode build). Verified
-  visually via Playwright screenshots: the menu camera now orbits
-  (previously a fixed debug angle), and the live chase camera visibly
-  follows the player car from behind during driving.
+- Playwright: all 38 prior tests still pass, plus a new
+  `tests/ai/opponent-ai.spec.ts` (2 tests): the AI-controlled opponent
+  car visibly moves on its own (no human input at all) once a match goes
+  live, and stays idle through the countdown before GO (controls
+  neutralised, matching the human player) — 40/40 total on
+  `chromium-dev`. Verified visually via a Playwright screenshot of a
+  live match with the AI driving unattended.
 
 ## Next exact task
-- Begin Phase 9 (basic opponent AI) per `plan/MASTER_BUILD_BRIEF.md` and
-  `plan/predictive_opponent_ai_module_spec_v1_1_boost_pads.md`, in the
-  brief's strict order: ground target driving, recovery, ball
-  prediction, reachability, basic intercept, shoot open goal, retreat,
-  basic defence, kickoff, boost-pad collection — "one Medium-like
-  parameter set" initially, no difficulty tiers yet (Phase 10). Required
-  reading before starting: Core Architecture spec (already read) + this
-  progress file + the opponent AI module spec. `car-opponent` already
-  spawns and receives neutral input only; Phase 9 is the first phase to
-  actually call `physics.setCarInput("car-opponent", ...)` with real
-  computed input.
+- Begin Phase 10 (AI difficulty and tactics) per `plan/MASTER_BUILD_BRIEF.md`
+  and the remaining sections of
+  `plan/predictive_opponent_ai_module_spec_v1_1_boost_pads.md` not yet
+  read in depth: difficulty configuration (section 7), randomness/seeding
+  (section 8), humanisation model (section 34), utility-based tactical
+  planner refinement (section 16), possession/threat assessment (13-14),
+  and score/time awareness (35). Required reading before starting: this
+  progress file + those sections (module boundary/API/observation model
+  sections are already read from Phase 9). `AiDifficulty`/`setDifficulty`/
+  `setSeed`/telemetry are the concrete public-API gaps to fill first.
 
 ## Known deviations
-- `ModuleContainer.camera` remains the no-op `NullCameraModule` — the
-  real `ChaseCameraController` is wired up as a `GameRuntime`-owned
-  integration binding (same pattern as `PhysicsRenderBinding`/
-  `BoostPadRenderBinding`), not by replacing this slot's type, because it
-  needs the scene renderer's camera object and the ready
-  `MatchFlowController`, neither available when `ModuleContainer`
-  eagerly constructs its generic slots. See
-  `src/camera/NullCameraModule.ts`'s updated doc comment and
-  `docs/build-decisions.md` Phase 8 section.
-- Camera framing/smoothing constants (`src/camera/CameraConstants.ts`)
-  beyond the spec's four explicit numbers (distance 7.5, height 3.2,
-  lookAhead 4.5, fov 72) are provisional, first-pass values — the spec
-  describes "smoothed position", "ball-aware framing", etc. only
-  qualitatively. Revisit during a dedicated camera calibration pass if
-  playtesting shows the feel is off.
-- Carried over from Phase 1-7: `window.__GAME_TEST__`/`__ASSET_TEST__`/
+- **Kickoff is a committed match-state-driven state, not a per-tick ball-
+  physics heuristic.** An earlier version checked "is the ball at rest
+  near the centre" every tick — found via ad hoc Vitest debugging that
+  this false-negatives while the kickoff-reset ball is still bouncing to
+  a stop (its restitution-driven settle can take longer than a real
+  countdown). Fixed by tracking the `MatchState` transition into
+  `PLAYING`/`OVERTIME_PLAYING` and committing to `kickoff` mode until the
+  ball leaves a 3m radius of the centre or a timeout elapses (AI spec
+  section 27's own "kickoff state remains committed until..." framing).
+- **Attack eligibility needs an absolute time cutoff, not just a relative
+  "faster than the human" comparison.** The reachability comparison used
+  for both the defence trigger and the attack gate are near-complements
+  of each other (`humanReach + margin < aiReach` vs. its negation) — if
+  attack were gated purely on "not clearly slower than the human", it
+  would fire for every reachable-eventually ball regardless of distance,
+  making boost-pad collection and retreat unreachable. Fixed with
+  `AI_CONSTANTS.attackReachTimeLimit` (3.5s): found and fixed via ad hoc
+  Vitest debugging of a boost-collection test scenario.
+- **Recovery needs an explicit rate-damping term, not proportional-only
+  control.** A pure `-error * gain` controller on `pitch`/`roll` badly
+  overshoots a large initial error (e.g. a full flip): it saturates the
+  output for many ticks, builds up real angular momentum, and sails
+  straight past upright into a different resting orientation (observed:
+  landed on its side instead of settling upright). Fixed by adding a
+  damping term proportional to the car's own current local pitch/roll
+  rate. Also: an exact 180-degree flip is a genuine unstable equilibrium
+  for the proportional error term alone (both `pitch`/`roll` errors
+  evaluate to ~0 even though the car is fully inverted) — fixed with a
+  symmetry-breaking forced roll while the car's world-space up vector is
+  still near-inverted and the proportional terms are near-zero. Both
+  found via ad hoc Vitest debugging with periodic orientation logging.
+- Carried over from Phase 1-8: `window.__GAME_TEST__`/`__ASSET_TEST__`/
   `__PHYSICS_TEST__`/`__INPUT_TEST__` only install when `__TEST_BUILD__`
   is true, which the literal `test:release` script (plain `npm run
   build`) does not set — see `docs/build-decisions.md`. A benign

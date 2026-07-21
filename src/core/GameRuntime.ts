@@ -316,6 +316,25 @@ export class GameRuntime implements GameRuntimeFacade {
     if (modules.gameFlow.areControlsActive()) {
       modules.physics.setCarInput(PLAYER_CAR_ID, frame.car);
       modules.physics.setCarControlProfile(PLAYER_CAR_ID, frame.carControlProfile);
+
+      if (modules.physics.getCarIds().includes(OPPONENT_CAR_ID)) {
+        const ownGoalCentre = modules.physics.getGoalSensorCentre("opponent");
+        const targetGoalCentre = modules.physics.getGoalSensorCentre("player");
+
+        if (ownGoalCentre && targetGoalCentre) {
+          const aiInput = modules.ai.update({
+            tick,
+            matchState: modules.gameFlow.getMatchState(),
+            controlledCar: modules.physics.getCarState(OPPONENT_CAR_ID),
+            humanCar: modules.physics.getCarState(PLAYER_CAR_ID),
+            ball: modules.physics.getBallState(),
+            boostPads: modules.physics.getBoostPadStates(),
+            ownGoalCentre,
+            targetGoalCentre
+          });
+          modules.physics.setCarInput(OPPONENT_CAR_ID, aiInput);
+        }
+      }
     } else {
       modules.physics.clearAllInputs();
     }

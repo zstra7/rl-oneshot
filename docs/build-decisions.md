@@ -132,3 +132,16 @@
   toggle ball-cam or look around while waiting for kickoff); only the
   `CarInput` half of the sampled frame is still gated behind
   `areControlsActive()` before being handed to physics.
+
+## Phase 9
+
+- `OPPONENT_AI_CONTRACT_VERSION` was not added/wired into
+  `validateModuleContracts()`, consistent with the existing precedent
+  that `PHYSICS_MODULE_CONTRACT_VERSION` and the game-flow contract are
+  also defined but not threaded through that call (see Phase 1 section
+  above) — `GameRuntime.initialise()` still calls
+  `validateModuleContracts([])`.
+- `AiUpdateContext` (this project's own type, not the full AI spec
+  section 3 `AiUpdateContext`) omits `recentPhysicsEvents` and most of
+  `AiMatchContext` — see `docs/implementation-progress.md` Phase 9
+  "Deferred" section for the full list and why.

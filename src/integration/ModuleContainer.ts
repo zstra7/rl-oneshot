@@ -1,4 +1,4 @@
-import { NeutralOpponentAi } from "@/ai/NeutralOpponentAi";
+import { OpponentAiController } from "@/ai/OpponentAiController";
 import { AssetPipeline } from "@/assets/AssetPipeline";
 import type { AudioModule } from "@/audio/AudioModule";
 import { NullAudioModule } from "@/audio/NullAudioModule";
@@ -28,7 +28,7 @@ export interface ModuleContainer {
   assets: AssetPipeline;
   physics: PhysicsFacade;
   input: InputControlsModule;
-  ai: GameModule;
+  ai: OpponentAiController;
   gameFlow: MatchFlowController;
   stadium: GameModule;
   camera: GameModule;
@@ -41,7 +41,7 @@ export function createNullModuleContainer(): ModuleContainer {
     assets: new AssetPipeline(),
     physics: new PhysicsFacade(),
     input: new InputControlsModule(),
-    ai: new NeutralOpponentAi(),
+    ai: new OpponentAiController(),
     gameFlow: new MatchFlowController(),
     stadium: new NullStadiumModule(),
     camera: new NullCameraModule(),
