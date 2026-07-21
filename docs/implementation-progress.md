@@ -1,129 +1,121 @@
 # Current Phase
 
-Phase: 1 — Core Runtime and Fixed-Step Loop
+Phase: 2 — Asset and Procedural Foundation
 Status: Complete — exit criteria verified
 Last verified commit: (this commit)
 
 ## Working
-- `GameRuntime` (`src/core/GameRuntime.ts`): the single application
-  coordinator. Owns the one `requestAnimationFrame` loop, the one
-  `FixedStepCoordinator` (120 Hz), a `FrameCoordinator` for render-frame
-  consumers, a typed `EventDispatcher<TypedEventMap>`, a `ModuleContainer`
-  of null/placeholder modules, and the one `PlaceholderSceneRenderer`
-  (Three.js renderer/scene/camera — replaces the Phase 0 inline canvas
-  logic).
-- `GameRuntimeFactory` singleton (`getGameRuntime()`/`disposeGameRuntime()`)
-  and a `useGameRuntime()` composable; `main.ts` disposes it on
-  `import.meta.hot.dispose` so HMR cannot duplicate the RAF loop or
-  listeners.
-- `FixedStepCoordinator` (accumulator, `MAX_FRAME_DELTA=0.25s`,
-  `MAX_CATCH_UP_STEPS=8`, spiral-of-death protection) with a `stepOnce()`
-  escape hatch for deterministic manual/Playwright stepping that bypasses
-  RAF entirely.
-- `RuntimeClock`, `FrameCoordinator`, `EventDispatcher`/`EventTypes`
-  (`runtime:app-state-changed`, `runtime:fixed-tick`, `runtime:error` —
-  extended as later phases' modules land), `ErrorReporter`
-  (`DefaultErrorReporter`), `RuntimeDiagnostics`, `ApplicationLifecycle`
-  (`classifyStartupFailure`).
-- `ModuleContainer` (`src/integration/ModuleContainer.ts`) wired to null
-  placeholders: `NullAssetPipeline`, `NullPhysicsModule`, `NullInputModule`,
-  `NeutralOpponentAi`, `NullGameFlowController`, `NullStadiumModule`,
-  `NullCameraModule`, `NullVfxModule`, `NullAudioModule` (from Phase 0).
-- `App.vue`/`GameCanvas.vue` now delegate entirely to `GameRuntime` —
-  `GameCanvas.vue` only owns the `<canvas>`, calls
-  `initialise()`/`start()`/`dispose()`, and forwards `ResizeObserver`
-  events via `runtime.notifyResize()`. `App.vue` subscribes to
-  `runtime:app-state-changed` during `<script setup>` (before any child
-  `onMounted`) to keep the Pinia `applicationStore` in sync without a race.
-- `window.__GAME_TEST__` (`src/testing/TestApiInstaller.ts`,
-  `BrowserCombinedTestApi.ts`) installed only under `__DEV__ ||
-  __TEST_BUILD__`, exposing `ready()` and a `runtime` sub-API
-  (`getAppState`, `getDiagnostics`, `isRunning`, `start`, `stop`,
-  `stepFixedTicks`). `physics`/`input`/`ai`/`assets`/`gameFlow` sub-APIs are
-  typed as optional and will be filled in as those phases land.
+- `AssetPipeline` (`src/assets/AssetPipeline.ts`) replaces `NullAssetPipeline`
+  as the real `assets` module slot. Runs the lifecycle from asset pipeline
+  spec section 8 (`IDLE -> VALIDATING_SKILLS -> VALIDATING_MANIFEST ->
+  LOADING_AUTHORED_ASSETS -> VALIDATING_AUTHORED_ASSETS ->
+  BUILDING_PROCEDURAL_RESOURCES -> WARMING_SHADERS -> READY`), reachable via
+  `window.__ASSET_TEST__.getPipelineState()`.
+- `GameAssetManifest` (`AssetManifest.ts`, schemaVersion 1) with `player`/
+  `opponent` car descriptors both marked `"fallback"` (no supplied GLB
+  wired in yet — Phase 11) and an empty `textures` record (Phase 12).
+  Validated by `validateAssetManifest()`.
+- `AssetLoadingManager` wraps one shared `THREE.LoadingManager`
+  (unused for now since Phase 2 has no required authored assets, but ready
+  for GLTFLoader/TextureLoader in Phase 11/12).
+- Procedural foundation: `SeededRandom` (mulberry32, deterministic),
+  `GeometryRegistry` / `MaterialRegistry` (ref-counted sharing + disposal),
+  `ProceduralAssetContext`.
+- Procedural content factories: `createProceduralCarFallback` (boxes +
+  tapered cabin + cylinder wheels + forward marker + boost socket, team
+  tinted), `createBallVisual` (faceted icosahedron + enlarged wireframe
+  seam layer), `createStadiumBlockout` (floor/side walls/ceiling/end walls
+  with a goal cutout — deliberately just a blockout; ribs/glass/curves are
+  Phase 14), `createDefaultStarfield` (three `THREE.Points` layers, one
+  draw call each).
+- `PlaceholderSceneRenderer` extended with `addToScene`/`removeFromScene`
+  and basic hemisphere+directional lighting so `MeshStandardMaterial`
+  content is visible; camera repositioned inside the blockout so the
+  placeholder world is actually visible (verified via screenshot — ball,
+  car, goal cutout, starfield all visible).
+- `window.__ASSET_TEST__` (`BrowserAssetTestApi`) installed under
+  `__DEV__ || __TEST_BUILD__`: `ready()`, `getPipelineState()`,
+  `getLoadingProgress()`, `getErrors()`, `getSceneResourceCounts()`,
+  `rebuildProceduralPreview(seed)`, `disposePreview()`.
+- `GameRuntime.initialise()` now builds the placeholder world via
+  `modules.assets.buildPlaceholderWorld()` and adds it to the scene; its
+  `RuntimeDiagnostics.assets` field is now populated from the real asset
+  pipeline's loading progress/errors instead of a zeroed stub.
 
 ## Failing
-- None. All Phase 1 exit criteria verified locally in this session.
+- None. All Phase 2 exit criteria verified locally in this session.
 
 ## Deferred
-- Phase 2 onward: real asset pipeline, physics, input, AI, game flow,
-  camera, VFX, stadium, PSX rendering, audio, and their real
-  `ModuleContainer` types (currently all typed as the generic `GameModule`
-  contract — see Known deviations).
-- `RuntimeDiagnostics.matchState` (present in the core spec's diagnostics
-  shape) is deferred until the game-flow module (Phase 7) exists; there is
-  no match state to report yet.
+- Car GLB intake/validation/alignment, texture intake, glass/ribs/field
+  markings, boost pad visuals, shader library, development asset lab
+  (`?assetLab=1`) — all later phases (11, 12, 14) per the asset pipeline
+  spec's own internal phased plan (section 83). See Known deviations.
 
 ## Tests passing
 - `npm run validate` — all four validators pass.
 - `npm run type-check` (`vue-tsc --noEmit`) — zero errors.
-- `npm run test:unit` (Vitest) — 4 files, 15 tests, all passing, including:
-  - `FixedStepCoordinator` survives 10,000 fixed ticks deterministically
-    (steady-60fps simulation) with zero tick-count drift and a bounded
-    catch-up-step cap on huge frame deltas (spiral-of-death guard).
-  - `EventDispatcher` unsubscribe/dispose/listener-count behaviour (leak
-    tests per spec section 53).
+- `npm run test:unit` (Vitest) — 7 files, 29 tests, all passing, including:
+  - `SeededRandom` determinism (same seed -> identical sequence, different
+    seed -> different sequence, bounds checks).
+  - `GeometryRegistry`/`MaterialRegistry` caching, ref-counting, and
+    disposal behaviour.
+  - `proceduralDeterminism.spec.ts`: same seed produces byte-identical
+    starfield vertex data and identical stadium bounding boxes across two
+    fully independent builds; different seed produces different data.
 - `npm run build` (validate -> type-check -> unit -> `vite build`) —
-  passes end to end on a plain production build.
-- Playwright `tests/smoke/**` — 2/2 passing on both `chromium-dev` and
-  `chromium-preview` (against a plain production build).
-- Playwright `tests/integration/runtime.spec.ts` — 4/4 passing on
+  passes on a plain production build.
+- Playwright `tests/smoke/**` — 2/2 passing on `chromium-dev` and
+  `chromium-preview` (plain production build).
+- Playwright `tests/integration/**` (4 tests) and
+  `tests/procedural/placeholder-world.spec.ts` (3 tests) — 7/7 passing on
   `chromium-dev`, and on `chromium-preview` against a `PLAYWRIGHT_TEST=1`
-  test-mode production build (see Known deviations for why). Covers:
-  exactly one `requestAnimationFrame` ever pending at a time; fixed tick
-  advances while running and halts immediately after `stop()`; manual
-  `stepFixedTicks(10_000)` advances deterministically while stopped and
-  the page stays responsive afterward.
+  test-mode build (same caveat as Phase 1 — see `docs/build-decisions.md`).
+  Procedural tests verify: pipeline reaches `READY` with zero errors and a
+  populated scene; no external (cross-origin) asset requests are ever
+  made; `rebuildProceduralPreview(seed)` is deterministic given the same
+  seed and `disposePreview()` leaves the pipeline in a usable `READY`
+  state afterward.
 
 ## Next exact task
-- Begin Phase 2 (asset & procedural foundation) per
-  `plan/MASTER_BUILD_BRIEF.md` and
-  `plan/asset_production_pipeline_module_spec.md`. Required reading before
-  starting: Core Architecture spec (already read) + this progress file +
-  the asset pipeline module spec only. Implement the loading manager,
-  asset manifest, procedural registries, procedural fallback car,
-  procedural ball, a basic stadium blockout, a basic material set, a basic
-  star background, and an asset test API — replacing `NullAssetPipeline`
-  and `NullStadiumModule` with real (if minimal) implementations, and
-  registering real content with the `PlaceholderSceneRenderer` (or its
-  Phase 2 successor) instead of an empty scene. Do not begin physics
-  (Phase 3) until Phase 2's exit criteria pass.
-
-## Skill update
-- The user supplied the real `CloudAI-X/threejs-skills`-equivalent content
-  under a top-level `ACTUAL SKILLS TO USE/` folder (pushed directly to this
-  branch). All ten project-authored placeholder `.claude/skills/threejs-*/
-  SKILL.md` files from Phase 0 were replaced with this real content, and
-  the staging folder was removed. `validate:threejs-skills`,
-  `type-check`, and `test:unit` were all re-verified green after the swap.
-  The "authored locally instead of vendored" deviation noted below no
-  longer applies as of this commit — `docs/threejs-skill-usage-log.md`
-  should be updated as each skill is actually consulted going forward.
+- Begin Phase 3 (physics foundation) per `plan/MASTER_BUILD_BRIEF.md` and
+  `plan/threejs_rocket_league_physics_module_spec_v2_1_boost_pads.md`.
+  Required reading before starting: Core Architecture spec (already read)
+  + this progress file + the physics module spec only. Implement Rapier
+  initialisation, a fixed 120 Hz world, the ball rigid body, two car rigid
+  bodies, a flat/blockout arena collider (derived from the same
+  `StadiumGenerationDimensions` the asset pipeline already uses — replace
+  `PLACEHOLDER_PHYSICS_METADATA` in `src/assets/AssetTypes.ts` with the
+  real authoritative values once physics defines them), manual stepping,
+  a physics test API, render snapshots, speed clamps, and basic
+  collisions. Do not implement the advanced car controller yet (Phase 5).
+  Do not touch asset/visual code beyond wiring physics render snapshots
+  into car/ball transforms.
 
 ## Known deviations
-- `ModuleContainer` (`src/integration/ModuleContainer.ts`) types every
-  slot except `audio` as the generic `GameModule` contract rather than the
-  richer per-module interfaces shown in core architecture spec section 13
-  (`AssetPipeline`, `PhysicsFacade`, `InputControlsModule`,
-  `OpponentAiModule`, `MatchFlowController`, `StadiumModule`,
-  `CameraModule`, `VfxModule`). Those richer interfaces require reading
-  each module's own specification first (per the brief's "read only the
-  module required for this phase" rule) — inventing them now would risk
-  conflicting with the real specs. Each phase narrows its own slot's type
-  when it reads that module's spec.
-- The core spec's `ModuleContainer` also lists a `renderer: SceneRenderer`
-  slot. Phase 1 instead has `GameRuntime` own a `PlaceholderSceneRenderer`
-  directly and register it with the `FrameCoordinator`, rather than routing
-  it through `ModuleContainer`, since a real `SceneRenderer` module
-  interface does not exist yet. This will likely be reconciled when the
-  asset/visual-language phases define the real renderer module.
-- `window.__GAME_TEST__` only installs when `__TEST_BUILD__` is true, which
-  the literal `test:release` script (plain `npm run build`) does not set.
-  See `docs/build-decisions.md` Phase 1 entry for detail and the
-  `PLAYWRIGHT_TEST=1` workaround used to verify
-  `tests/integration/**` against the preview server in this session.
-- Resolved: `.claude/skills/threejs-*` are now the real supplied skill
-  content (see Skill update above), not project-authored placeholders.
-- See `docs/build-decisions.md` and `docs/integration-deviations.md` for
-  the `typescript`/`vitest`/`@types/three`/`@types/node` toolchain version
-  deviations (still in effect).
+- `AssetLoadingManager`/`LOADING_AUTHORED_ASSETS`/
+  `VALIDATING_AUTHORED_ASSETS` states currently do nothing observable
+  (Phase 2 has zero required authored assets — the manifest's car
+  descriptors are both `"fallback"` and `textures` is empty). They exist
+  as real pipeline states/wiring so Phase 11/12 only need to add loader
+  calls, not restructure the lifecycle.
+- `PLACEHOLDER_PHYSICS_METADATA` (`ballRadius: 0.9`,
+  `carHitboxSize: {1.2, 0.8, 1.9}`) in `src/assets/AssetTypes.ts` is an
+  asset-pipeline-owned placeholder since Phase 3 (physics) has not defined
+  the authoritative values yet. Per the asset spec, physics dimensions are
+  always authoritative — Phase 3 must replace this constant (or the
+  `ProceduralAssetContext.physicsMetadata` source) with the real physics
+  arena/hitbox definition, not the other way around.
+- The full `BrowserAssetTestApi` from asset pipeline spec section 59 also
+  lists `listCarReports`, `createCarPreview`, `setCarPreviewCamera`,
+  `showProceduralAsset`, `simulateMissingTexture`, `simulateMissingCar`,
+  and `getAssetReport()`. Only the subset that Phase 2 actually implements
+  is present (see `src/assets/testing/BrowserAssetTestApi.ts`); the rest
+  requires car/texture intake (Phase 11/12) or the development asset lab
+  UI (section 58, optional dev tooling) and is deferred.
+- `ModuleContainer.assets` is now typed as the concrete `AssetPipeline`
+  (narrowed from the generic `GameModule` used in Phase 1). All other
+  slots remain generic until their own phase reads that module's spec.
+- Carried over from Phase 1: `window.__GAME_TEST__`/`__ASSET_TEST__` only
+  install when `__TEST_BUILD__` is true, which the literal `test:release`
+  script (plain `npm run build`) does not set — see
+  `docs/build-decisions.md`.

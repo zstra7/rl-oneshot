@@ -1,5 +1,5 @@
 import { NeutralOpponentAi } from "@/ai/NeutralOpponentAi";
-import { NullAssetPipeline } from "@/assets/NullAssetPipeline";
+import { AssetPipeline } from "@/assets/AssetPipeline";
 import type { AudioModule } from "@/audio/AudioModule";
 import { NullAudioModule } from "@/audio/NullAudioModule";
 import { NullCameraModule } from "@/camera/NullCameraModule";
@@ -11,15 +11,15 @@ import { NullStadiumModule } from "@/stadium/NullStadiumModule";
 import { NullVfxModule } from "@/vfx/NullVfxModule";
 
 /**
- * Created once by GameRuntime. Every slot besides `audio` is typed as the
- * generic `GameModule` contract in Phase 1 because the concrete module
- * interfaces (PhysicsFacade, InputControlsModule, OpponentAiModule, etc.)
- * have not been designed yet — narrowing these types is each module's own
- * phase's job (core architecture spec section 13), not something to invent
- * ahead of reading that module's specification.
+ * Created once by GameRuntime. `assets` is narrowed to the real
+ * `AssetPipeline` as of Phase 2. Every other slot besides `audio` is still
+ * typed as the generic `GameModule` contract because those modules'
+ * concrete interfaces have not been designed yet — narrowing them is each
+ * phase's own job (core architecture spec section 13), not something to
+ * invent ahead of reading that module's specification.
  */
 export interface ModuleContainer {
-  assets: GameModule;
+  assets: AssetPipeline;
   physics: GameModule;
   input: GameModule;
   ai: GameModule;
@@ -32,7 +32,7 @@ export interface ModuleContainer {
 
 export function createNullModuleContainer(): ModuleContainer {
   return {
-    assets: new NullAssetPipeline(),
+    assets: new AssetPipeline(),
     physics: new NullPhysicsModule(),
     input: new NullInputModule(),
     ai: new NeutralOpponentAi(),

@@ -12,6 +12,7 @@ import {
   createNullModuleContainer,
   type ModuleContainer
 } from "@/integration/ModuleContainer";
+import { installAssetTestApi } from "@/assets/testing/BrowserAssetTestApi";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
 
 export type UiRequestedAction = { readonly kind: "noop" };
@@ -94,6 +95,9 @@ export class GameRuntime implements GameRuntimeFacade {
     this.sceneRenderer.initialise();
     this.moduleStatus["renderer"] = "ready";
     this.frameCoordinator.register(this.sceneRenderer);
+
+    this.sceneRenderer.addToScene(this.modules.assets.buildPlaceholderWorld());
+    installAssetTestApi(this.modules.assets);
 
     this.setAppState("MENU");
   }
@@ -199,6 +203,9 @@ export class GameRuntime implements GameRuntimeFacade {
       geometries: 0
     };
 
+    const assetProgress = this.modules?.assets.getLoadingProgress();
+    const assetErrors = this.modules?.assets.getErrors() ?? [];
+
     return {
       appState: this.appState,
       running: this.running,
@@ -209,7 +216,11 @@ export class GameRuntime implements GameRuntimeFacade {
       fixedStepsLastFrame: this.fixedStepsLastFrame,
       moduleStatus: { ...this.moduleStatus },
       renderer: rendererDiagnostics,
-      assets: { loaded: 0, pending: 0, failed: 0 },
+      assets: {
+        loaded: assetProgress?.loaded ?? 0,
+        pending: (assetProgress?.total ?? 0) - (assetProgress?.loaded ?? 0),
+        failed: assetErrors.length
+      },
       subscriptions: this.dispatcher.getSubscriptionCounts(),
       errors: this.errorReporter.getRecentErrors()
     };
