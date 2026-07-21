@@ -58,7 +58,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     goalCelebrationIntensity: "normal"
   },
   camera: {
-    fov: 92,
+    // WS4.B (plan/POLISH_OVERHAUL_PLAN.md): fov is an absolute vertical
+    // FOV matching CHASE_CAMERA_CONSTANTS.fov; distance/height/stiffness
+    // are multipliers on the base rig (1.0 = unmodified).
+    fov: 77,
     distance: 1,
     height: 1,
     stiffness: 1,
@@ -145,12 +148,12 @@ export function validateSettings(raw: unknown): AppSettings {
       )
     },
     camera: {
-      fov: clampNumber(camera["fov"], 60, 110, DEFAULT_SETTINGS.camera.fov),
-      distance: clampNumber(camera["distance"], 0.7, 1.3, DEFAULT_SETTINGS.camera.distance),
-      height: clampNumber(camera["height"], 0.7, 1.3, DEFAULT_SETTINGS.camera.height),
-      stiffness: clampNumber(camera["stiffness"], 0.5, 1.5, DEFAULT_SETTINGS.camera.stiffness),
+      fov: clampNumber(camera["fov"], 65, 90, DEFAULT_SETTINGS.camera.fov),
+      distance: clampNumber(camera["distance"], 0.7, 1.6, DEFAULT_SETTINGS.camera.distance),
+      height: clampNumber(camera["height"], 0.6, 1.8, DEFAULT_SETTINGS.camera.height),
+      stiffness: clampNumber(camera["stiffness"], 0.4, 2.0, DEFAULT_SETTINGS.camera.stiffness),
       ballLookStrength: clampNumber(camera["ballLookStrength"], 0, 1, DEFAULT_SETTINGS.camera.ballLookStrength),
-      shakeIntensity: clampNumber(camera["shakeIntensity"], 0, 1, DEFAULT_SETTINGS.camera.shakeIntensity)
+      shakeIntensity: clampNumber(camera["shakeIntensity"], 0, 2, DEFAULT_SETTINGS.camera.shakeIntensity)
     },
     graphics: {
       preset: pickEnum(graphics["preset"], VISUAL_PRESETS, DEFAULT_SETTINGS.graphics.preset),

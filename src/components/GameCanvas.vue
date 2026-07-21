@@ -37,6 +37,15 @@ onMounted(async () => {
     musicVolume: settings.audio.music,
     musicEnabled: settings.audio.musicEnabled
   });
+  runtime.setCameraSettings({
+    fov: settings.camera.fov,
+    distance: settings.camera.distance,
+    height: settings.camera.height,
+    stiffness: settings.camera.stiffness,
+    ballLookStrength: settings.camera.ballLookStrength,
+    shakeIntensity: settings.camera.shakeIntensity,
+    shakeEnabled: settings.gameplay.cameraShakeEnabled
+  });
 
   // Retro audio module spec section 5: the AudioContext stays suspended
   // until a real user gesture resumes it (browser autoplay policy) — a

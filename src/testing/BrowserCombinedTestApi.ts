@@ -2,6 +2,7 @@ import type { AiDebugState } from "@/ai/AiTypes";
 import type { AiDifficulty } from "@/ai/AiDifficulty";
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
+import type { CameraSettings } from "@/camera/CameraSettings";
 import type { AppState } from "@/core/ApplicationState";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
 import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
@@ -17,6 +18,10 @@ export interface BrowserRuntimeTestApi {
   stepFixedTicks(count: number): void;
   /** Phase 8: chase camera position/target/mode, or null before it exists. */
   getCameraDiagnostics(): CameraDiagnostics | null;
+  /** WS4.B: live camera rig tuning, independent of the settings-panel UI
+   * (settings can only be opened from menu states, not mid-match). */
+  setCameraSettings(settings: CameraSettings): void;
+  getCameraSettings(): CameraSettings;
   /** Phase 10: opponent AI difficulty/seed/tactical-mode inspection. */
   selectAiDifficulty(difficulty: AiDifficulty): void;
   getAiDifficulty(): AiDifficulty;

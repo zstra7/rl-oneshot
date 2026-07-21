@@ -1,25 +1,37 @@
 import * as THREE from "three";
 
+import { SeededRandom } from "@/assets/procedural/SeededRandom";
 import { CHASE_CAMERA_CONSTANTS as CAM } from "@/camera/CameraConstants";
+import { clampCameraSettings, DEFAULT_CAMERA_SETTINGS, type CameraSettings } from "@/camera/CameraSettings";
 import type { RenderFrameContext, RenderFrameModule } from "@/core/GameModule";
 import type { MatchFlowController } from "@/game-flow/MatchFlowController";
 import type { MatchState } from "@/game-flow/MatchFlowTypes";
 import type { CameraInput } from "@/input/InputTypes";
 import type { PhysicsFacade } from "@/physics/PhysicsFacade";
 import type { CarId } from "@/physics/PhysicsTypes";
+import * as V from "@/physics/Vec3Math";
 
 const MENU_MATCH_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS"];
 
 const UP = new THREE.Vector3(0, 1, 0);
+const SHAKE_RANDOM_SEED = 0x43414d31; // "CAM1"
 
 /**
- * Real chase camera (Master Brief Phase 8, game-flow spec section 21).
- * Owns the single `THREE.PerspectiveCamera` created by
- * `PlaceholderSceneRenderer` — it never creates a camera of its own,
- * preserving the "exactly one renderer/scene/camera" rule. Reads only
- * physics render snapshots (never steps or mutates physics) and the
+ * Real chase camera (Master Brief Phase 8, game-flow spec section 21;
+ * rewritten to a Rocket-League-accurate rig in WS4 —
+ * plan/POLISH_OVERHAUL_PLAN.md). Owns the single `THREE.PerspectiveCamera`
+ * created by `PlaceholderSceneRenderer` — it never creates a camera of
+ * its own, preserving the "exactly one renderer/scene/camera" rule. Reads
+ * only physics render snapshots (never steps or mutates physics) and the
  * match-flow state (menu vs. live-match framing); consumes `CameraInput`
  * edges forwarded once per fixed tick from `GameRuntime.onFixedTick`.
+ *
+ * Camera/car/ball framing model (WS4): the camera stays close (RL's own
+ * distance/height defaults) and directly behind the car (normal cam) or
+ * directly behind the car *relative to the ball* (ball cam, keeping
+ * camera/car/ball roughly collinear) — this alone keeps the car pinned in
+ * the bottom-centre of the frame in both modes without any screen-space
+ * math, matching real Rocket League framing.
  */
 export class ChaseCameraController implements RenderFrameModule {
   private ballCameraEnabled = false;
@@ -29,9 +41,17 @@ export class ChaseCameraController implements RenderFrameModule {
 
   private readonly smoothedPosition = new THREE.Vector3();
   private readonly smoothedTarget = new THREE.Vector3();
+  private smoothedYaw = Math.PI; // facing -Z (camera behind a car facing -Z sits at +Z, yaw 0 by convention below)
   private initialised = false;
 
   private menuOrbitAngle = 0;
+
+  private settings: CameraSettings = DEFAULT_CAMERA_SETTINGS;
+  private smoothedFov: number = CAM.fov;
+
+  private previousBallVelocity: V.Vec3Like = { x: 0, y: 0, z: 0 };
+  private shakeEnergy = 0;
+  private readonly shakeRandom = new SeededRandom(SHAKE_RANDOM_SEED);
 
   public constructor(
     private readonly physics: PhysicsFacade,
@@ -62,6 +82,23 @@ export class ChaseCameraController implements RenderFrameModule {
       this.swivelY = input.swivelY;
     }
     this.rearViewHeld = input.rearViewHeld;
+  }
+
+  /**
+   * WS4.B: live settings from the settings panel/persisted store. Applies
+   * FOV immediately (not just via the per-frame smoothing in
+   * `updateFov()`) so it takes effect even while the menu camera is
+   * active, which never calls `updateFov()`.
+   */
+  public applyCameraSettings(settings: Partial<CameraSettings>): void {
+    this.settings = clampCameraSettings(settings, this.settings);
+    this.smoothedFov = this.settings.fov;
+    this.camera.fov = this.settings.fov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  public getCameraSettings(): CameraSettings {
+    return this.settings;
   }
 
   public updateRenderFrame(context: RenderFrameContext): void {
@@ -110,80 +147,159 @@ export class ChaseCameraController implements RenderFrameModule {
       snapshot.ball.position.z
     );
 
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(carQuaternion);
-    // Rear view (input spec section 29): looks backward along the car's
-    // direction of travel instead of forward, without altering the
-    // stored ball-camera toggle state.
-    const chaseDirection = this.rearViewHeld ? forward.clone() : forward.clone().negate();
-    const lookDirection = this.rearViewHeld ? forward.clone().negate() : forward.clone();
+    // Chase yaw direction: the unit vector (horizontal only) pointing
+    // from the car toward where the camera should sit.
+    let chaseDirection: THREE.Vector3;
+    if (this.ballCameraEnabled) {
+      // Ball cam: behind the car relative to the ball, keeping
+      // camera/car/ball roughly collinear.
+      chaseDirection = carPosition.clone().sub(ballPosition);
+      chaseDirection.y = 0;
+    } else {
+      // Normal cam: directly behind the car's own facing. Velocity is
+      // deliberately not used here — it flips 180° on reversing, which
+      // real Rocket League's camera does not do; the yaw smoothing below
+      // supplies the "camera swings out in turns" lag instead.
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(carQuaternion);
+      chaseDirection = forward.clone().negate();
+      chaseDirection.y = 0;
+    }
 
-    // Camera swivel (input spec section 30): a temporary yaw/pitch offset
-    // around the chase direction that eases back to the default framing
-    // as the raw input returns to neutral, via the same smoothing used
-    // for the rest of the rig -- no separate "return" logic needed.
+    if (chaseDirection.lengthSq() < 0.01) {
+      // Car pointing straight up/down (e.g. mid-flip against a wall) —
+      // keep whatever direction was last smoothed rather than snapping to
+      // an undefined heading.
+      chaseDirection = new THREE.Vector3(Math.sin(this.smoothedYaw), 0, Math.cos(this.smoothedYaw));
+    } else {
+      chaseDirection.normalize();
+    }
+
+    if (this.rearViewHeld) {
+      chaseDirection.negate();
+    }
+
+    const targetYaw = Math.atan2(chaseDirection.x, chaseDirection.z);
+    const yawRate = CAM.yawSmoothingRate * this.settings.stiffness;
+    if (!this.initialised) {
+      this.smoothedYaw = targetYaw;
+    } else {
+      const yawAlpha = 1 - Math.exp(-yawRate * context.frameDeltaSeconds);
+      this.smoothedYaw = lerpAngle(this.smoothedYaw, targetYaw, yawAlpha);
+    }
+
+    const smoothedDir = new THREE.Vector3(Math.sin(this.smoothedYaw), 0, Math.cos(this.smoothedYaw));
+
+    // Swivel (input spec section 30): a temporary yaw/pitch offset around
+    // the smoothed chase direction.
     if (this.swivelX !== 0) {
-      chaseDirection.applyAxisAngle(UP, this.swivelX);
+      smoothedDir.applyAxisAngle(UP, this.swivelX);
     }
-    if (this.swivelY !== 0) {
-      const pitchAxis = new THREE.Vector3().crossVectors(chaseDirection, UP).normalize();
-      chaseDirection.applyAxisAngle(pitchAxis, this.swivelY);
-    }
-
-    // Ball framing (exit criterion: "ball remains visible in normal
-    // play") -- widen distance/height as the ball separates from the car
-    // so both stay in frame without needing full frustum containment
-    // math.
-    const separation = carPosition.distanceTo(ballPosition);
-    const framingBoost = THREE.MathUtils.clamp(separation / CAM.framingReferenceSeparation, 0, 1);
-    const distance = CAM.distance + framingBoost * CAM.maxFramingDistanceBoost;
-    const height = CAM.height + framingBoost * CAM.maxFramingHeightBoost;
+    const distance = CAM.distance * this.settings.distance;
+    const height = CAM.height * this.settings.height;
 
     const desiredPosition = carPosition
       .clone()
-      .addScaledVector(chaseDirection, distance)
+      .addScaledVector(smoothedDir, distance)
       .addScaledVector(UP, height);
-
-    const ballWeight = this.ballCameraEnabled
-      ? CAM.ballWeightBallCamera
-      : THREE.MathUtils.clamp(
-          CAM.ballWeightNearField * (1 - separation / CAM.ballWeightReferenceDistance),
-          0,
-          CAM.ballWeightNearField
-        );
-
-    const carLookAtPoint = carPosition.clone().addScaledVector(lookDirection, -CAM.lookAhead);
-    const desiredTarget = carLookAtPoint.clone().lerp(ballPosition, ballWeight);
-
-    // Camera collision avoidance (spec: "Ray or sphere cast from target
-    // to desired camera position; move inward if blocked").
-    const toCamera = desiredPosition.clone().sub(desiredTarget);
-    const desiredDistance = toCamera.length();
-    if (desiredDistance > 0.001) {
-      const direction = toCamera.clone().normalize();
-      const hitDistance = this.physics.raycastArena(
-        { x: desiredTarget.x, y: desiredTarget.y, z: desiredTarget.z },
-        { x: direction.x, y: direction.y, z: direction.z },
-        desiredDistance
-      );
-      if (hitDistance !== null) {
-        const clamped = Math.max(0, hitDistance - CAM.collisionMargin);
-        desiredPosition.copy(desiredTarget).addScaledVector(direction, clamped);
-      }
+    if (this.swivelY !== 0) {
+      const pitchAxis = new THREE.Vector3().crossVectors(smoothedDir, UP).normalize();
+      desiredPosition.sub(carPosition).applyAxisAngle(pitchAxis, this.swivelY).add(carPosition);
+    }
+    if (desiredPosition.y < CAM.minHeightAboveFloor) {
+      desiredPosition.y = CAM.minHeightAboveFloor;
     }
 
+    // Aim target: a point ahead of the camera (normal cam) or biased
+    // toward the ball (ball cam) — this is what pins the car bottom-
+    // centre while keeping the ball framed in ball cam.
+    let desiredTarget: THREE.Vector3;
+    if (this.ballCameraEnabled) {
+      const ballLookBias = 0.3 * (1 - this.settings.ballLookStrength);
+      desiredTarget = ballPosition.clone().lerp(carPosition, ballLookBias);
+    } else {
+      const aheadDirection = smoothedDir.clone().negate();
+      desiredTarget = carPosition
+        .clone()
+        .addScaledVector(aheadDirection, CAM.aimAheadDistance)
+        .addScaledVector(UP, CAM.aimHeightOffset);
+
+      // Downward pitch bias so the horizon stays visible with the car's
+      // roof in frame.
+      const cameraToTarget = desiredTarget.clone().sub(desiredPosition);
+      const rightAxis = new THREE.Vector3().crossVectors(smoothedDir, UP).normalize();
+      cameraToTarget.applyAxisAngle(rightAxis, THREE.MathUtils.degToRad(CAM.angleDegrees));
+      desiredTarget = desiredPosition.clone().add(cameraToTarget);
+    }
+
+    const positionRate = CAM.positionSmoothingRate * this.settings.stiffness;
     if (!this.initialised) {
       this.smoothedPosition.copy(desiredPosition);
       this.smoothedTarget.copy(desiredTarget);
       this.initialised = true;
     } else {
-      const positionAlpha = 1 - Math.exp(-CAM.positionSmoothingRate * context.frameDeltaSeconds);
+      const positionAlpha = 1 - Math.exp(-positionRate * context.frameDeltaSeconds);
       const targetAlpha = 1 - Math.exp(-CAM.targetSmoothingRate * context.frameDeltaSeconds);
       this.smoothedPosition.lerp(desiredPosition, positionAlpha);
       this.smoothedTarget.lerp(desiredTarget, targetAlpha);
     }
 
-    this.camera.position.copy(this.smoothedPosition);
+    this.updateShake(context, carPosition);
+    const shakenPosition = this.smoothedPosition.clone();
+    if (this.shakeEnergy > 0.001) {
+      shakenPosition.addScaledVector(this.nextShakeOffset(), CAM.shakeMaxOffset * this.shakeEnergy);
+    }
+
+    this.camera.position.copy(shakenPosition);
     this.camera.lookAt(this.smoothedTarget);
+
+    this.updateFov(context);
+  }
+
+  private updateFov(context: RenderFrameContext): void {
+    const playerCar = this.physics.getCarState(this.playerCarId);
+    const targetFov = this.settings.fov + (playerCar.supersonic ? CAM.supersonicFovKick : 0);
+    const alpha = 1 - Math.exp(-CAM.supersonicFovSmoothingRate * context.frameDeltaSeconds);
+    const nextFov = this.smoothedFov + (targetFov - this.smoothedFov) * alpha;
+
+    if (Math.abs(nextFov - this.camera.fov) > 0.01) {
+      this.smoothedFov = nextFov;
+      this.camera.fov = nextFov;
+      this.camera.updateProjectionMatrix();
+    } else {
+      this.smoothedFov = nextFov;
+    }
+  }
+
+  /** WS4.D: impact camera shake, gated by the gameplay settings toggle. */
+  private updateShake(context: RenderFrameContext, carPosition: THREE.Vector3): void {
+    const ball = this.physics.getBallState();
+    const delta = V.length(V.sub(ball.linearVelocity, this.previousBallVelocity));
+    this.previousBallVelocity = ball.linearVelocity;
+
+    this.shakeEnergy *= Math.exp(-CAM.shakeDecayRate * context.frameDeltaSeconds);
+
+    if (!this.settings.shakeEnabled) {
+      this.shakeEnergy = 0;
+      return;
+    }
+
+    if (delta > CAM.shakeVelocityDeltaThreshold) {
+      const ballDistance = carPosition.distanceTo(
+        new THREE.Vector3(ball.position.x, ball.position.y, ball.position.z)
+      );
+      if (ballDistance <= CAM.shakeRadius) {
+        const energy = THREE.MathUtils.clamp(delta / CAM.shakeMaxDeltaForFullEnergy, 0, 1) * this.settings.shakeIntensity;
+        this.shakeEnergy = Math.max(this.shakeEnergy, energy);
+      }
+    }
+  }
+
+  private nextShakeOffset(): THREE.Vector3 {
+    return new THREE.Vector3(
+      this.shakeRandom.range(-1, 1),
+      this.shakeRandom.range(-1, 1),
+      this.shakeRandom.range(-1, 1)
+    );
   }
 
   public isBallCameraEnabled(): boolean {
@@ -195,8 +311,16 @@ export class ChaseCameraController implements RenderFrameModule {
       position: { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z },
       target: { x: this.smoothedTarget.x, y: this.smoothedTarget.y, z: this.smoothedTarget.z },
       fov: this.camera.fov,
+      aspect: this.camera.aspect,
+      quaternion: {
+        x: this.camera.quaternion.x,
+        y: this.camera.quaternion.y,
+        z: this.camera.quaternion.z,
+        w: this.camera.quaternion.w
+      },
       ballCameraEnabled: this.ballCameraEnabled,
-      rearViewHeld: this.rearViewHeld
+      rearViewHeld: this.rearViewHeld,
+      settings: this.settings
     };
   }
 
@@ -205,10 +329,22 @@ export class ChaseCameraController implements RenderFrameModule {
   }
 }
 
+function lerpAngle(current: number, target: number, alpha: number): number {
+  let delta = target - current;
+  delta = ((delta + Math.PI) % (2 * Math.PI)) - Math.PI;
+  if (delta < -Math.PI) {
+    delta += 2 * Math.PI;
+  }
+  return current + delta * alpha;
+}
+
 export interface CameraDiagnostics {
   readonly position: { x: number; y: number; z: number };
   readonly target: { x: number; y: number; z: number };
   readonly fov: number;
+  readonly aspect: number;
+  readonly quaternion: { x: number; y: number; z: number; w: number };
   readonly ballCameraEnabled: boolean;
   readonly rearViewHeld: boolean;
+  readonly settings: CameraSettings;
 }

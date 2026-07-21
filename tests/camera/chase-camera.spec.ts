@@ -12,7 +12,9 @@ test.beforeEach(async ({ page }) => {
 test("the menu camera orbits somewhere sane above the field", async ({ page }) => {
   const diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getCameraDiagnostics());
   expect(diagnostics).not.toBeNull();
-  expect(diagnostics?.fov).toBe(72);
+  // WS4 (plan/POLISH_OVERHAUL_PLAN.md): rewritten to the RL-accurate rig
+  // (fov 77, was 72).
+  expect(diagnostics?.fov).toBe(77);
   expect(Number.isFinite(diagnostics?.position.x)).toBe(true);
   expect(diagnostics?.position.y).toBeGreaterThan(0);
 });

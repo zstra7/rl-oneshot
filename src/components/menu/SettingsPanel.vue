@@ -71,8 +71,26 @@ function setDefaultDuration(minutes: MatchDurationMinutes): void {
   runtime.selectMatchDuration(minutes);
 }
 
+function applyLiveCameraSettings(): void {
+  runtime.setCameraSettings({
+    fov: settings.value.camera.fov,
+    distance: settings.value.camera.distance,
+    height: settings.value.camera.height,
+    stiffness: settings.value.camera.stiffness,
+    ballLookStrength: settings.value.camera.ballLookStrength,
+    shakeIntensity: settings.value.camera.shakeIntensity,
+    shakeEnabled: settings.value.gameplay.cameraShakeEnabled
+  });
+}
+
 function setCameraSlider(key: "fov" | "distance" | "height" | "stiffness" | "ballLookStrength" | "shakeIntensity", value: number): void {
   settingsStore.update({ camera: { [key]: value } });
+  applyLiveCameraSettings();
+}
+
+function toggleCameraShake(): void {
+  settingsStore.update({ gameplay: { cameraShakeEnabled: !settings.value.gameplay.cameraShakeEnabled } });
+  applyLiveCameraSettings();
 }
 
 function applyLiveAudioSettings(): void {
@@ -141,7 +159,7 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
             class="chip"
             :class="{ active: settings.gameplay.cameraShakeEnabled }"
             data-testid="toggle-camera-shake"
-            @click="settingsStore.update({ gameplay: { cameraShakeEnabled: !settings.gameplay.cameraShakeEnabled } })"
+            @click="toggleCameraShake()"
           >
             {{ settings.gameplay.cameraShakeEnabled ? "ON" : "OFF" }}
           </button>
@@ -168,9 +186,10 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
           <span class="row-label">FOV</span>
           <input
             type="range"
-            min="60"
-            max="110"
+            min="65"
+            max="90"
             step="1"
+            data-testid="camera-fov"
             :value="settings.camera.fov"
             @input="setCameraSlider('fov', Number(($event.target as HTMLInputElement).value))"
           />
@@ -181,8 +200,9 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
           <input
             type="range"
             min="0.7"
-            max="1.3"
+            max="1.6"
             step="0.05"
+            data-testid="camera-distance"
             :value="settings.camera.distance"
             @input="setCameraSlider('distance', Number(($event.target as HTMLInputElement).value))"
           />
@@ -192,9 +212,10 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
           <span class="row-label">HEIGHT</span>
           <input
             type="range"
-            min="0.7"
-            max="1.3"
+            min="0.6"
+            max="1.8"
             step="0.05"
+            data-testid="camera-height"
             :value="settings.camera.height"
             @input="setCameraSlider('height', Number(($event.target as HTMLInputElement).value))"
           />
@@ -204,9 +225,10 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
           <span class="row-label">STIFFNESS</span>
           <input
             type="range"
-            min="0.5"
-            max="1.5"
+            min="0.4"
+            max="2.0"
             step="0.05"
+            data-testid="camera-stiffness"
             :value="settings.camera.stiffness"
             @input="setCameraSlider('stiffness', Number(($event.target as HTMLInputElement).value))"
           />
@@ -219,6 +241,7 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
             min="0"
             max="1"
             step="0.05"
+            data-testid="camera-ball-look-strength"
             :value="settings.camera.ballLookStrength"
             @input="setCameraSlider('ballLookStrength', Number(($event.target as HTMLInputElement).value))"
           />
@@ -229,8 +252,9 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
           <input
             type="range"
             min="0"
-            max="1"
+            max="2"
             step="0.05"
+            data-testid="camera-shake-intensity"
             :value="settings.camera.shakeIntensity"
             @input="setCameraSlider('shakeIntensity', Number(($event.target as HTMLInputElement).value))"
           />

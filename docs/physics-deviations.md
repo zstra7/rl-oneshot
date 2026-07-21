@@ -329,3 +329,84 @@ sensor overlap facts")
   `dodgeFlip.spec.ts`) is to capture the forward direction *once*, before
   the dodge, and reuse that fixed reference vector for both the
   before/after velocity comparison.
+
+## Post-launch polish pass — WS4 (camera overhaul)
+
+`plan/POLISH_OVERHAUL_PLAN.md` WS4: the chase camera consumed the old
+far/high placeholder framing (a leftover from before real car/ball
+assets existed) rather than a Rocket-League-accurate rig, had no live
+settings, no supersonic FOV kick, and no impact shake.
+
+- **Rig converted to RL's own real-world constants (100uu = 1m)**:
+  `CameraConstants.ts` rewritten wholesale — distance 270uu → 2.75m,
+  height 110uu → 1.1m, FOV 110° horizontal → 77° vertical at 16:9,
+  pitch angle -4°. Verified via `tests/camera/rl-framing.spec.ts`, which
+  projects the car/ball into NDC space using `THREE.PerspectiveCamera`
+  running under Node (Playwright test files execute in Node, not the
+  browser, so `three` can be imported and used directly for this) and
+  asserts the car stays pinned bottom-centre in normal cam, both car and
+  ball stay framed in ball cam, and the rig never crushes toward the car
+  near a wall.
+- **`ballLookBias` formula had a latent `||` bug**: an earlier draft used
+  `0.3 * (1 - ballLookStrength) || CAM.ballCamCarBias` as a "fallback",
+  which incorrectly substitutes the constant whenever the computed value
+  is legitimately `0` (i.e. `ballLookStrength === 1`, a fully valid
+  settings value). The formula is a complete definition on its own; the
+  `||` fallback was removed rather than guarded, since there is no
+  invalid input it needs to protect against.
+- **`CameraSettings.ts` (new)**: a live-tunable, clamped settings shape
+  (`fov`, `distance`, `height`, `stiffness`, `ballLookStrength`,
+  `shakeIntensity`, `shakeEnabled`) independent of the settings-store
+  schema, following the same `clampCameraSettings()`-with-fallback
+  pattern as `validateSettings()`. `GameRuntime` mirrors the existing
+  `pendingAudioSettings` pattern with `pendingCameraSettings`, since
+  `GameCanvas.vue` applies persisted settings before the camera
+  controller (constructed lazily alongside the render pipeline) exists.
+- **FOV must apply immediately, not just via the per-frame smoothing
+  path**: `updateFov()` is only ever called from `updateChaseCamera()`,
+  which never runs while the menu camera (`updateMenuCamera()`) is
+  active. A settings-panel FOV change made from the main menu therefore
+  had zero visible effect until a match started. Fixed by having
+  `applyCameraSettings()` set `camera.fov`/call
+  `updateProjectionMatrix()` synchronously, in addition to seeding
+  `smoothedFov` for the next live-match smoothing pass.
+- **Mid-match settings testing needs a direct runtime hook**:
+  `MatchFlowController.openSettings()` only transitions state from a
+  `MENU_STATES` match state — it silently no-ops mid-match by design (a
+  product decision, not a bug). Tests that need to change camera
+  settings while a match is running (e.g. verifying the distance
+  multiplier while driving) cannot do it through the settings-panel UI.
+  Added `setCameraSettings`/`getCameraSettings` directly to
+  `BrowserCombinedTestApi`/`TestApiInstaller` as a dev/test-build-only
+  escape hatch, mirroring how `PHYSICS_TEST`/`INPUT_TEST` already bypass
+  UI navigation for determinism.
+- **Impact shake (WS4.D)**: `updateShake()` diffs ball velocity frame to
+  frame (same delta-based pattern as `VfxModule.detectBallImpact`),
+  raises `shakeEnergy` when the delta exceeds `shakeVelocityDeltaThreshold`
+  and the ball is within `shakeRadius` of the camera's car, and decays it
+  exponentially at `shakeDecayRate`. A per-frame random offset (seeded
+  `SeededRandom`, not `Math.random()`) scaled by `shakeMaxOffset *
+  shakeEnergy` is added to the smoothed camera position after all other
+  smoothing, so shake never affects the aim/lookAt target — it reads as
+  camera jitter, not a changed view direction. Gated behind
+  `settings.shakeEnabled`, which mirrors the separate
+  `settings.gameplay.cameraShakeEnabled` settings-store flag (the camera
+  controller only accepts one flat `CameraSettings` object, so the
+  gameplay-category toggle is folded into it at the two call sites that
+  build one: `GameCanvas.vue`'s boot wiring and `SettingsPanel.vue`'s
+  `setCameraSlider`/`toggleCameraShake`).
+- **Test-writing gotcha: a real collision confounds a shake-jitter
+  measurement.** The WS4.D Playwright test (`camera-settings.spec.ts`)
+  measures "mean deviation of each sampled camera position from a
+  trailing 5-frame moving average" as a proxy for jitter. An early
+  version placed the test ball close enough to actually collide with the
+  car — the resulting real knockback caused the camera to pan quickly
+  chasing the car, which the same moving-average metric flags as
+  "high-frequency deviation" just as readily as synthetic shake does,
+  producing a false positive even with `shakeEnabled: false`. Fixed by
+  keeping the test ball within `shakeRadius` but outside collision range
+  of the car, and by pulsing the injected ball velocity with alternating
+  sign every ~40ms (rather than one static injection) for the duration
+  of the sampling window — a single injected delta decays below
+  `shakeDecayRate`'s energy threshold well before a useful number of
+  samples can be collected.

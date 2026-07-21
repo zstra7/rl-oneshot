@@ -28,6 +28,7 @@ import type {
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
+import { DEFAULT_CAMERA_SETTINGS, type CameraSettings } from "@/camera/CameraSettings";
 import type { AiDifficulty } from "@/ai/AiDifficulty";
 import type { AiDebugState } from "@/ai/AiTypes";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
@@ -114,6 +115,9 @@ export interface GameRuntimeFacade {
 
   /** Null before the camera controller has been constructed. */
   getCameraDiagnostics(): CameraDiagnostics | null;
+  /** WS4.B: live camera rig tuning from the settings panel/persisted store. */
+  setCameraSettings(settings: CameraSettings): void;
+  getCameraSettings(): CameraSettings;
 
   /** AI spec section 7: takes effect on the next tick, live. */
   selectAiDifficulty(difficulty: AiDifficulty): void;
@@ -163,6 +167,7 @@ export class GameRuntime implements GameRuntimeFacade {
   private audioModule: RetroAudioModule | null = null;
   private audioEventAdapter: AudioEventAdapter | null = null;
   private pendingAudioSettings: AudioSettings | null = null;
+  private pendingCameraSettings: CameraSettings | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -273,6 +278,7 @@ export class GameRuntime implements GameRuntimeFacade {
         () => this.fixedStepCoordinator.alpha,
         PLAYER_CAR_ID
       );
+      this.cameraController.applyCameraSettings(this.pendingCameraSettings ?? DEFAULT_CAMERA_SETTINGS);
       this.frameCoordinator.register(this.cameraController);
     }
 
@@ -613,6 +619,21 @@ export class GameRuntime implements GameRuntimeFacade {
 
   public getCameraDiagnostics(): CameraDiagnostics | null {
     return this.cameraController?.getDiagnostics() ?? null;
+  }
+
+  public setCameraSettings(settings: CameraSettings): void {
+    if (this.cameraController) {
+      this.cameraController.applyCameraSettings(settings);
+    } else {
+      // initialise() hasn't constructed the camera controller yet (e.g. a
+      // setting is applied before the async boot sequence reaches it) —
+      // remember it and apply it once initialise() does.
+      this.pendingCameraSettings = settings;
+    }
+  }
+
+  public getCameraSettings(): CameraSettings {
+    return this.cameraController?.getCameraSettings() ?? this.pendingCameraSettings ?? DEFAULT_CAMERA_SETTINGS;
   }
 
   public setVisualPreset(preset: VisualPreset): void {

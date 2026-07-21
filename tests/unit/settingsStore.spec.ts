@@ -42,7 +42,7 @@ describe("validateSettings (settings spec section 25: \"validate loaded settings
       camera: { fov: 999, distance: -50 },
       audio: { master: 5, music: -1 }
     });
-    expect(result.camera.fov).toBe(110);
+    expect(result.camera.fov).toBe(90);
     expect(result.camera.distance).toBe(0.7);
     expect(result.audio.master).toBe(1);
     expect(result.audio.music).toBe(0);

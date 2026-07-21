@@ -18,6 +18,8 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       stepFixedTicks: (count: number) =>
         runtime.stepFixedTicksForTesting(count),
       getCameraDiagnostics: () => runtime.getCameraDiagnostics(),
+      setCameraSettings: (settings) => runtime.setCameraSettings(settings),
+      getCameraSettings: () => runtime.getCameraSettings(),
       selectAiDifficulty: (difficulty) => runtime.selectAiDifficulty(difficulty),
       getAiDifficulty: () => runtime.getAiDifficulty(),
       setAiSeed: (seed) => runtime.setAiSeed(seed),
