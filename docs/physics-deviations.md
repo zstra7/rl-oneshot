@@ -183,3 +183,49 @@ Record deviations from
   Rapier's `EventQueue` intersection events. This is O(pads x cars) per
   tick, acceptable at the spec's 16-pad/2-4-car scale; revisit if a
   future phase needs a larger pad count or many more cars.
+
+## Phase 7 — Goal sensors (game-flow spec section 30's "physics owns goal
+sensor overlap facts")
+
+- **Goal dimensions kept at the game-flow spec's literal values (14m wide
+  / 6m high / 5m deep) even though the field footprint itself was not
+  resized to the spec's 72x48.** `TEST_ARENA_DIMENSIONS` (halfWidth 20,
+  halfLength 30 — i.e. a 40x60 field) predates Phase 7 and all of Phase
+  3-6's calibration (car speed curves, suspension, boost pad layout) was
+  tuned against it; resizing the field to 72x48 now would be a
+  recalibration exercise out of Phase 7's "functional match flow" scope.
+  The goal still fits comfortably (14 < 40 wide, 6 < 20 tall) — see
+  `src/physics/goal/GoalTypes.ts`.
+- **End walls are no longer a single solid cuboid.** `TestArenaPresets.ts`
+  `buildGoalEnd()` replaces each end wall with two goal-post side segments
+  plus a header above the goal mouth (leaving the goal opening clear), and
+  adds a shallow enclosed "goal box" (back wall, two side walls, roof,
+  floor patch) beyond the opening so a scored ball is physically caught
+  rather than flying into the void — mirroring how a real Rocket League
+  net behaves. This is a genuine geometry change from Phase 3's original
+  fully-solid box-arena, not just an addition.
+- **A physics-level, sensor-only detection contract**, matching the boost
+  pad pattern precedent: `PhysicsFacade` tracks a per-team overlap latch
+  (`goalSensorOverlapping`) and only pushes a `GoalScoredEvent` on the
+  false->true transition (goal *sensor onset*, not "still overlapping"),
+  checked after the tick increment for the same reason as boost pads (see
+  Phase 6 section above: "N ticks after X" semantics must use the
+  post-increment tick consistently). Physics does not know about match
+  state, scoring rules, or the latch needed to prevent double-counting a
+  goal across a whole celebration — `MatchFlowController` (game-flow
+  spec section 30) owns that.
+- **Real bug found via ad hoc Vitest debugging: a single `world.step()`
+  immediately after `physics.setBallState()` (teleporting the ball) does
+  not yet reflect the new position in `world.intersectionPair()` queries** —
+  Rapier's broad-phase/query pipeline for sensor overlaps is only updated
+  during `world.step()`'s own internal processing, so the query result
+  during the *first* step after a teleport still reflects the pre-teleport
+  broad-phase state; only the *second* step's query sees the teleported
+  position. This does not affect any gameplay-driven detection (a ball
+  that is actually driven/hit into the goal moves gradually and is never
+  teleported), but it matters for any test or test-API method that
+  teleports the ball directly into a sensor volume and expects one
+  `stepTicks(1)` to detect it — `BrowserGameFlowTestApi.simulateGoal()`
+  advances two ticks specifically because of this, and
+  `tests/unit/goalSensors.spec.ts` always steps well past this window
+  (never asserts detection on the exact first tick after a teleport).

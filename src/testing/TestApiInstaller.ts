@@ -17,7 +17,8 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       stop: () => runtime.stop(),
       stepFixedTicks: (count: number) =>
         runtime.stepFixedTicksForTesting(count)
-    }
+    },
+    gameFlow: runtime.getGameFlowTestApi()
   };
 
   window.__GAME_TEST__ = api;

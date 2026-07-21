@@ -17,9 +17,38 @@ import { PhysicsRenderBinding } from "@/integration/PhysicsRenderBinding";
 import { installAssetTestApi } from "@/assets/testing/BrowserAssetTestApi";
 import { installInputTestApi } from "@/input/testing/BrowserInputTestApi";
 import { installPhysicsTestApi } from "@/physics/testing/BrowserPhysicsTestApi";
+import { createGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
+import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
+import type {
+  GameSessionState,
+  MatchConfig,
+  MatchDurationMinutes,
+  MatchState
+} from "@/game-flow/MatchFlowTypes";
+import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
 
 export type UiRequestedAction = { readonly kind: "noop" };
+
+const MENU_MATCH_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS"];
+
+/**
+ * game-flow spec section 35 defines a 3-value `AppState` ("BOOT"|"MENU"|
+ * "MATCH") distinct from this project's own `ApplicationState.ts` (which
+ * also has LOADING/FATAL_ERROR/DISPOSED for startup-failure handling —
+ * see docs/build-decisions.md). Menu-family match states map to "MENU";
+ * every live-match state (including MATCH_RESULTS, still part of the
+ * match session until the player returns to the menu) maps to "MATCH".
+ */
+function mapMatchStateToAppState(matchState: MatchState): AppState {
+  if (matchState === "BOOT") {
+    return "BOOT";
+  }
+  if (MENU_MATCH_STATES.includes(matchState)) {
+    return "MENU";
+  }
+  return "MATCH";
+}
 
 export interface ReadonlyApplicationSnapshot {
   readonly appState: AppState;
@@ -50,6 +79,30 @@ export interface GameRuntimeFacade {
     type: K,
     listener: (event: TypedEventMap[K]) => void
   ): Unsubscribe;
+
+  // -- Match flow (game-flow spec sections 28/35/39) --
+
+  getMatchState(): MatchState;
+  getSessionState(): GameSessionState;
+
+  openMainMenu(): void;
+  openMatchSetup(): void;
+  openSettings(): void;
+
+  selectMatchDuration(minutes: MatchDurationMinutes): void;
+  startMatch(config?: Partial<MatchConfig>): void;
+
+  pauseMatch(): void;
+  resumeMatch(): void;
+  restartMatch(): void;
+  replayMatch(): void;
+  returnToMenu(): void;
+
+  /** Boost 0-100 for the human player's car, or 0 before it has spawned. */
+  getPlayerBoostAmount(): number;
+
+  /** Populated once `initialise()` completes; used by the test API installer. */
+  getGameFlowTestApi(): BrowserGameFlowTestApi;
 }
 
 export class GameRuntime implements GameRuntimeFacade {
@@ -58,6 +111,7 @@ export class GameRuntime implements GameRuntimeFacade {
   private sceneRenderer: PlaceholderSceneRenderer | null = null;
   private physicsRenderBinding: PhysicsRenderBinding | null = null;
   private boostPadRenderBinding: BoostPadRenderBinding | null = null;
+  private gameFlowTestApi: BrowserGameFlowTestApi | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -90,7 +144,7 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.modules = createNullModuleContainer();
 
-    const { input, ...modulesWithGenericInit } = this.modules;
+    const { input, gameFlow, ...modulesWithGenericInit } = this.modules;
 
     for (const [name, module] of Object.entries(modulesWithGenericInit)) {
       this.moduleStatus[name] = "initialising";
@@ -99,8 +153,9 @@ export class GameRuntime implements GameRuntimeFacade {
     }
 
     this.moduleStatus["input"] = "initialising";
-    // No menu/match-flow context switching exists yet (Phase 7); default
-    // straight to GAMEPLAY so KBM/gamepad can drive the debug car now.
+    // Gameplay input is sampled every fixed tick regardless of match state
+    // (Phase 7 gates it via matchFlow.areControlsActive() in onFixedTick),
+    // so GAMEPLAY is still the right initial input context.
     input.initialise({ gameplayElement: canvas, initialContext: "GAMEPLAY" });
     this.moduleStatus["input"] = "ready";
     installInputTestApi(input, canvas);
@@ -114,8 +169,12 @@ export class GameRuntime implements GameRuntimeFacade {
     this.sceneRenderer.addToScene(this.modules.assets.buildPlaceholderWorld());
     installAssetTestApi(this.modules.assets);
 
-    this.modules.physics.spawnCar({ id: "car-player", transform: { x: -6, y: 1, z: -10 } });
-    this.modules.physics.spawnCar({ id: "car-opponent", transform: { x: 6, y: 1, z: 10 } });
+    // Menu-presentation cars (game-flow spec section 23: "Live presentation
+    // stadium, Player car shown on field, Ball visible"). The real Phase 7
+    // kickoff sequence re-spawns both cars via physics.resetWorld() when a
+    // match actually starts.
+    this.modules.physics.spawnCar({ id: PLAYER_CAR_ID, transform: { x: -6, y: 1, z: -10 } });
+    this.modules.physics.spawnCar({ id: OPPONENT_CAR_ID, transform: { x: 6, y: 1, z: 10 } });
 
     this.physicsRenderBinding = new PhysicsRenderBinding(
       this.modules.physics,
@@ -136,7 +195,17 @@ export class GameRuntime implements GameRuntimeFacade {
       resume: () => this.start()
     });
 
-    this.setAppState("MENU");
+    this.moduleStatus["gameFlow"] = "initialising";
+    gameFlow.initialise({ physics: this.modules.physics });
+    this.moduleStatus["gameFlow"] = "ready";
+    this.gameFlowTestApi = createGameFlowTestApi(
+      gameFlow,
+      this.modules.physics,
+      (count) => this.stepFixedTicksForTesting(count),
+      () => this.emitSessionStateChanged()
+    );
+
+    this.setAppState(mapMatchStateToAppState(gameFlow.getMatchState()));
   }
 
   public start(): void {
@@ -194,30 +263,84 @@ export class GameRuntime implements GameRuntimeFacade {
   };
 
   private onFixedTick(tick: number): void {
-    if (this.modules) {
+    const modules = this.modules;
+    if (!modules) {
+      return;
+    }
+
+    // game-flow spec section 34 runtime order: (1) collect input handled
+    // just below, (2) update match-flow state, (3) step physics, (4)
+    // consume physics events / apply goal+dead-ball rules.
+    modules.gameFlow.update();
+
+    if (modules.gameFlow.isPaused()) {
+      this.dispatcher.emit("runtime:fixed-tick", { tick, fixedDeltaSeconds: FIXED_DT_SECONDS });
+      this.syncAppStateFromMatchFlow();
+      this.emitSessionStateChanged();
+      return;
+    }
+
+    if (modules.gameFlow.areControlsActive()) {
       // Sample input for this exact tick and hand it to physics before
-      // stepping, per core architecture spec section 25 fixed-tick order
-      // (sample input -> submit CarInput -> step physics). Grounded state
-      // now comes from the real Phase 5 suspension/ground-contact state
-      // (falls back to true before the car has spawned/settled).
-      const grounded = this.modules.physics.getCarIds().includes("car-player")
-        ? this.modules.physics.getCarState("car-player").grounded
+      // stepping (core architecture spec section 25: sample input ->
+      // submit CarInput -> step physics). Grounded state comes from the
+      // real Phase 5 suspension/ground-contact state (falls back to true
+      // before the car has spawned/settled).
+      const grounded = modules.physics.getCarIds().includes(PLAYER_CAR_ID)
+        ? modules.physics.getCarState(PLAYER_CAR_ID).grounded
         : true;
 
-      const frame = this.modules.input.sampleGameplayInputForTick(tick, { grounded });
-      this.modules.physics.setCarInput("car-player", frame.car);
-      this.modules.physics.setCarControlProfile("car-player", frame.carControlProfile);
+      const frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
+      modules.physics.setCarInput(PLAYER_CAR_ID, frame.car);
+      modules.physics.setCarControlProfile(PLAYER_CAR_ID, frame.carControlProfile);
+    } else {
+      // game-flow spec section 27: controls are neutralised before GO and
+      // during any non-live match state (countdown, celebration, results).
+      modules.physics.clearAllInputs();
     }
 
     // The single Rapier step location: core's one FixedStepCoordinator
     // drives physics directly rather than the physics module owning a
     // second accumulator, per core architecture spec rule "never step
     // Rapier from more than one location" (see docs/physics-deviations.md).
-    this.modules?.physics.step();
+    modules.physics.step();
+
+    modules.gameFlow.applyPhysicsResults();
 
     this.dispatcher.emit("runtime:fixed-tick", {
       tick,
       fixedDeltaSeconds: FIXED_DT_SECONDS
+    });
+
+    this.syncAppStateFromMatchFlow();
+    this.emitSessionStateChanged();
+  }
+
+  private syncAppStateFromMatchFlow(): void {
+    if (!this.modules) {
+      return;
+    }
+    const next = mapMatchStateToAppState(this.modules.gameFlow.getMatchState());
+    if (next !== this.appState) {
+      this.setAppState(next);
+    }
+  }
+
+  /**
+   * Emitted once per fixed tick — not once per rendered frame — so the Vue
+   * UI layer stays in sync with match-flow session state whether ticks are
+   * driven by the real rAF loop or by `stepFixedTicksForTesting()` (used
+   * by Playwright's deterministic `advanceGameTicks` test API). This adds
+   * no extra `requestAnimationFrame` call of its own, so it does not
+   * violate the "exactly one rAF loop" architecture rule.
+   */
+  private emitSessionStateChanged(): void {
+    if (!this.modules) {
+      return;
+    }
+    this.dispatcher.emit("runtime:session-state-changed", {
+      session: this.modules.gameFlow.getSessionState(),
+      playerBoostAmount: this.getPlayerBoostAmount()
     });
   }
 
@@ -307,6 +430,85 @@ export class GameRuntime implements GameRuntimeFacade {
     return this.dispatcher.on(type, listener);
   }
 
+  private requireModules(): ModuleContainer {
+    if (!this.modules) {
+      throw new Error("initialise() must be called first.");
+    }
+    return this.modules;
+  }
+
+  public getMatchState(): MatchState {
+    return this.requireModules().gameFlow.getMatchState();
+  }
+
+  public getSessionState(): GameSessionState {
+    return this.requireModules().gameFlow.getSessionState();
+  }
+
+  public openMainMenu(): void {
+    this.requireModules().gameFlow.openMainMenu();
+    this.emitSessionStateChanged();
+  }
+
+  public openMatchSetup(): void {
+    this.requireModules().gameFlow.openMatchSetup();
+    this.emitSessionStateChanged();
+  }
+
+  public openSettings(): void {
+    this.requireModules().gameFlow.openSettings();
+    this.emitSessionStateChanged();
+  }
+
+  public selectMatchDuration(minutes: MatchDurationMinutes): void {
+    this.requireModules().gameFlow.selectMatchDuration(minutes);
+    this.emitSessionStateChanged();
+  }
+
+  public startMatch(config?: Partial<MatchConfig>): void {
+    this.requireModules().gameFlow.startMatch(config);
+    this.emitSessionStateChanged();
+  }
+
+  public pauseMatch(): void {
+    this.requireModules().gameFlow.pause();
+    this.emitSessionStateChanged();
+  }
+
+  public resumeMatch(): void {
+    this.requireModules().gameFlow.resume();
+    this.emitSessionStateChanged();
+  }
+
+  public restartMatch(): void {
+    this.requireModules().gameFlow.restartMatch();
+    this.emitSessionStateChanged();
+  }
+
+  public getPlayerBoostAmount(): number {
+    const modules = this.requireModules();
+    return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
+      ? modules.physics.getCarState(PLAYER_CAR_ID).boostAmount
+      : 0;
+  }
+
+  public replayMatch(): void {
+    this.requireModules().gameFlow.replayMatch();
+    this.emitSessionStateChanged();
+  }
+
+  public returnToMenu(): void {
+    this.requireModules().gameFlow.returnToMenu();
+    this.emitSessionStateChanged();
+  }
+
+  public getGameFlowTestApi(): BrowserGameFlowTestApi {
+    if (!this.gameFlowTestApi) {
+      throw new Error("initialise() must complete before getGameFlowTestApi().");
+    }
+    return this.gameFlowTestApi;
+  }
+
   public dispose(): void {
     this.stop();
 
@@ -321,6 +523,8 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.boostPadRenderBinding?.dispose();
     this.boostPadRenderBinding = null;
+
+    this.gameFlowTestApi = null;
 
     this.sceneRenderer?.dispose();
     this.sceneRenderer = null;

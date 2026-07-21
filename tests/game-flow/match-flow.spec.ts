@@ -1,0 +1,191 @@
+import { expect, test } from "@playwright/test";
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(() => page.evaluate(() => window.__GAME_TEST__?.gameFlow?.ready() ?? false), {
+      timeout: 15_000
+    })
+    .toBe(true);
+
+  // Deterministic manual tick-stepping (advanceGameTicks) requires the
+  // live RAF loop paused first -- otherwise it keeps stepping match-flow
+  // and physics concurrently with the manual steps (see
+  // tests/physics/foundation.spec.ts for the same established pattern).
+  await page.evaluate(() => window.__PHYSICS_TEST__?.pauseRuntime());
+});
+
+test("main menu is shown at boot with PLAY/SETTINGS visible", async ({ page }) => {
+  await expect(page.getByTestId("main-menu")).toBeVisible();
+  await expect(page.getByRole("button", { name: "PLAY" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "SETTINGS" })).toBeVisible();
+  await expect(page.locator("canvas.game-canvas")).toBeVisible();
+
+  const matchState = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getMatchState());
+  expect(matchState).toBe("MAIN_MENU");
+});
+
+test("duration selection is retained through to a started match", async ({ page }) => {
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.openMatchSetup());
+  await expect(page.getByTestId("match-setup")).toBeVisible();
+
+  for (const minutes of [1, 3, 10] as const) {
+    await page.evaluate((m) => window.__GAME_TEST__?.gameFlow?.selectMatchDuration(m), minutes);
+    const session = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+    expect(session?.selectedDurationMinutes).toBe(minutes);
+  }
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.selectMatchDuration(1));
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.startMatch());
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460));
+
+  const session = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(session?.selectedDurationMinutes).toBe(1);
+  expect(session?.matchState).toBe("PLAYING");
+});
+
+test("countdown proceeds 3 -> 2 -> 1 -> GO -> PLAYING with controls disabled until GO", async ({
+  page
+}) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(1);
+    window.__GAME_TEST__?.gameFlow?.clearMatchFlowEvents();
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+  });
+
+  await expect(page.getByTestId("countdown-overlay")).toBeVisible();
+
+  const seenStates: string[] = [];
+  for (let i = 0; i < 30; i += 1) {
+    await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(1));
+    const state = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getMatchState());
+    if (state && seenStates[seenStates.length - 1] !== state) {
+      seenStates.push(state);
+    }
+  }
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(500));
+
+  const events = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getMatchFlowEvents());
+  const countdownValues = (events ?? [])
+    .filter((e) => e.type === "countdown-step")
+    .map((e) => (e as { value: unknown }).value);
+  expect(countdownValues).toEqual([3, 2, 1, "GO"]);
+
+  const finalState = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getMatchState());
+  expect(finalState).toBe("PLAYING");
+});
+
+test("timer starts at 1:00 for a one-minute match and reaches 0:30", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(1);
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
+
+  const initialSession = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(initialSession?.regulationTimeRemaining).toBeCloseTo(60, 0);
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(30));
+  const halfwaySession = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(halfwaySession?.regulationTimeRemaining).toBeCloseTo(30, 0);
+
+  // Pauses correctly.
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.pause());
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(120));
+  const pausedSession = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(pausedSession?.regulationTimeRemaining).toBeCloseTo(30, 0);
+  expect(pausedSession?.matchState).toBe("PAUSED");
+
+  // Resumes correctly.
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.resume());
+  const resumedSession = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(resumedSession?.matchState).toBe("PLAYING");
+});
+
+test("a goal increments score once, celebrates, resets, and restarts the countdown", async ({
+  page
+}) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(3);
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.simulateGoal("player"));
+  await expect(page.getByTestId("goal-banner")).toBeVisible();
+
+  const afterGoal = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(afterGoal?.playerScore).toBe(1);
+  expect(afterGoal?.matchState).toBe("GOAL_CELEBRATION");
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(264 + 460));
+  const afterReset = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(afterReset?.matchState).toBe("PLAYING");
+  expect(afterReset?.playerScore).toBe(1);
+});
+
+test("results screen shows victory/defeat, final score, and replay/return buttons", async ({
+  page
+}) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(1);
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+    window.__GAME_TEST__?.gameFlow?.simulateGoal("player");
+  });
+
+  // Force regulation to end 1-0 (not tied) so the match ends without overtime.
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(264 + 460));
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(60));
+
+  await expect(page.getByTestId("results-screen")).toBeVisible();
+  const session = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(session?.matchState).toBe("MATCH_RESULTS");
+  expect(session?.winner).toBe("player");
+
+  await expect(page.getByTestId("final-score")).toHaveText("1 - 0");
+  await expect(page.getByRole("button", { name: "REPLAY" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "RETURN TO MENU" })).toBeVisible();
+});
+
+test("replay resets scores, retains duration, and restarts the countdown", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(1);
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+    window.__GAME_TEST__?.gameFlow?.simulateGoal("player");
+  });
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(264 + 460));
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(60));
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.replayMatch());
+
+  const session = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(session?.playerScore).toBe(0);
+  expect(session?.opponentScore).toBe(0);
+  expect(session?.selectedDurationMinutes).toBe(1);
+  expect(session?.matchState).toBe("COUNTDOWN_3");
+});
+
+test("return to menu hides the HUD, shows the main menu, and resets score", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(1);
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
+  await expect(page.getByTestId("gameplay-hud")).toBeVisible();
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.returnToMenu());
+
+  await expect(page.getByTestId("main-menu")).toBeVisible();
+  await expect(page.getByTestId("gameplay-hud")).toHaveCount(0);
+  const session = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
+  expect(session?.matchState).toBe("MAIN_MENU");
+  expect(session?.playerScore).toBe(0);
+});

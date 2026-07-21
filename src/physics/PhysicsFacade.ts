@@ -21,6 +21,8 @@ import type {
 } from "@/physics/PhysicsTypes";
 import { NEUTRAL_CAR_INPUT, type CarControlProfile } from "@/physics/PhysicsTypes";
 import { getArenaPresetDefinition } from "@/physics/arena/TestArenaPresets";
+import type { GoalScoredEvent, GoalSensorDefinition } from "@/physics/goal/GoalTypes";
+import { otherTeam, type TeamId } from "@/core/TeamTypes";
 import { CarRegistry, createCarEntity, type CarEntity } from "@/physics/entities/CarRegistry";
 import { prePhysicsTick, postPhysicsTick } from "@/physics/car/CarController";
 import { resolveCarBallContacts } from "@/physics/collision/CarBallCollision";
@@ -115,6 +117,10 @@ export class PhysicsFacade implements GameModule {
   private readonly wasTouchingBallLastTick = new Map<CarId, boolean>();
   private readonly boostPadSystem = new BoostPadSystem();
 
+  private goalSensors: { definition: GoalSensorDefinition; collider: RAPIER.Collider }[] = [];
+  private readonly goalSensorOverlapping = new Map<TeamId, boolean>();
+  private goalEvents: GoalScoredEvent[] = [];
+
   public async initialise(): Promise<void> {
     await RAPIER.init();
 
@@ -141,6 +147,12 @@ export class PhysicsFacade implements GameModule {
     }
     this.arenaBodies = [];
 
+    for (const goalSensor of this.goalSensors) {
+      world.removeCollider(goalSensor.collider, false);
+    }
+    this.goalSensors = [];
+    this.goalSensorOverlapping.clear();
+
     const definition = getArenaPresetDefinition(preset);
 
     for (const colliderSpec of definition.colliders) {
@@ -162,6 +174,24 @@ export class PhysicsFacade implements GameModule {
       );
 
       this.arenaBodies.push(body);
+    }
+
+    for (const goalSensorDefinition of definition.goalSensors) {
+      const collider = world.createCollider(
+        RAPIER.ColliderDesc.cuboid(
+          goalSensorDefinition.halfExtents.x,
+          goalSensorDefinition.halfExtents.y,
+          goalSensorDefinition.halfExtents.z
+        )
+          .setTranslation(
+            goalSensorDefinition.centre.x,
+            goalSensorDefinition.centre.y,
+            goalSensorDefinition.centre.z
+          )
+          .setSensor(true)
+      );
+      this.goalSensors.push({ definition: goalSensorDefinition, collider });
+      this.goalSensorOverlapping.set(goalSensorDefinition.defendingTeam, false);
     }
 
     this.arenaPreset = preset;
@@ -289,6 +319,11 @@ export class PhysicsFacade implements GameModule {
     // active and clears all pad timers/claim state.
     this.boostPadSystem.resetAllActive();
     this.boostPadSystem.clearEvents();
+
+    for (const team of this.goalSensorOverlapping.keys()) {
+      this.goalSensorOverlapping.set(team, false);
+    }
+    this.goalEvents = [];
 
     this.tick = 0;
     this.simulationTime = 0;
@@ -441,6 +476,24 @@ export class PhysicsFacade implements GameModule {
     this.boostPadSystem.resolveClaims(world, cars, this.tick);
     this.boostPadSystem.processRespawns(this.tick);
 
+    if (this.ballBody) {
+      const ballCollider = this.ballBody.collider(0);
+      for (const goalSensor of this.goalSensors) {
+        const overlapping = world.intersectionPair(ballCollider, goalSensor.collider);
+        const wasOverlapping = this.goalSensorOverlapping.get(goalSensor.definition.defendingTeam) ?? false;
+
+        if (overlapping && !wasOverlapping) {
+          this.goalEvents.push({
+            type: "goal-scored",
+            scoringTeam: otherTeam(goalSensor.definition.defendingTeam),
+            tick: this.tick
+          });
+        }
+
+        this.goalSensorOverlapping.set(goalSensor.definition.defendingTeam, overlapping);
+      }
+    }
+
     this.simulationTime += dt;
   }
 
@@ -543,6 +596,20 @@ export class PhysicsFacade implements GameModule {
     this.boostPadSystem.clearEvents();
   }
 
+  public getGoalEvents(): readonly GoalScoredEvent[] {
+    return this.goalEvents;
+  }
+
+  /** Test-only: the sensor centre for the goal a given team defends. */
+  public getGoalSensorCentre(defendingTeam: TeamId): { x: number; y: number; z: number } | null {
+    const sensor = this.goalSensors.find((s) => s.definition.defendingTeam === defendingTeam);
+    return sensor ? sensor.definition.centre : null;
+  }
+
+  public clearGoalEvents(): void {
+    this.goalEvents = [];
+  }
+
   public dispose(): void {
     if (this.world) {
       this.boostPadSystem.dispose(this.world);
@@ -552,6 +619,9 @@ export class PhysicsFacade implements GameModule {
     this.carRegistry.clear();
     this.ballBody = null;
     this.arenaBodies = [];
+    this.goalSensors = [];
+    this.goalSensorOverlapping.clear();
+    this.goalEvents = [];
     this.previousSnapshot.clear();
     this.currentSnapshot.clear();
     this.tick = 0;

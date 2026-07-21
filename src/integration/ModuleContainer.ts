@@ -4,7 +4,7 @@ import type { AudioModule } from "@/audio/AudioModule";
 import { NullAudioModule } from "@/audio/NullAudioModule";
 import { NullCameraModule } from "@/camera/NullCameraModule";
 import type { GameModule } from "@/core/GameModule";
-import { NullGameFlowController } from "@/game-flow/NullGameFlowController";
+import { MatchFlowController } from "@/game-flow/MatchFlowController";
 import { InputControlsModule } from "@/input/InputControlsModule";
 import { PhysicsFacade } from "@/physics/PhysicsFacade";
 import { NullStadiumModule } from "@/stadium/NullStadiumModule";
@@ -17,17 +17,19 @@ import { NullVfxModule } from "@/vfx/NullVfxModule";
  * because those modules' concrete interfaces have not been designed yet —
  * narrowing them is each phase's own job (core architecture spec section
  * 13), not something to invent ahead of reading that module's
- * specification. `input` is not typed as `GameModule` — its
- * `initialise()` needs the canvas element, so GameRuntime calls it
- * explicitly rather than through the generic zero-argument loop (see
- * InputControlsModule's class comment).
+ * specification. `input` and `gameFlow` are not typed as `GameModule` —
+ * `input.initialise()` needs the canvas element and `gameFlow.initialise()`
+ * needs the ready `PhysicsFacade`, so GameRuntime calls both explicitly
+ * rather than through the generic zero-argument loop (see
+ * InputControlsModule's class comment and Phase 7's
+ * MatchFlowController.initialise()).
  */
 export interface ModuleContainer {
   assets: AssetPipeline;
   physics: PhysicsFacade;
   input: InputControlsModule;
   ai: GameModule;
-  gameFlow: GameModule;
+  gameFlow: MatchFlowController;
   stadium: GameModule;
   camera: GameModule;
   vfx: GameModule;
@@ -40,7 +42,7 @@ export function createNullModuleContainer(): ModuleContainer {
     physics: new PhysicsFacade(),
     input: new InputControlsModule(),
     ai: new NeutralOpponentAi(),
-    gameFlow: new NullGameFlowController(),
+    gameFlow: new MatchFlowController(),
     stadium: new NullStadiumModule(),
     camera: new NullCameraModule(),
     vfx: new NullVfxModule(),

@@ -1,5 +1,6 @@
 import type { AppState } from "@/core/ApplicationState";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
+import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
 
 export interface BrowserRuntimeTestApi {
   getAppState(): AppState;
@@ -24,7 +25,7 @@ export interface BrowserCombinedTestApi {
   input?: unknown;
   ai?: unknown;
   assets?: unknown;
-  gameFlow?: unknown;
+  gameFlow?: BrowserGameFlowTestApi;
 }
 
 declare global {

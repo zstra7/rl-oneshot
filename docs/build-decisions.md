@@ -76,3 +76,36 @@
   release gate later, consider splitting `test:release` into a
   test-API-independent smoke/release pass (plain production build) and a
   separate test-mode-build pass for `tests/integration/**`.
+
+## Phase 7
+
+- **`AppState` stays a 3+3-value type, not the game-flow spec's literal
+  3-value `"BOOT"|"MENU"|"MATCH"`.** `src/core/ApplicationState.ts`'s
+  `AppState` (`BOOT`/`LOADING`/`MENU`/`MATCH`/`FATAL_ERROR`/`DISPOSED`)
+  predates Phase 7 and is load-bearing for startup-failure handling
+  (`ContractRegistry`, `ErrorReporter`). `GameRuntime.mapMatchStateToAppState`
+  maps `MatchFlowController`'s richer `MatchState` onto it instead:
+  `MAIN_MENU`/`MATCH_SETUP`/`SETTINGS` -> `"MENU"`, everything else
+  (including `MATCH_RESULTS`, still part of the match session until the
+  player returns to the menu) -> `"MATCH"`.
+- **`window.__GAME_TEST__.gameFlow` mutating methods call an explicit
+  `notifyStateChanged`/`emitSessionStateChanged` after the underlying
+  `MatchFlowController` call**, rather than relying solely on the normal
+  per-tick `runtime:session-state-changed` emission. Found necessary
+  because Playwright's deterministic match-flow tests pause the real rAF
+  loop first (same established pattern as `tests/physics/foundation.spec.ts`)
+  and then call menu-navigation actions (`openMatchSetup`, `pause`, etc.)
+  that do not themselves go through a fixed tick — without the explicit
+  notify, the Vue UI would not reflect the new state until the next manual
+  `advanceGameTicks()` call.
+- `runtime:session-state-changed` is emitted once per **fixed tick**
+  (inside `onFixedTick`), not once per rendered frame. An earlier version
+  emitted it from the rAF `frame()` method directly, but that requires a
+  companion component-owned `requestAnimationFrame` polling loop to read
+  it reactively — which is itself a second concurrent rAF loop and broke
+  `tests/integration/runtime.spec.ts`'s "exactly one requestAnimationFrame
+  is ever pending" invariant (core architecture spec: one rAF loop, full
+  stop). Emitting from `onFixedTick` needs no extra rAF call at all, and
+  also fires correctly when ticks are driven by
+  `stepFixedTicksForTesting`/`advanceGameTicks` while the rAF loop itself
+  is paused.

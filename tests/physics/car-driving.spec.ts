@@ -13,9 +13,12 @@ test("driving forward with real keyboard input moves the player car and it can h
   page
 }) => {
   await page.evaluate(() => {
-    window.__PHYSICS_TEST__?.resetWorld({
-      carCreationOrder: ["car-player", "car-opponent"]
-    });
+    // Phase 7: gameplay input is only live once match-flow reaches a
+    // controls-active state (PLAYING/ZERO_SECOND_PLAY/OVERTIME_PLAYING) --
+    // start a real match and skip deterministically through the kickoff
+    // countdown before repositioning car/ball for this test's scenario.
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
     window.__PHYSICS_TEST__?.setCarState("car-player", {
       position: { x: 0, y: 1, z: 8 }
     });
@@ -59,9 +62,10 @@ test("driving forward with real keyboard input moves the player car and it can h
 test("jump + boost + dodge all work through the live input pipeline without NaN", async ({
   page
 }) => {
-  await page.evaluate(() =>
-    window.__PHYSICS_TEST__?.resetWorld({ carCreationOrder: ["car-player", "car-opponent"] })
-  );
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
   await page.evaluate(() => window.__PHYSICS_TEST__?.stepTicks(90));
 
   await page.mouse.move(400, 300);
