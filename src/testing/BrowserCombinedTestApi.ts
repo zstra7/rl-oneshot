@@ -27,6 +27,7 @@ export interface BrowserRuntimeTestApi {
   getVisualPreset(): VisualPreset;
   getVisualDiagnostics(): VisualDiagnostics;
   getVfxActiveParticleCount(): number;
+  setAccessibilityOverrides(options: { reducedJitter: boolean; disableDithering: boolean }): void;
 }
 
 /**

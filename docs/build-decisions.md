@@ -217,3 +217,18 @@
   unchanged, preserving the core architecture spec's "exactly one
   renderer/scene/camera" invariant; only what happens inside
   `updateRenderFrame` changed.
+
+## Phase 15
+
+- `useSettingsStore` (Pinia) follows the exact same "controller/engine is
+  the source of truth, the store only mirrors/persists" precedent as
+  `useMatchFlowStore` — the store owns the persisted `AppSettings` value
+  itself (there is no separate "settings controller" module), and
+  `SettingsPanel.vue` calls straight through to `runtime.*` methods for
+  the fields that have a live engine effect, exactly like every other
+  menu component already does for match-flow actions.
+- `validateSettings()` is a plain exported function, not a store action,
+  so it's unit-testable without touching `localStorage` (Vitest's `node`
+  environment has no `localStorage` global) — the store's `load()`/
+  `update()` actions are thin `localStorage` read/write wrappers around
+  it, exercised by Playwright instead.

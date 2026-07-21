@@ -7,7 +7,7 @@ import type {
   RenderFrameModule
 } from "@/core/GameModule";
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
-import { PSX_RENDER_PRESETS, type VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
+import { PSX_RENDER_PRESETS, type PsxRenderSettings, type VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
 import { PsxRenderPipeline } from "@/visual-language/PsxRenderPipeline";
 import { updateAllJitterHandles } from "@/visual-language/VertexJitter";
 
@@ -34,6 +34,9 @@ export class PlaceholderSceneRenderer
   private camera: THREE.PerspectiveCamera | null = null;
   private psxPipeline: PsxRenderPipeline | null = null;
   private visualPreset: VisualPreset = "balanced";
+  private reducedJitter = false;
+  private ditheringDisabled = false;
+  private effectiveSettings: PsxRenderSettings = PSX_RENDER_PRESETS["balanced"];
 
   public constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -109,13 +112,34 @@ export class PlaceholderSceneRenderer
   /** PSX visual spec section 39: `setVisualPreset`/`getVisualPreset`. */
   public setVisualPreset(preset: VisualPreset): void {
     this.visualPreset = preset;
-    const settings = PSX_RENDER_PRESETS[preset];
-    this.psxPipeline?.applySettings(settings);
-    updateAllJitterHandles(settings.jitterGrid, settings.jitterEnabled);
+    this.applyEffectiveSettings();
   }
 
   public getVisualPreset(): VisualPreset {
     return this.visualPreset;
+  }
+
+  /**
+   * Settings spec section 25 accessibility category: "reduced jitter" /
+   * "disable dithering" apply on top of whichever preset is selected,
+   * rather than requiring the user to also give up the preset's
+   * resolution/colour-level choice to get them.
+   */
+  public setAccessibilityOverrides(options: { reducedJitter: boolean; disableDithering: boolean }): void {
+    this.reducedJitter = options.reducedJitter;
+    this.ditheringDisabled = options.disableDithering;
+    this.applyEffectiveSettings();
+  }
+
+  private applyEffectiveSettings(): void {
+    const base = PSX_RENDER_PRESETS[this.visualPreset];
+    this.effectiveSettings = {
+      ...base,
+      jitterEnabled: base.jitterEnabled && !this.reducedJitter,
+      ditherEnabled: base.ditherEnabled && !this.ditheringDisabled
+    };
+    this.psxPipeline?.applySettings(this.effectiveSettings);
+    updateAllJitterHandles(this.effectiveSettings.jitterGrid, this.effectiveSettings.jitterEnabled);
   }
 
   public getDiagnostics(): {
@@ -136,11 +160,10 @@ export class PlaceholderSceneRenderer
 
   /** PSX visual spec section 39: `getVisualDiagnostics`. */
   public getVisualDiagnostics(): VisualDiagnostics {
-    const settings = PSX_RENDER_PRESETS[this.visualPreset];
     return {
       preset: this.visualPreset,
-      internalResolution: this.psxPipeline?.getInternalResolution() ?? settings.internalResolution,
-      settings
+      internalResolution: this.psxPipeline?.getInternalResolution() ?? this.effectiveSettings.internalResolution,
+      settings: this.effectiveSettings
     };
   }
 

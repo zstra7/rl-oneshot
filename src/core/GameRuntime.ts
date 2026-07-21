@@ -134,6 +134,9 @@ export interface GameRuntimeFacade {
 
   /** Test/diagnostic hook: how many pooled VFX particles are currently alive. */
   getVfxActiveParticleCount(): number;
+
+  /** Settings spec section 25 accessibility category: applies on top of whichever preset is selected. */
+  setAccessibilityOverrides(options: { reducedJitter: boolean; disableDithering: boolean }): void;
 }
 
 export class GameRuntime implements GameRuntimeFacade {
@@ -594,6 +597,10 @@ export class GameRuntime implements GameRuntimeFacade {
 
   public getVfxActiveParticleCount(): number {
     return this.vfxModule?.getActiveParticleCount() ?? 0;
+  }
+
+  public setAccessibilityOverrides(options: { reducedJitter: boolean; disableDithering: boolean }): void {
+    this.sceneRenderer?.setAccessibilityOverrides(options);
   }
 
   public getVisualDiagnostics(): VisualDiagnostics {

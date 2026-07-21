@@ -1,91 +1,95 @@
 # Current Phase
 
-Phase: 14 — Stadium Art and VFX
+Phase: 15 — UI and Settings Polish
 Status: Complete — exit criteria verified
 Last verified commit: (this commit)
 
 ## Working
-- `src/assets/procedural/StadiumGeometryFactory.ts`: floor markings
-  (centre line, centre circle, goal-box outlines — PSX visual spec
-  section 13) and instanced structural ribs along both side walls
-  (`THREE.InstancedMesh`, spec section 13's "thick enough to read at
-  320x180... never block goals"), scaled to fit this project's existing
-  field footprint (see Known deviations).
-- `src/vfx/VfxModule.ts`: the real VFX module (Master Brief Phase 14,
-  replacing the `NullVfxModule` stub) — a single shared, fixed-size (500)
-  particle pool rendered as one `THREE.Points` draw call with a custom
-  per-particle-sized `ShaderMaterial`. Three effects, each driven purely
-  by observing existing physics/game-flow state (no new physics/input
-  events needed): a boost trail (detected via a car's `boostAmount`
-  dropping tick-to-tick), a ball-impact burst (detected via an abrupt
-  ball velocity change), and a team-coloured goal-celebration burst
-  (detected via entering the `GOAL_CELEBRATION` match state). Wired into
-  `GameRuntime` as a `RenderFrameModule` the same way
-  `PhysicsRenderBinding`/`ChaseCameraController` are.
-- `window.__GAME_TEST__.runtime.getVfxActiveParticleCount()`: a new test/
-  diagnostic hook used to verify particles actually spawn and later decay
-  (pooling, not a leak) without relying on pixel-level screenshot
-  comparison.
+- `src/stores/settingsStore.ts`: a real, persisted `AppSettings` object
+  (`localStorage` key `space-carball-settings-v1`, spec section 25) with
+  `validateSettings()` sanitising every field individually against
+  `DEFAULT_SETTINGS` — a corrupted/edited/older-schema stored value
+  degrades field by field instead of discarding the whole object.
+- `src/components/menu/SettingsPanel.vue`: replaces the Phase 7
+  placeholder with the real 6-category UI (GAMEPLAY/CAMERA/GRAPHICS/
+  AUDIO/CONTROLS/ACCESSIBILITY, spec section 25) with functional controls
+  for every listed field. Two categories are fully live end-to-end:
+  GRAPHICS' pixel preset (`runtime.setVisualPreset`) and ACCESSIBILITY's
+  "reduced jitter"/"disable dithering" (new
+  `PlaceholderSceneRenderer.setAccessibilityOverrides`, applied on top of
+  whichever preset is selected). GAMEPLAY's default match length is also
+  live (`runtime.selectMatchDuration`). CONTROLS shows the default
+  keyboard/mouse/gamepad bindings read-only (spec explicitly permits
+  deferring rebinding). Every field across every category is real UI,
+  real state, and real persistence even where not yet live-wired to an
+  engine effect — see Known deviations.
+- `GameCanvas.vue`: loads persisted settings right after
+  `runtime.initialise()` and applies the visual preset, accessibility
+  overrides, and default match duration before the first rendered frame.
+- `PlaceholderSceneRenderer.setAccessibilityOverrides()`: layers
+  jitter/dither overrides on top of the active preset rather than
+  requiring the user to give up the preset's resolution/colour-level
+  choice to get them; `getVisualDiagnostics()` now reports the effective
+  (preset + overrides) settings, not just the raw preset.
+- `window.__GAME_TEST__.runtime.setAccessibilityOverrides()`: new test
+  hook mirroring the above.
 
 ## Failing
-- None. All Phase 14 exit criteria verified locally in this session.
+- None. All Phase 15 exit criteria verified locally in this session.
 
 ## Deferred
-- Curved floor-to-wall/wall-to-ceiling transitions, the segmented
-  transparent glass shell, and the floating mechanical base (spec section
-  13) — each a substantially larger geometry-authoring task than what was
-  built this phase. See `docs/visual-language-deviations.md`.
-- Car-car impact particles, jump bursts, powerslide sparks (spec section
-  19) — need either a dedicated physics collision-event channel or
-  per-tick input-edge tracking that doesn't exist yet.
-- The full goal-celebration choreography (shockwave, shards, arena pulse,
-  star streak, banner, camera impulse — spec section 20) — reduced to a
-  single team-coloured particle burst this phase; the other five
-  sub-effects are each a separate system.
-- Starfield goal response (radial star streak, team-colour pulse, brief
-  exposure lift — spec section 16).
+- Live wiring for camera settings (FOV/distance/height/stiffness/ball-
+  look/shake) — `ChaseCameraController` reads module-level constants, not
+  a per-instance settings input yet.
+- Live wiring for audio settings (master/music/effects/UI) — the audio
+  module is still `NullAudioModule` (Phase 16).
+- Live wiring for the remaining accessibility toggles (reduced shake,
+  reduced flashes, high-contrast ball, team-pattern mode, larger HUD),
+  graphics particle/star density, and glow — persisted and shown in the
+  UI, no backing engine effect yet.
+- Keybind rebinding UI (spec explicitly permits deferring this).
+- Full custom keyboard/gamepad menu navigation (spec section 22's focus
+  chevron/scan animation) — native browser Tab order and `:focus-visible`
+  styling are used instead of a custom nav system.
 
 ## Tests passing
-- `npm run validate` — all four validators pass (no asset-layout changes
-  this phase).
+- `npm run validate` — all four validators pass.
 - `npm run type-check` (`vue-tsc --noEmit`) — zero errors.
-- `npm run test:unit` (Vitest) — 19 files, 168 tests, all passing,
-  including a new `vfxModule.spec.ts` (7 tests): starts empty, spawns
-  boost-trail particles only while a car actively consumes boost (not for
-  a car with boost held but empty/no-boost input), spawns an impact burst
-  on an abrupt ball velocity change, spawns a larger celebratory burst on
-  entering `GOAL_CELEBRATION`, particles decay back to zero after their
-  lifetime (pooling, not a leak), and the pool never exceeds its fixed
-  size under sustained heavy spawning. All 161 prior tests (Phases 1-13)
-  still pass unchanged.
+- `npm run test:unit` (Vitest) — 20 files, 175 tests, all passing,
+  including a new `settingsStore.spec.ts` (7 tests): defaults for
+  undefined/null/garbage/empty input, field-by-field fallback under
+  partial corruption, enum rejection, numeric clamping, schema-version
+  stamping, and idempotency. All 168 prior tests (Phases 1-14) still pass
+  unchanged.
 - `npm run build` (validate -> type-check -> unit -> `vite build`) —
   passes on a plain production build.
-- Playwright: all 54 prior tests still pass, plus 6 new tests across
-  `tests/visual-language/stadium-vfx.spec.ts` (3: stadium art renders
-  with no console errors, boosting spawns particles that later decay to
-  zero, a goal spawns a celebratory burst) — 57/57 total on `chromium-dev`
-  and `chromium-preview`. Verified visually via a Playwright screenshot
-  showing the centre line, centre circle, and structural wall ribs
-  clearly rendered on the field.
+- Playwright: a new `tests/ui/settings.spec.ts` (6 tests): all six
+  category tabs render with GAMEPLAY default-selected, a graphics preset
+  change takes effect on the live renderer immediately, accessibility
+  jitter/dither toggles apply live, settings persist across a full page
+  reload (verified via both the live diagnostics and the raw
+  `localStorage` value), a corrupted `localStorage` value falls back to
+  defaults with zero console errors, and changing the default match
+  length in Settings changes Match Setup's selected duration. All prior
+  Playwright tests still pass — see the full-suite run in this session's
+  log (63 tests total across `chromium-dev`/`chromium-preview`).
 
 ## Next exact task
-- Begin Phase 15 (UI and settings polish) per `plan/MASTER_BUILD_BRIEF.md`
-  and this spec's sections 22-27/34-38 (main menu, match setup, settings,
-  gameplay HUD, navigation, pause/results polish — persistence,
-  keyboard/gamepad navigation). Required reading before starting: those
-  sections (not yet read in depth this session). Do not touch the audio
-  module (Phase 16) yet.
+- Begin Phase 16 (audio module) per `plan/MASTER_BUILD_BRIEF.md` and
+  `plan/retro_audio_module_spec.md`. Required reading before starting:
+  that spec file in full (not yet read this session). The settings
+  store's `audio.master/music/effects/ui` fields already exist and are
+  persisted, ready for the real audio module to read once it exists — do
+  not re-invent a second audio-settings surface.
 
 ## Known deviations
-- Stadium field dimensions were not resized to this spec's 72x48 — a
-  pre-existing deviation from Phase 3 onward that everything since has
-  been calibrated against; see `docs/visual-language-deviations.md`.
-- VFX scope: three effects with an unambiguous trigger signal; several
-  spec-listed effects deferred — see Deferred above and
-  `docs/visual-language-deviations.md`.
-- Floor markings/ribs use the existing footprint's scale, not the spec's
-  literal dimensions.
-- Carried over from Phase 1-13: `window.__GAME_TEST__`/`__ASSET_TEST__`/
+- Settings-spec's rich `VisualPreset` deep-partial-merge API was not
+  implemented; only two named accessibility overrides were added instead
+  — see `docs/visual-language-deviations.md` Phase 15 section.
+- Camera/audio/most-accessibility settings are real+persisted UI without
+  a live engine effect yet — see Deferred above.
+- No custom keyboard/gamepad settings-navigation system.
+- Carried over from Phase 1-14: `window.__GAME_TEST__`/`__ASSET_TEST__`/
   `__PHYSICS_TEST__`/`__INPUT_TEST__` only install when `__TEST_BUILD__`
   is true, which the literal `test:release` script (plain `npm run
   build`) does not set — see `docs/build-decisions.md`. A benign

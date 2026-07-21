@@ -25,7 +25,8 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       setVisualPreset: (preset) => runtime.setVisualPreset(preset),
       getVisualPreset: () => runtime.getVisualPreset(),
       getVisualDiagnostics: () => runtime.getVisualDiagnostics(),
-      getVfxActiveParticleCount: () => runtime.getVfxActiveParticleCount()
+      getVfxActiveParticleCount: () => runtime.getVfxActiveParticleCount(),
+      setAccessibilityOverrides: (options) => runtime.setAccessibilityOverrides(options)
     },
     gameFlow: runtime.getGameFlowTestApi()
   };

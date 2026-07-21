@@ -131,6 +131,36 @@ Record deviations from `plan/psx_visual_stadium_game_loop_spec_v1_1_boost_pads.m
   ribs use `arenaMetal` (maximum jitter, matching the wall/floor/ceiling
   they extend).
 
+## Phase 15
+
+- **Settings-spec `VisualPreset` (section 39's rich per-field settings
+  merge object) and this project's `PsxRenderSettings` remain distinct
+  types** (see Phase 13 section above) — the new `setAccessibilityOverrides`
+  method adds exactly two settings-spec-required accessibility toggles
+  (reduced jitter, disable dithering) as first-class overrides applied on
+  top of whichever preset is selected, rather than generalising to a full
+  deep-partial-merge API. The other five accessibility toggles (reduced
+  shake, reduced flashes, high-contrast ball, team-pattern mode, larger
+  HUD) are persisted and shown in the UI but not yet wired to a live
+  engine effect — see below.
+- **Camera settings (FOV/distance/height/stiffness/ball-look strength/
+  shake) and audio settings (master/music/effects/UI) are real, working
+  UI controls with real persistence, but not yet live-applied** —
+  `ChaseCameraController` reads its tuning from a module-level constants
+  object (`CameraConstants.ts`), not a per-instance settings input, and
+  the audio module is still `NullAudioModule` (Phase 16). Wiring these
+  live is natural follow-up work once those modules accept runtime
+  overrides, not a Phase 15 blocker — the settings themselves are
+  correctly captured, validated, and persisted today.
+- **Gameplay settings similarly split**: "default match length" is fully
+  live (applied at boot and whenever changed, verified by a Playwright
+  test that changing it in Settings changes Match Setup's selected
+  duration) since `MatchFlowController.selectMatchDuration` already
+  existed; "camera shake enabled" and "goal celebration intensity" are
+  persisted UI-only for the same reason as the camera category above.
+- **Controls category shows the default keyboard/mouse/gamepad bindings
+  read-only** — spec section 25 explicitly permits deferring rebinding
+  ("Rebinding may be deferred").
 - **Colour quantisation is per-RGB-channel** (`floor(colour * levels +
   0.5) / levels` on the raw `vec3` colour), matching section 6's "32
   levels per RGB channel" default exactly — not a fixed indexed/LUT
