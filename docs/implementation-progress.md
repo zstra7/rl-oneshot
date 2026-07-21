@@ -89,6 +89,17 @@ Last verified commit: (this commit)
   Phase 2 successor) instead of an empty scene. Do not begin physics
   (Phase 3) until Phase 2's exit criteria pass.
 
+## Skill update
+- The user supplied the real `CloudAI-X/threejs-skills`-equivalent content
+  under a top-level `ACTUAL SKILLS TO USE/` folder (pushed directly to this
+  branch). All ten project-authored placeholder `.claude/skills/threejs-*/
+  SKILL.md` files from Phase 0 were replaced with this real content, and
+  the staging folder was removed. `validate:threejs-skills`,
+  `type-check`, and `test:unit` were all re-verified green after the swap.
+  The "authored locally instead of vendored" deviation noted below no
+  longer applies as of this commit — `docs/threejs-skill-usage-log.md`
+  should be updated as each skill is actually consulted going forward.
+
 ## Known deviations
 - `ModuleContainer` (`src/integration/ModuleContainer.ts`) types every
   slot except `audio` as the generic `GameModule` contract rather than the
@@ -111,8 +122,8 @@ Last verified commit: (this commit)
   See `docs/build-decisions.md` Phase 1 entry for detail and the
   `PLAYWRIGHT_TEST=1` workaround used to verify
   `tests/integration/**` against the preview server in this session.
-- Carried over from Phase 0: the `CloudAI-X/threejs-skills` collection is
-  not fetchable from this session; `.claude/skills/threejs-*` files remain
-  project-authored. See `docs/build-decisions.md` and
-  `docs/integration-deviations.md` for the `typescript`/`vitest`/
-  `@types/three`/`@types/node` toolchain version deviations.
+- Resolved: `.claude/skills/threejs-*` are now the real supplied skill
+  content (see Skill update above), not project-authored placeholders.
+- See `docs/build-decisions.md` and `docs/integration-deviations.md` for
+  the `typescript`/`vitest`/`@types/three`/`@types/node` toolchain version
+  deviations (still in effect).
