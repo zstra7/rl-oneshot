@@ -86,16 +86,33 @@ export const DEFAULT_PHYSICS_PARAMETERS: PhysicsParameters = {
   },
 
   grip: {
-    normalRate: 12,
-    normalMaxAcceleration: 60,
+    // Bumped from 12/60 (WS2, plan/POLISH_OVERHAUL_PLAN.md): the original
+    // values let lateral velocity persist for ~0.5s+ after a turn, reading
+    // as a long, loose drift rather than RL's near-instant rail grip.
+    // Final values chosen empirically (ad hoc Vitest debugging, see
+    // docs/physics-deviations.md) — the yaw/grip "acceleration" params are
+    // applied as torque/linear impulses, not literal accelerations, so
+    // their effective strength is scaled down by the car's actual
+    // Rapier-computed moment of inertia/mass; the round numbers below are
+    // what was needed to reach a genuinely snappy, non-oscillating feel,
+    // not a value derived analytically from the constants' names.
+    normalRate: 90,
+    normalMaxAcceleration: 200,
     powerslideRate: 2,
     powerslideMaxAcceleration: 18,
     blendTime: 0.075
   },
 
   steering: {
-    response: 12,
-    maximumYawAcceleration: 25,
+    // Bumped from 12/25 (WS2), empirically tuned alongside grip above:
+    // the yaw-rate servo's correction toward desiredYawRate=0 on steer
+    // release was too slow, leaving residual yaw spinning for hundreds of
+    // ms. At these values steady-state full-lock yaw rate converges to
+    // within ~1% of the intended curvature-derived target
+    // (maxCurvature(speed) * speed) and decays smoothly (no overshoot)
+    // to near-zero within ~0.5s of releasing steer.
+    response: 200,
+    maximumYawAcceleration: 450,
     powerslideYawMultiplier: 1.35,
     uprightStrength: 35,
     uprightDamping: 8

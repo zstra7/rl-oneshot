@@ -140,6 +140,15 @@ test("results screen shows victory/defeat, final score, and replay/return button
 
   // Force regulation to end 1-0 (not tied) so the match ends without overtime.
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(264 + 460));
+  // Park the opponent far from the ball before fast-forwarding a full
+  // minute of live simulation: post-WS2's much snappier driving, the AI
+  // is now competent enough to occasionally score for real during a
+  // 60-second stretch, which would flip this into overtime instead of a
+  // clean regulation win — this test is about the results-screen
+  // transition, not AI scoring odds, so keep the opponent out of play.
+  await page.evaluate(() =>
+    window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } })
+  );
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(60));
 
   await expect(page.getByTestId("results-screen")).toBeVisible();
@@ -161,6 +170,12 @@ test("replay resets scores, retains duration, and restarts the countdown", async
     window.__GAME_TEST__?.gameFlow?.simulateGoal("player");
   });
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(264 + 460));
+  // See the "results screen" test above: park the opponent so it can't
+  // score for real during the 60-second fast-forward and flip the match
+  // into overtime instead of a clean regulation win.
+  await page.evaluate(() =>
+    window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } })
+  );
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(60));
 
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.replayMatch());

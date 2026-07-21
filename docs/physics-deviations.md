@@ -229,3 +229,36 @@ sensor overlap facts")
   advances two ticks specifically because of this, and
   `tests/unit/goalSensors.spec.ts` always steps well past this window
   (never asserts detection on the exact first tick after a teleport).
+
+## Post-launch polish pass — WS2 (plan/POLISH_OVERHAUL_PLAN.md)
+
+- **Grip/steering tuning bumped well beyond the plan's initial estimate,
+  found via ad hoc Vitest debugging.** The plan proposed `grip.normalRate:
+  40`, `steering.response: 30` as a starting point; measuring actual yaw
+  decay after a turn showed those values barely moved the needle versus
+  the original 12/12 (a turn's residual yaw rate only dropped from ~-0.88
+  rad/s to ~-0.49 rad/s over 0.6s — nowhere near RL's near-instant grip).
+  Root cause: `applyGroundSteering`/`applyLateralGrip` apply their
+  "acceleration" parameters as torque/linear **impulses**
+  (`impulse = accel * dt`), and Rapier converts an impulse to an angular/
+  linear velocity change via the body's actual mass/inertia tensor — so
+  the parameter's effective real-world strength is scaled down by an
+  implicit, uncalibrated factor baked into the car collider's geometry,
+  not a literal rad/s² or m/s². Iteratively increased both constants
+  (verified via direct `PhysicsFacade.setPhysicsParameters()` + tick
+  logging in a throwaway test) until steering response was genuinely
+  snappy: final `grip.normalRate: 90` / `normalMaxAcceleration: 200`,
+  `steering.response: 200` / `maximumYawAcceleration: 450`. At these
+  values, full-lock steady-state yaw rate converges to within ~1% of the
+  curvature-derived target (`maxCurvature(speed) * speed`, the value the
+  yaw servo is nominally trying to track) and decays smoothly with no
+  overshoot to near-zero within ~0.5s of releasing steer — see
+  `tests/unit/drivingFeel.spec.ts`.
+- **Test discovery, not a physics bug: a 480-tick (4s) straight-line
+  drive test crashes the car into the arena end wall** regardless of
+  tuning — `TEST_ARENA_DIMENSIONS.halfLength` is 30m, and the car reaches
+  ~14 m/s (no-boost drive speed) well before 4 seconds elapse, covering
+  over 50m. Any multi-tick straight-line/top-speed assertion must budget
+  its tick count to stay well inside the arena (≤ ~280 ticks / 2.3s for
+  this arena size) or it will silently pass or fail based on wall-impact
+  behaviour rather than the driving model under test.

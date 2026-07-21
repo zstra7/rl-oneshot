@@ -26,6 +26,16 @@ test("driving forward with real keyboard input moves the player car and it can h
       position: { x: 0, y: 1, z: 0 },
       linearVelocity: { x: 0, y: 0, z: 0 }
     });
+    // Isolate this player-driving scenario from the live opponent AI: it
+    // reacts to the ball teleport too and, post WS2's much snappier
+    // steering, can whip across the play area fast enough to clip the
+    // player's car via car-car collision before the scripted shot lands
+    // (verified: without this, the shot's ball direction becomes
+    // non-deterministic). Parking the opponent far away keeps this test
+    // about player driving mechanics only, not AI/collision timing.
+    window.__PHYSICS_TEST__?.setCarState("car-opponent", {
+      position: { x: 40, y: 1, z: 40 }
+    });
   });
 
   // Let the car settle onto the ground.
