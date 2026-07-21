@@ -185,3 +185,120 @@ test("virtual gamepad connect/disconnect drives CarInput and neutralises on disc
   );
   expect(afterDisconnect?.car.throttle).toBe(0);
 });
+
+test("real gamepad hardware polling is never hijacked by the test API on boot", async ({
+  page
+}) => {
+  // WS1.B primary fix regression gate: installInputTestApi must not
+  // unconditionally swap InputControlsModule onto the virtual gamepad
+  // provider — that would silently kill real controller polling in every
+  // dev/test build, even outside of any test.
+  const kindOnBoot = await page.evaluate(
+    () => window.__INPUT_TEST__?.getDiagnostics().gamepadProviderKind
+  );
+  expect(kindOnBoot).toBe("browser");
+
+  const gamepadIndex = await page.evaluate(() =>
+    window.__INPUT_TEST__?.connectVirtualGamepad({
+      id: "Virtual Test Pad (Standard)",
+      mapping: "standard",
+      axesCount: 4,
+      buttonCount: 17
+    })
+  );
+  expect(typeof gamepadIndex).toBe("number");
+
+  const kindAfterConnect = await page.evaluate(
+    () => window.__INPUT_TEST__?.getDiagnostics().gamepadProviderKind
+  );
+  expect(kindAfterConnect).toBe("virtual");
+
+  await page.evaluate(() => window.__INPUT_TEST__?.reset());
+
+  const kindAfterReset = await page.evaluate(
+    () => window.__INPUT_TEST__?.getDiagnostics().gamepadProviderKind
+  );
+  expect(kindAfterReset).toBe("browser");
+});
+
+test("gamepad stick movement alone (no button press) activates the gamepad device", async ({
+  page
+}) => {
+  const gamepadIndex = await page.evaluate(() =>
+    window.__INPUT_TEST__?.connectVirtualGamepad({
+      id: "Virtual Test Pad (Standard)",
+      mapping: "standard",
+      axesCount: 4,
+      buttonCount: 17
+    })
+  );
+
+  await page.evaluate((index) => {
+    const buttons = new Array(17).fill({ pressed: false, touched: false, value: 0 });
+    window.__INPUT_TEST__?.setVirtualGamepadState(index!, {
+      connected: true,
+      axes: [0.8, 0, 0, 0],
+      buttons
+    });
+    window.__INPUT_TEST__?.assignGamepad(index!);
+  }, gamepadIndex);
+
+  await page.waitForTimeout(50);
+
+  const frame = await page.evaluate(() => window.__INPUT_TEST__?.sampleTick({ grounded: true }));
+  expect(frame?.sourceDevice).toBe("gamepad");
+  expect(frame?.car.steer).toBeGreaterThan(0.5);
+});
+
+test("gamepad west button (not the reverse trigger) drives air-roll/powerslide", async ({
+  page
+}) => {
+  const gamepadIndex = await page.evaluate(() =>
+    window.__INPUT_TEST__?.connectVirtualGamepad({
+      id: "Virtual Test Pad (Standard)",
+      mapping: "standard",
+      axesCount: 4,
+      buttonCount: 17
+    })
+  );
+
+  // Reverse trigger held (index 6), west button (index 2) NOT held: no
+  // air-roll should be produced from braking alone.
+  await page.evaluate((index) => {
+    const buttons = new Array(17).fill({ pressed: false, touched: false, value: 0 });
+    buttons[6] = { pressed: true, touched: true, value: 1 };
+    window.__INPUT_TEST__?.setVirtualGamepadState(index!, {
+      connected: true,
+      axes: [1, 0, 0, 0],
+      buttons
+    });
+    window.__INPUT_TEST__?.assignGamepad(index!);
+  }, gamepadIndex);
+  await page.waitForTimeout(50);
+
+  const brakingFrame = await page.evaluate(() =>
+    window.__INPUT_TEST__?.sampleTick({ grounded: false })
+  );
+  // Airborne + no air-roll modifier => horizontal stick resolves to yaw, not roll.
+  expect(brakingFrame?.car.roll).toBe(0);
+  expect(brakingFrame?.car.yaw).toBeGreaterThan(0.5);
+
+  // Now hold west (index 2) too: air-roll should activate and resolve to roll.
+  await page.evaluate((index) => {
+    const buttons = new Array(17).fill({ pressed: false, touched: false, value: 0 });
+    buttons[6] = { pressed: true, touched: true, value: 1 };
+    buttons[2] = { pressed: true, touched: true, value: 1 };
+    window.__INPUT_TEST__?.setVirtualGamepadState(index!, {
+      connected: true,
+      axes: [1, 0, 0, 0],
+      buttons
+    });
+  }, gamepadIndex);
+  await page.waitForTimeout(50);
+
+  const airRollFrame = await page.evaluate(() =>
+    window.__INPUT_TEST__?.sampleTick({ grounded: false })
+  );
+  expect(airRollFrame?.car.roll).toBeGreaterThan(0.5);
+  expect(airRollFrame?.car.yaw).toBe(0);
+});

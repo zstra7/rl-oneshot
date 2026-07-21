@@ -141,4 +141,11 @@ export interface InputDiagnostics {
   readonly rawKeyboardHeld: string[];
   readonly rawMouseButtonsHeld: number[];
   readonly output: HumanGameplayInputFrame;
+  /**
+   * Which GamepadProvider is currently polled — "browser" means real
+   * hardware (navigator.getGamepads()), "virtual" means a test-injected
+   * VirtualGamepadProvider. Exists so a real browser session can assert
+   * it never silently loses real controller polling to a test hook.
+   */
+  readonly gamepadProviderKind: "browser" | "virtual";
 }

@@ -16,8 +16,11 @@ export function applyGroundSteering(
   const angvel = car.body.angvel();
 
   const forwardSpeed = V.dot(linvel, forwardOnSurface);
+  // steer:+1 = turn right = negative yaw rate about the support normal
+  // (the car's local forward is -Z, so a positive yaw rate about +Y turns
+  // the car toward its left, not its right).
   const desiredYawRate =
-    steer * maxCurvature(Math.abs(forwardSpeed)) * Math.abs(forwardSpeed) * V.signOrOne(forwardSpeed);
+    -steer * maxCurvature(Math.abs(forwardSpeed)) * Math.abs(forwardSpeed) * V.signOrOne(forwardSpeed);
 
   const currentYawRate = V.dot(angvel, supportNormal);
   const error = desiredYawRate - currentYawRate;

@@ -37,6 +37,7 @@ export interface InputInitialisationOptions {
 }
 
 const AXIS_DEADZONE = 0.15;
+const STICK_ACTIVATION_THRESHOLD = 0.35;
 
 function applyDeadzone(value: number): number {
   return Math.abs(value) < AXIS_DEADZONE ? 0 : value;
@@ -54,6 +55,7 @@ export class InputControlsModule {
   private keyboard: KeyboardState | null = null;
   private mouse: MouseState | null = null;
   private gamepadProvider: GamepadProvider = new BrowserGamepadProvider();
+  private gamepadProviderKind: "browser" | "virtual" = "browser";
   private assignedGamepadIndex: number | null = null;
   private latestGamepadSnapshot: GamepadLike | null = null;
   private previousGamepadButtonsPressed: boolean[] = [];
@@ -188,6 +190,23 @@ export class InputControlsModule {
       return;
     }
 
+    // Promote to "gamepad" on analog activity too, not just a button edge —
+    // otherwise moving the stick or squeezing a trigger never activates the
+    // pad, and any keyboard/mouse touch (including the one-time audio-resume
+    // gesture) leaves it stuck on "keyboard-mouse" until a pad button press.
+    const leftXActivity = Math.abs(gamepad.axes[STANDARD_GAMEPAD_AXES.leftX] ?? 0);
+    const leftYActivity = Math.abs(gamepad.axes[STANDARD_GAMEPAD_AXES.leftY] ?? 0);
+    const accelerateActivity = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.accelerateButton]?.value ?? 0;
+    const reverseActivity = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.reverseButton]?.value ?? 0;
+    if (
+      leftXActivity > STICK_ACTIVATION_THRESHOLD ||
+      leftYActivity > STICK_ACTIVATION_THRESHOLD ||
+      accelerateActivity > GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD ||
+      reverseActivity > GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD
+    ) {
+      this.activeDevice = "gamepad";
+    }
+
     for (let i = 0; i < gamepad.buttons.length; i += 1) {
       const wasPressed = this.previousGamepadButtonsPressed[i] ?? false;
       const isPressed = gamepad.buttons[i]?.pressed ?? false;
@@ -213,6 +232,14 @@ export class InputControlsModule {
   /** Test-only: swap in a VirtualGamepadProvider after initialise(). */
   public useVirtualGamepadProvider(provider: GamepadProvider): void {
     this.gamepadProvider = provider;
+    this.gamepadProviderKind = "virtual";
+    this.assignGamepad(null);
+  }
+
+  /** Test-only counterpart of useVirtualGamepadProvider: restore real hardware polling. */
+  public useBrowserGamepadProvider(): void {
+    this.gamepadProvider = new BrowserGamepadProvider();
+    this.gamepadProviderKind = "browser";
     this.assignGamepad(null);
   }
 
@@ -284,8 +311,10 @@ export class InputControlsModule {
 
     const accelerateValue = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.accelerateButton]?.value ?? 0;
     const reverseValue = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.reverseButton]?.value ?? 0;
-    const airRollModifier =
-      reverseValue > GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD;
+    // Air-roll/powerslide modifier is a dedicated face button (west/X by
+    // default, matching RL), not the brake trigger — braking mid-air must
+    // not turn stick input into roll.
+    const airRollModifier = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.powerslideButton]?.pressed ?? false;
 
     return {
       accelerate: accelerateValue > GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD ? accelerateValue : 0,
@@ -327,9 +356,14 @@ export class InputControlsModule {
     const ballCameraPressed = this.consumeEdge("BALL_CAMERA", "pressed");
     const pausePressed = this.consumeEdge("PAUSE", "pressed");
 
+    const rearViewHeld =
+      this.activeDevice === "gamepad"
+        ? this.latestGamepadSnapshot?.buttons[DEFAULT_GAMEPAD_BINDINGS.rearViewButton]?.pressed ?? false
+        : this.mouse?.isPressed(DEFAULT_MOUSE_BINDINGS.rearView) ?? false;
+
     const camera: CameraInput = {
       toggleBallCameraPressed: ballCameraPressed,
-      rearViewHeld: this.mouse?.isPressed(DEFAULT_MOUSE_BINDINGS.rearView) ?? false,
+      rearViewHeld,
       swivelX: 0,
       swivelY: 0,
       resetSwivelPressed: false
@@ -397,7 +431,8 @@ export class InputControlsModule {
       activeDevice: this.activeDevice,
       rawKeyboardHeld: this.keyboard?.getHeldCodes() ?? [],
       rawMouseButtonsHeld: this.mouse?.getHeldButtons() ?? [],
-      output: this.sampleGameplayInputForTick(0, { grounded: true })
+      output: this.sampleGameplayInputForTick(0, { grounded: true }),
+      gamepadProviderKind: this.gamepadProviderKind
     };
   }
 }

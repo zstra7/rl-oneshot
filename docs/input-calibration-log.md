@@ -1,5 +1,45 @@
 # Input Calibration Log
 
+## Post-launch polish pass — WS1 (plan/POLISH_OVERHAUL_PLAN.md)
+
+- **Confirmed and fixed the real "controller does not work at all" bug**:
+  `installInputTestApi` (`src/input/testing/BrowserInputTestApi.ts`) ran in
+  every `__DEV__` build (i.e. every `npm run dev` session) and
+  unconditionally swapped `InputControlsModule` onto a
+  `VirtualGamepadProvider` at install time, which never reports any
+  connected gamepad until a test explicitly connects one — so
+  `navigator.getGamepads()` was never polled again and real hardware was
+  completely dead, even outside of any test. Fixed: the virtual provider
+  now activates lazily, only on the first `connectVirtualGamepad()` call,
+  and `reset()` restores real hardware polling via a new
+  `InputControlsModule.useBrowserGamepadProvider()`. A new
+  `InputDiagnostics.gamepadProviderKind` field ("browser"/"virtual") makes
+  this observable and is gated by a Playwright test
+  (`tests/input/foundation.spec.ts`: "real gamepad hardware polling is
+  never hijacked by the test API on boot").
+- `activeDevice` now also promotes to `"gamepad"` on analog stick/trigger
+  activity (`STICK_ACTIVATION_THRESHOLD = 0.35`), not only on a button
+  press edge — previously moving the stick alone never activated the pad,
+  and any keyboard/mouse touch (including the one-time audio-resume
+  gesture) would strand it on `"keyboard-mouse"` until the next pad button
+  press.
+- Gamepad air-roll/powerslide modifier now reads the dedicated west/X
+  button (`DEFAULT_GAMEPAD_BINDINGS.powerslideButton`) instead of the
+  reverse/brake trigger — braking mid-air no longer accidentally converts
+  stick input into roll.
+- Gamepad rear-view now reads the right-stick-click button
+  (`DEFAULT_GAMEPAD_BINDINGS.rearViewButton`) when the active device is
+  `"gamepad"`, instead of being hardcoded to the mouse middle button only.
+- **Ground steering sign was inverted**: `GroundSteeringController`
+  mapped `steer:+1` (D key / `steerRight - steerLeft`) to a *leftward*
+  turn — the AI's `GroundManeuverController` carried a compensating
+  negation with a comment documenting the bug rather than fixing it.
+  Fixed at the source (`GroundSteeringController.ts`'s yaw-rate sign) and
+  removed the AI's compensation. Pinned with
+  `tests/unit/steeringDirection.spec.ts` (cross-product turn-direction
+  assertions for both physics and the AI's `driveTowardPoint` output
+  sign).
+
 ## 2026-07-21 — Phase 4 initial pass
 
 - Default deadzone for gamepad analogue axes set to `0.15` (not spec'd

@@ -67,10 +67,22 @@ export function installInputTestApi(
   }
 
   const virtualGamepadProvider = new VirtualGamepadProvider();
+  // Only swap InputControlsModule onto the virtual provider once a test
+  // actually connects a virtual gamepad — swapping unconditionally at
+  // install time (which runs in every __DEV__ build, i.e. every `npm run
+  // dev` session) permanently stops navigator.getGamepads() from being
+  // polled, so real physical controllers go dead even outside of tests.
+  let virtualProviderActive = false;
 
   const api: BrowserInputTestApi = {
     ready: () => true,
-    reset: () => virtualGamepadProvider.reset(),
+    reset: () => {
+      virtualGamepadProvider.reset();
+      if (virtualProviderActive) {
+        input.useBrowserGamepadProvider();
+        virtualProviderActive = false;
+      }
+    },
     setContext: (context) => input.setInputContext(context),
     getContext: () => input.getInputContext(),
     injectKeyboardEvent: (event) => {
@@ -81,7 +93,13 @@ export function installInputTestApi(
       const type = event.kind === "down" ? "mousedown" : "mouseup";
       gameplayElement.dispatchEvent(new MouseEvent(type, { button: event.button }));
     },
-    connectVirtualGamepad: (gamepad) => virtualGamepadProvider.connect(gamepad),
+    connectVirtualGamepad: (gamepad) => {
+      if (!virtualProviderActive) {
+        input.useVirtualGamepadProvider(virtualGamepadProvider);
+        virtualProviderActive = true;
+      }
+      return virtualGamepadProvider.connect(gamepad);
+    },
     disconnectVirtualGamepad: (index) => virtualGamepadProvider.disconnect(index),
     setVirtualGamepadState: (index, state) => virtualGamepadProvider.setState(index, state),
     assignGamepad: (index) => input.assignGamepad(index),
@@ -96,8 +114,6 @@ export function installInputTestApi(
     simulateBlur: () => window.dispatchEvent(new Event("blur")),
     getDiagnostics: () => input.getDiagnostics()
   };
-
-  input.useVirtualGamepadProvider(virtualGamepadProvider);
 
   window.__INPUT_TEST__ = api;
 }
