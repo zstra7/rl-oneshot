@@ -138,8 +138,14 @@ describe("AI difficulty and tactics (Phase 10)", () => {
     expect(second.z).toBeCloseTo(first.z, 6);
   });
 
-  it("clear differs from shadow defence: very close to goal clears, farther away shadows", async () => {
-    async function modeFor(ballZ: number, ballVelocityZ: number): Promise<string> {
+  it("always plans an in-bounds attack target, near or far from its own goal", async () => {
+    // WS6 (plan/POLISH_OVERHAUL_PLAN.md) replaced the reachability-scored
+    // defend/clear mode split with a single chase-and-shoot planner —
+    // there's no longer a distinct "clear" vs "defend" mode to
+    // distinguish; this instead pins down that the planner still
+    // produces a sane, arena-bounded target regardless of how close the
+    // ball is to the AI's own goal.
+    async function targetFor(ballZ: number, ballVelocityZ: number): Promise<{ x: number; z: number }> {
       const physics = new PhysicsFacade();
       await physics.initialise();
       physics.spawnCar({ id: "car-opponent", transform: { x: 0, y: 1, z: 25 } });
@@ -157,15 +163,18 @@ describe("AI difficulty and tactics (Phase 10)", () => {
       const input = ai.update(buildContext(physics, 91));
       physics.setCarInput("car-opponent", input);
 
-      const mode = ai.getDebugState().mode;
+      expect(ai.getDebugState().mode).toBe("attack");
+      const target = ai.getDebugState().targetPosition;
       physics.dispose();
-      return mode;
+      return { x: target.x, z: target.z };
     }
 
-    // Ball very close to the AI's own goal (+Z) and heading further in: clear.
-    expect(await modeFor(29, 3)).toBe("clear");
-    // Ball farther out but still heading toward the own goal: shadow, not clear.
-    expect(await modeFor(15, 8)).toBe("defend");
+    for (const target of [await targetFor(29, 3), await targetFor(15, 8)]) {
+      expect(Number.isFinite(target.x)).toBe(true);
+      expect(Number.isFinite(target.z)).toBe(true);
+      expect(Math.abs(target.x)).toBeLessThanOrEqual(20);
+      expect(Math.abs(target.z)).toBeLessThanOrEqual(30);
+    }
   });
 
   it("mistakes (humanisation) never produce non-finite input or reversed controls", async () => {

@@ -29,10 +29,20 @@ function buildContext(
  * Core architecture spec section 65 lists Phase 9's exit list as:
  * "1. Ground target driving, 2. Recovery, 3. Ball prediction,
  * 4. Reachability, 5. Basic intercept, 6. Shoot open goal, 7. Retreat,
- * 8. Basic defence, 9. Kickoff, 10. Boost-pad collection." Each test
- * below exercises one of these with the real Rapier world, following
- * the project's established "physics drives real behaviour, assert on
- * outcomes" testing pattern rather than mocking physics.
+ * 8. Basic defence, 9. Kickoff, 10. Boost-pad collection." WS6
+ * (plan/POLISH_OVERHAUL_PLAN.md) replaced the utility-scored planner
+ * (ball-trajectory prediction, reachability-based defend/clear/retreat/
+ * collect-boost mode selection) with a minimal chase-and-shoot planner
+ * plus real stuck recovery — the AI no longer has distinct defence,
+ * retreat, or boost-collection modes, so items 3/4/7/10 above no longer
+ * have a dedicated test; item 8 ("basic defence") is now covered by a
+ * weaker but still meaningful "doesn't idle when the ball threatens its
+ * own goal" check, since the single chase-and-shoot mode always goes
+ * for the ball regardless of which end of the field it's on. See
+ * docs/ai-calibration-log.md for the removal rationale. Each remaining
+ * test exercises real Rapier physics, following the project's
+ * established "physics drives real behaviour, assert on outcomes"
+ * testing pattern rather than mocking physics.
  */
 describe("OpponentAiController (Phase 9 basic opponent AI)", () => {
   it("recovery: rights an upside-down car via pitch/roll before resuming normal play", async () => {
@@ -118,28 +128,41 @@ describe("OpponentAiController (Phase 9 basic opponent AI)", () => {
     expect(physics.getBallState().linearVelocity.z).toBeLessThan(-0.5);
   });
 
-  it("basic defence: shadows the ball on the goal side when it threatens the AI's own goal", async () => {
+  it("doesn't idle when the ball threatens its own goal: still chases and reaches it", async () => {
     const physics = new PhysicsFacade();
     await physics.initialise();
     physics.spawnCar({ id: "car-opponent", transform: { x: 0, y: 1, z: 0 } });
     physics.spawnCar({ id: "car-player", transform: { x: 5, y: 1, z: 26 } });
-    // Ball moving fast toward the opponent's own goal (+Z).
-    physics.setBallState({ position: { x: 0, y: 1, z: 10 }, linearVelocity: { x: 0, y: 0, z: 15 } });
+    // WS5: the ball defaults to resting at the arena centre, overlapping
+    // a car spawned at the origin — park it away before letting the car
+    // settle, then move it into the test's real starting position.
+    physics.setBallState({ position: { x: 50, y: 5, z: 50 } });
+    physics.stepTicks(90); // let the car settle onto the ground first
+    // Ball moving toward the opponent's own goal (+Z), slow enough for
+    // the (prediction-free, WS6) chase-and-shoot planner to catch —
+    // there's no leading/interception logic any more, only "go toward
+    // the ball's current position".
+    physics.setBallState({ position: { x: 0, y: 1, z: 10 }, linearVelocity: { x: 0, y: 0, z: 5 } });
+    physics.stepTicks(1);
 
     const ai = new OpponentAiController();
-    let sawDefend = false;
+    let reachedBall = false;
 
-    for (let i = 0; i < 60; i += 1) {
+    for (let i = 0; i < 600 && !reachedBall; i += 1) {
       const input = ai.update(buildContext(physics, i));
-      if (ai.getDebugState().mode === "defend") {
-        sawDefend = true;
-      }
+      expect(ai.getDebugState().mode).toBe("attack");
       physics.setCarInput("car-opponent", input);
       physics.setCarInput("car-player", { ...NEUTRAL_CAR_INPUT });
       physics.stepTicks(1);
+
+      const distance = Math.hypot(
+        physics.getCarState("car-opponent").position.x - physics.getBallState().position.x,
+        physics.getCarState("car-opponent").position.z - physics.getBallState().position.z
+      );
+      reachedBall = distance < 2.5;
     }
 
-    expect(sawDefend).toBe(true);
+    expect(reachedBall).toBe(true);
   });
 
   it("kickoff: commits to driving straight at the ball once PLAYING begins, even while it's still settling", async () => {
@@ -162,50 +185,6 @@ describe("OpponentAiController (Phase 9 basic opponent AI)", () => {
     const distanceFromCentreBefore = Math.hypot(before.position.x, before.position.z);
     const distanceFromCentreAfter = Math.hypot(after.position.x, after.position.z);
     expect(distanceFromCentreAfter).toBeLessThan(distanceFromCentreBefore);
-  });
-
-  it("boost-pad collection: a low-boost AI routes to a nearby pad when the ball is distant and not urgent", async () => {
-    const physics = new PhysicsFacade();
-    await physics.initialise();
-    const pad = physics.getBoostPadStates()[0]!;
-    physics.spawnCar({
-      id: "car-opponent",
-      transform: { x: pad.position.x + 8, y: 1, z: pad.position.z },
-      initialBoost: 10
-    });
-    // Ball far from both cars, so neither the intercept nor the defence
-    // priority pre-empts the boost-collection decision.
-    physics.spawnCar({ id: "car-player", transform: { x: 60, y: 1, z: 60 } });
-    physics.setBallState({ position: { x: 55, y: 1, z: 55 }, linearVelocity: { x: 0, y: 0, z: 0 } });
-
-    const ai = new OpponentAiController();
-    let sawCollect = false;
-
-    for (let i = 0; i < 90; i += 1) {
-      const input = ai.update(buildContext(physics, i));
-      if (ai.getDebugState().mode === "collect-boost") {
-        sawCollect = true;
-      }
-      physics.setCarInput("car-opponent", input);
-      physics.stepTicks(1);
-    }
-
-    expect(sawCollect).toBe(true);
-  });
-
-  it("retreat: holds a goal-side position when neither attacking nor defending nor low on boost", async () => {
-    const physics = new PhysicsFacade();
-    await physics.initialise();
-    physics.spawnCar({ id: "car-opponent", transform: { x: 0, y: 1, z: 0 }, initialBoost: 80 });
-    physics.spawnCar({ id: "car-player", transform: { x: 60, y: 1, z: 60 } });
-    physics.setBallState({ position: { x: 55, y: 1, z: 55 }, linearVelocity: { x: 0, y: 0, z: 0 } });
-    physics.stepTicks(90); // let the car settle onto the ground first
-
-    const ai = new OpponentAiController();
-    const input = ai.update(buildContext(physics, 90));
-
-    expect(ai.getDebugState().mode).toBe("retreat");
-    expect(Number.isFinite(input.steer)).toBe(true);
   });
 
   it("produces finite CarInput values across a long mixed-scenario run (no NaN)", async () => {

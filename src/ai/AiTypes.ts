@@ -23,14 +23,13 @@ export interface AiUpdateContext {
   readonly targetGoalCentre: Vec3Like;
 }
 
-export type AiTacticalMode =
-  | "recover"
-  | "kickoff"
-  | "defend"
-  | "clear"
-  | "attack"
-  | "collect-boost"
-  | "retreat";
+/**
+ * WS6 (plan/POLISH_OVERHAUL_PLAN.md) simplified the planner to a single
+ * chase-and-shoot mode (looping around the ball is still tagged
+ * "attack" — it's the same maneuver with a different target) plus
+ * "unstuck", replacing the old defend/clear/collect-boost/retreat set.
+ */
+export type AiTacticalMode = "recover" | "kickoff" | "attack" | "unstuck";
 
 export interface AiDebugState {
   readonly mode: AiTacticalMode;

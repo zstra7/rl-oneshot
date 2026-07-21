@@ -18,35 +18,30 @@ export const AI_CONSTANTS = {
   powerslideAngleThreshold: 1.1,
   powerslideMinimumSpeed: 8,
 
-  /** Ball prediction (AI spec section 10, analytical fallback). */
-  predictionHorizonSeconds: 2.5,
-  predictionSampleIntervalSeconds: 0.1,
-
-  /** Reachability heuristic (AI spec section 11: no iterative solvers). */
-  reachabilityAverageSpeed: 15,
-  reachabilityTurnPenaltySeconds: 0.4,
-  reachabilityMargin: 0.25,
-
-  /** Defence. */
-  ownGoalDangerDistance: 32,
-  defensiveShadowDistance: 5,
-  defensiveGoalStandoff: 3,
-
   /** Shot aiming: how far behind the ball (away from the target goal) to aim. */
-  shotApproachOffset: 1.6,
+  approachOffset: 1.3,
+  /** Only worth requesting boost once further than this from the target. */
   possessionRadius: 3.0,
 
   /**
-   * Only bother attacking a ball estimated reachable within this many
-   * seconds — otherwise a "comparably fast as the human" comparison
-   * alone would have the AI chase every distant loose ball instead of
-   * ever collecting boost or holding a defensive position.
+   * WS6 (plan/POLISH_OVERHAUL_PLAN.md) chase-and-shoot planner: below
+   * this dot product between the shot direction and car-to-ball
+   * direction, the car is roughly between the ball and the goal it's
+   * attacking and needs to loop around rather than push the ball the
+   * wrong way.
    */
-  attackReachTimeLimit: 3.5,
+  wrongSideDotThreshold: -0.15,
+  /** Loop-around target: how far behind the ball, and how far to the side. */
+  loopBehindDistance: 6,
+  loopSideDistance: 5,
 
-  /** Boost management. Pad search radius comes from AiDifficultyParameters.boostPadAwarenessRadius. */
-  boostReserveThreshold: 40,
-  boostCriticalThreshold: 15,
+  /** Keep planned targets this far inside the arena walls. */
+  arenaMargin: 1.5,
+
+  /** Stuck detection: pushing forward without gaining speed. */
+  stuckSpeedThreshold: 1.0,
+  stuckTicksThreshold: 90,
+  unstuckDurationTicks: 84,
 
   /** Recovery (airborne self-righting via pitch/roll, AI spec section 26.1). */
   recoveryGain: 3.0,

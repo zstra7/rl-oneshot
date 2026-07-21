@@ -14,7 +14,34 @@ export interface DriveOptions {
  * module's own yaw-rate servo (`GroundSteeringController`) turns a
  * normalised `steer` value into the actual torque, so the AI only needs
  * to output that normalised value, not reimplement car handling.
+ *
+ * Signed heading error in (-pi, pi] from the car's current facing to
+ * `target`: 0 = target dead ahead, positive = target to the right.
+ * `GroundSteeringController` maps positive `steer` directly to a
+ * rightward turn (matching the human input mapping, `steerRight -
+ * steerLeft`, D key => positive steer => turns right), so a positive
+ * heading error (target to the right) maps directly to a positive
+ * steer command — no compensating negation needed (WS1 fix).
  */
+export function headingErrorTo(car: CarSerializableState, target: V.Vec3Like): number {
+  const toTarget = V.sub(target, car.position);
+  const flatToTarget = { x: toTarget.x, y: 0, z: toTarget.z };
+  if (V.length(flatToTarget) < 0.05) {
+    return 0;
+  }
+
+  const forward = V.applyQuaternion(V.LOCAL_FORWARD, car.rotation);
+  const forwardFlat = V.normalize({ x: forward.x, y: 0, z: forward.z });
+  const right = V.applyQuaternion(V.LOCAL_RIGHT, car.rotation);
+  const rightFlat = V.normalize({ x: right.x, y: 0, z: right.z });
+
+  const targetDirection = V.normalize(flatToTarget);
+  const forwardDot = V.clamp(V.dot(forwardFlat, targetDirection), -1, 1);
+  const rightDot = V.dot(rightFlat, targetDirection);
+
+  return Math.atan2(rightDot, forwardDot);
+}
+
 export function driveTowardPoint(
   car: CarSerializableState,
   target: V.Vec3Like,
@@ -28,23 +55,7 @@ export function driveTowardPoint(
     return { ...NEUTRAL_CAR_INPUT };
   }
 
-  const forward = V.applyQuaternion(V.LOCAL_FORWARD, car.rotation);
-  const forwardFlat = V.normalize({ x: forward.x, y: 0, z: forward.z });
-  const right = V.applyQuaternion(V.LOCAL_RIGHT, car.rotation);
-  const rightFlat = V.normalize({ x: right.x, y: 0, z: right.z });
-
-  const targetDirection = V.normalize(flatToTarget);
-  const forwardDot = V.clamp(V.dot(forwardFlat, targetDirection), -1, 1);
-  const rightDot = V.dot(rightFlat, targetDirection);
-
-  // Signed heading error in (-pi, pi]: 0 = target dead ahead, positive =
-  // target to the right. GroundSteeringController maps positive `steer`
-  // directly to a rightward turn (matching the human input mapping,
-  // `steerRight - steerLeft`, D key => positive steer => turns right), so
-  // a positive heading error (target to the right) maps directly to a
-  // positive steer command — no compensating negation needed.
-  const angleError = Math.atan2(rightDot, forwardDot);
-
+  const angleError = headingErrorTo(car, target);
   const steer = V.clamp(angleError * AI_CONSTANTS.steerGain, -1, 1);
   const absAngle = Math.abs(angleError);
 

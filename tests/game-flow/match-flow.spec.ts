@@ -87,7 +87,24 @@ test("timer starts at 1:00 for a one-minute match and reaches 0:30", async ({ pa
   const initialSession = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
   expect(initialSession?.regulationTimeRemaining).toBeCloseTo(60, 0);
 
-  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(30));
+  // WS6 made the opponent AI competent enough to actually score against
+  // an unguarded net — if a goal happened somewhere in this 30-second
+  // window, the resulting goal-celebration pause would throw off the
+  // otherwise-exact tick/second relationship this test relies on (and
+  // could even leave the match mid-celebration instead of PLAYING when
+  // pause() below is called, which is a no-op outside PAUSABLE_STATES).
+  // This test is about timer mechanics, not AI behaviour, so keep the
+  // ball parked dead centre between each one-second slice rather than
+  // letting the AI have 30 uninterrupted seconds to reach either goal.
+  for (let second = 0; second < 30; second += 1) {
+    await page.evaluate(() => {
+      window.__PHYSICS_TEST__?.setBallState({
+        position: { x: 0, y: 1, z: 0 },
+        linearVelocity: { x: 0, y: 0, z: 0 }
+      });
+      window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(1);
+    });
+  }
   const halfwaySession = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
   expect(halfwaySession?.regulationTimeRemaining).toBeCloseTo(30, 0);
 
