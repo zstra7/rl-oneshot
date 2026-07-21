@@ -13,4 +13,5 @@ to not rely on memory when a matching skill exists.
 | 2026-07-21 | Phase 2 shared material registry, `MeshStandardMaterial`/`MeshBasicMaterial` role reuse, instance-clone tinting | threejs-materials |
 | 2026-07-21 | Phase 2 `HemisphereLight`+`DirectionalLight` minimal rig for `PlaceholderSceneRenderer` | threejs-lighting |
 | 2026-07-21 | Phase 2 starfield (`THREE.Points`, `BufferGeometry` custom position/size attributes, one draw call per layer) | threejs-geometry |
+| 2026-07-21 | Phase 3 `PhysicsRenderBinding` debug meshes (wireframe box/sphere, per-frame `.position.set()`/`.quaternion.set()` mutation instead of allocating new Vector3/Quaternion per frame) | threejs-fundamentals |
 

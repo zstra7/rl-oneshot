@@ -12,7 +12,9 @@ import {
   createNullModuleContainer,
   type ModuleContainer
 } from "@/integration/ModuleContainer";
+import { PhysicsRenderBinding } from "@/integration/PhysicsRenderBinding";
 import { installAssetTestApi } from "@/assets/testing/BrowserAssetTestApi";
+import { installPhysicsTestApi } from "@/physics/testing/BrowserPhysicsTestApi";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
 
 export type UiRequestedAction = { readonly kind: "noop" };
@@ -52,6 +54,7 @@ export class GameRuntime implements GameRuntimeFacade {
   private appState: AppState = "BOOT";
   private modules: ModuleContainer | null = null;
   private sceneRenderer: PlaceholderSceneRenderer | null = null;
+  private physicsRenderBinding: PhysicsRenderBinding | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -98,6 +101,21 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.sceneRenderer.addToScene(this.modules.assets.buildPlaceholderWorld());
     installAssetTestApi(this.modules.assets);
+
+    this.modules.physics.spawnCar({ id: "car-player", transform: { x: -6, y: 1, z: -10 } });
+    this.modules.physics.spawnCar({ id: "car-opponent", transform: { x: 6, y: 1, z: 10 } });
+
+    this.physicsRenderBinding = new PhysicsRenderBinding(
+      this.modules.physics,
+      () => this.fixedStepCoordinator.alpha
+    );
+    this.frameCoordinator.register(this.physicsRenderBinding);
+    this.sceneRenderer.addToScene(this.physicsRenderBinding.getRoot());
+
+    installPhysicsTestApi(this.modules.physics, {
+      pause: () => this.stop(),
+      resume: () => this.start()
+    });
 
     this.setAppState("MENU");
   }
@@ -155,6 +173,12 @@ export class GameRuntime implements GameRuntimeFacade {
   };
 
   private onFixedTick(tick: number): void {
+    // The single Rapier step location: core's one FixedStepCoordinator
+    // drives physics directly rather than the physics module owning a
+    // second accumulator, per core architecture spec rule "never step
+    // Rapier from more than one location" (see docs/physics-deviations.md).
+    this.modules?.physics.step();
+
     this.dispatcher.emit("runtime:fixed-tick", {
       tick,
       fixedDeltaSeconds: FIXED_DT_SECONDS
@@ -255,6 +279,9 @@ export class GameRuntime implements GameRuntimeFacade {
         module.dispose();
       }
     }
+
+    this.physicsRenderBinding?.dispose();
+    this.physicsRenderBinding = null;
 
     this.sceneRenderer?.dispose();
     this.sceneRenderer = null;
