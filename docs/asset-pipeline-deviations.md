@@ -38,3 +38,22 @@ Record deviations from `plan/asset_production_pipeline_module_spec.md`.
   curved corner transitions, structural ribs, or glass layers (sections
   36-38). Those are explicitly Phase 14 ("Stadium art and VFX") per the
   Master Brief, not Phase 2's "basic stadium blockout".
+
+## Phase 6
+
+- `BoostPadVisualFactory.ts` implements only the states the physics
+  module actually produces (`"active"`/`"respawning"`, driven by
+  `BoostPadRenderBinding` from `pad.active`) plus an `"inactive"` state
+  used only by the factory's own default/error handling. `"collected-
+  pulse"` exists in the `BoostPadVisualState` union and is handled by
+  `applyBoostPadVisualState()`, but nothing currently transitions a pad
+  into it — a real flash-on-pickup VFX (distinct from just going straight
+  to the dimmed "respawning" look) is deferred to Phase 14 (stadium art
+  and VFX), consistent with all other VFX polish being out of scope until
+  then.
+- Per-pad ring materials are cloned via
+  `MaterialRegistry.createInstanceMaterial`, one clone per `BoostPadId` —
+  this is a deliberate, spec-consistent use of the registry's instance-
+  material affordance (shared-by-default, explicit opt-out per instance
+  when state must vary independently), not a new pattern invented outside
+  the pipeline design.

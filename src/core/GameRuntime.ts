@@ -12,6 +12,7 @@ import {
   createNullModuleContainer,
   type ModuleContainer
 } from "@/integration/ModuleContainer";
+import { BoostPadRenderBinding } from "@/integration/BoostPadRenderBinding";
 import { PhysicsRenderBinding } from "@/integration/PhysicsRenderBinding";
 import { installAssetTestApi } from "@/assets/testing/BrowserAssetTestApi";
 import { installInputTestApi } from "@/input/testing/BrowserInputTestApi";
@@ -56,6 +57,7 @@ export class GameRuntime implements GameRuntimeFacade {
   private modules: ModuleContainer | null = null;
   private sceneRenderer: PlaceholderSceneRenderer | null = null;
   private physicsRenderBinding: PhysicsRenderBinding | null = null;
+  private boostPadRenderBinding: BoostPadRenderBinding | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -121,6 +123,13 @@ export class GameRuntime implements GameRuntimeFacade {
     );
     this.frameCoordinator.register(this.physicsRenderBinding);
     this.sceneRenderer.addToScene(this.physicsRenderBinding.getRoot());
+
+    this.boostPadRenderBinding = new BoostPadRenderBinding(
+      this.modules.physics,
+      this.modules.assets
+    );
+    this.frameCoordinator.register(this.boostPadRenderBinding);
+    this.sceneRenderer.addToScene(this.boostPadRenderBinding.getRoot());
 
     installPhysicsTestApi(this.modules.physics, {
       pause: () => this.stop(),
@@ -309,6 +318,9 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.physicsRenderBinding?.dispose();
     this.physicsRenderBinding = null;
+
+    this.boostPadRenderBinding?.dispose();
+    this.boostPadRenderBinding = null;
 
     this.sceneRenderer?.dispose();
     this.sceneRenderer = null;

@@ -142,3 +142,44 @@ Record deviations from
   rendering/asset code (dependency direction). Quaternion vector rotation
   and axis math are implemented directly rather than via `THREE.Vector3`/
   `THREE.Quaternion`.
+
+## Phase 6 — Boost pads
+
+- **Real bug: boost pad sensor colliders corrupting suspension.** Found
+  via ad hoc Vitest debugging when `carController.spec.ts`'s driving
+  tests started failing after boost pads were added (car crept backward
+  near-zero speed instead of driving forward). Root cause: (1) pad sensor
+  cylinders were initially centred at the floor's Y level, so up to half
+  their height was buried below the floor and half stuck up through it;
+  (2) `world.castShape()` for the suspension probes does not exclude
+  sensor colliders by default, so as a car approached/crossed a pad the
+  suspension probe would hit the pad sensor geometry instead of (or
+  alongside) the floor, corrupting the spring-damper force. Fixed with
+  two changes: `SuspensionController`'s `castShape()` call now passes
+  `RAPIER.QueryFilterFlags.EXCLUDE_SENSORS`, and
+  `createDefaultBoostPadLayout()` positions each pad at
+  `floorTopY + halfHeight` so the sensor sits entirely above the floor.
+- **Off-by-one tick bug in respawn timing (found and fixed).** The
+  original `PhysicsFacade.step()` called
+  `boostPadSystem.resolveClaims()`/`processRespawns()` using `this.tick`
+  *before* the tick counter's own `this.tick += 1` at the end of the same
+  call. Since `collectBoostPadForCar()` (the test-only bypass, called
+  between `step()` calls) computes `respawnAtTick` from the *current*
+  `this.tick`, this meant a respawn actually required `respawnTicks + 1`
+  total `step()` calls to fire — failing the spec's "respawns in exactly
+  480/1200 enabled ticks" requirement by one tick. Fixed by moving both
+  calls to run *after* the tick increment, so "N ticks after collection"
+  consistently means exactly N `step()` calls later for both real
+  in-step sensor collection and the test bypass. Verified by the
+  exact-480/exact-1200-tick assertions in `tests/unit/boostPads.spec.ts`.
+- **Sensor colliders have no parent rigid body.** `BoostPadSystem`
+  creates each pad's cylinder collider directly on the world
+  (`RAPIER.ColliderDesc...setTranslation(...)`), not attached to a
+  kinematic/fixed body, since pads never move — this matches the
+  suspension-probe fix above (no body to accidentally collide with) and
+  is simpler than the spec's more general sensor-attachment approach.
+- **Claim resolution reads car state via `world.intersectionPair()` every
+  tick for every (active pad, under-cap car) pair**, rather than
+  Rapier's `EventQueue` intersection events. This is O(pads x cars) per
+  tick, acceptable at the spec's 16-pad/2-4-car scale; revisit if a
+  future phase needs a larger pad count or many more cars.

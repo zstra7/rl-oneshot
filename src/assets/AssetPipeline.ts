@@ -15,6 +15,12 @@ import {
 } from "@/assets/AssetTypes";
 import { createProceduralCarFallback } from "@/assets/cars/ProceduralCarFallback";
 import { createBallVisual } from "@/assets/procedural/BallVisualFactory";
+import {
+  applyBoostPadVisualState,
+  createBoostPadVisual,
+  type BoostPadVisualState,
+  type BoostPadVisualType
+} from "@/assets/procedural/BoostPadVisualFactory";
 import { GeometryRegistry } from "@/assets/procedural/GeometryRegistry";
 import { MaterialRegistry } from "@/assets/procedural/MaterialRegistry";
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
@@ -92,6 +98,14 @@ export class AssetPipeline implements GameModule {
       throw new Error("AssetPipeline.initialise() must complete before use.");
     }
     return this.context;
+  }
+
+  public createBoostPadVisual(padId: string, type: BoostPadVisualType): THREE.Group {
+    return createBoostPadVisual(this.requireContext(), padId, type);
+  }
+
+  public applyBoostPadVisualState(pad: THREE.Group, state: BoostPadVisualState): void {
+    applyBoostPadVisualState(pad, state);
   }
 
   public buildPlaceholderWorld(): THREE.Group {

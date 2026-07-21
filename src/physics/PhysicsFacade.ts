@@ -25,6 +25,14 @@ import { CarRegistry, createCarEntity, type CarEntity } from "@/physics/entities
 import { prePhysicsTick, postPhysicsTick } from "@/physics/car/CarController";
 import { resolveCarBallContacts } from "@/physics/collision/CarBallCollision";
 import * as V from "@/physics/Vec3Math";
+import { BoostPadSystem } from "@/physics/boost/BoostPadSystem";
+import { createDefaultBoostPadLayout } from "@/physics/boost/BoostPadLayout";
+import type {
+  BoostPadEvent,
+  BoostPadId,
+  BoostPadObservation,
+  BoostPadRuntimeState
+} from "@/physics/boost/BoostPadTypes";
 
 export const PHYSICS_MODULE_CONTRACT_VERSION = "2.1";
 
@@ -105,6 +113,7 @@ export class PhysicsFacade implements GameModule {
   private previousBall: TransformSample = zeroTransform();
   private currentBall: TransformSample = zeroTransform();
   private readonly wasTouchingBallLastTick = new Map<CarId, boolean>();
+  private readonly boostPadSystem = new BoostPadSystem();
 
   public async initialise(): Promise<void> {
     await RAPIER.init();
@@ -114,6 +123,7 @@ export class PhysicsFacade implements GameModule {
 
     this.buildArena(this.arenaPreset);
     this.spawnBall(DEFAULT_BALL_SPAWN);
+    this.boostPadSystem.buildColliders(this.world, createDefaultBoostPadLayout());
   }
 
   private requireWorld(): RAPIER.World {
@@ -275,6 +285,11 @@ export class PhysicsFacade implements GameModule {
       });
     }
 
+    // physics spec section 21.9: kickoff reset restores every pad to
+    // active and clears all pad timers/claim state.
+    this.boostPadSystem.resetAllActive();
+    this.boostPadSystem.clearEvents();
+
     this.tick = 0;
     this.simulationTime = 0;
   }
@@ -417,6 +432,15 @@ export class PhysicsFacade implements GameModule {
     }
 
     this.tick += 1;
+
+    // physics spec section 21.5/21.8, section 29 steps 20-21/29-30. Uses
+    // the post-increment tick so "respawn N ticks after collection" means
+    // exactly N step() calls later, whether the pad was collected via a
+    // real sensor overlap in this tick or via the test-only
+    // collectBoostPadForCar() bypass called between step() calls.
+    this.boostPadSystem.resolveClaims(world, cars, this.tick);
+    this.boostPadSystem.processRespawns(this.tick);
+
     this.simulationTime += dt;
   }
 
@@ -464,7 +488,8 @@ export class PhysicsFacade implements GameModule {
       tick: this.tick,
       simulationTime: this.simulationTime,
       cars: this.getAllCarStates(),
-      ball: this.getBallState()
+      ball: this.getBallState(),
+      boostPads: this.boostPadSystem.getObservations()
     };
   }
 
@@ -472,7 +497,56 @@ export class PhysicsFacade implements GameModule {
     return this.tick;
   }
 
+  public getBoostPadStates(): BoostPadObservation[] {
+    return this.boostPadSystem.getObservations();
+  }
+
+  /** Test-only: force a pad's runtime state (e.g. simulate a mid-cooldown pad). */
+  public setBoostPadState(padId: BoostPadId, state: Partial<BoostPadRuntimeState>): void {
+    const padState = this.boostPadSystem.registry.get(padId);
+    Object.assign(padState, state);
+  }
+
+  /** Test-only: force-collect a pad for a given car, bypassing the sensor overlap check. */
+  public collectBoostPadForCar(padId: BoostPadId, carId: CarId): void {
+    const car = this.carRegistry.get(carId);
+    const padState = this.boostPadSystem.registry.get(padId);
+    const definition = this.boostPadSystem.registry.getDefinition(padId);
+
+    if (!padState.active) {
+      return;
+    }
+
+    const boostBefore = car.runtime.boostAmount;
+    const boostAfter =
+      definition.type === "full"
+        ? RL_CONSTANTS.maximumBoostAmount
+        : Math.min(RL_CONSTANTS.maximumBoostAmount, boostBefore + (definition.type === "small" ? 12 : 0));
+    car.runtime.boostAmount = boostAfter;
+
+    padState.active = false;
+    padState.collectedAtTick = this.tick;
+    const respawnTicks =
+      definition.type === "full"
+        ? RL_CONSTANTS.fullBoostPadRespawnSeconds * RL_CONSTANTS.physicsHz
+        : RL_CONSTANTS.smallBoostPadRespawnSeconds * RL_CONSTANTS.physicsHz;
+    padState.respawnAtTick = this.tick + respawnTicks;
+    padState.respawnTicksRemaining = respawnTicks;
+    padState.lastCollectedByCarId = carId;
+  }
+
+  public getBoostPadEvents(): readonly BoostPadEvent[] {
+    return this.boostPadSystem.getEvents();
+  }
+
+  public clearBoostPadEvents(): void {
+    this.boostPadSystem.clearEvents();
+  }
+
   public dispose(): void {
+    if (this.world) {
+      this.boostPadSystem.dispose(this.world);
+    }
     this.world?.free();
     this.world = null;
     this.carRegistry.clear();

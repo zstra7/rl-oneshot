@@ -86,6 +86,7 @@ export interface WorldSerializableState {
   readonly simulationTime: number;
   readonly cars: readonly CarSerializableState[];
   readonly ball: BallSerializableState;
+  readonly boostPads: readonly import("@/physics/boost/BoostPadTypes").BoostPadObservation[];
 }
 
 export type ArenaPreset = "flat-plane" | "box-arena";

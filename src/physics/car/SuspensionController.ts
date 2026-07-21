@@ -52,7 +52,9 @@ export function updateSuspension(
       0,
       parameters.suspension.maximumLength,
       true,
-      undefined,
+      // Exclude sensors (boost pads) — suspension must only ever detect
+      // solid arena/ball geometry, never a pickup sensor volume.
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
       undefined,
       car.collider
     );

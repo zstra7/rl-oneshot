@@ -10,6 +10,12 @@ import type {
   SpawnCarOptions,
   WorldSerializableState
 } from "@/physics/PhysicsTypes";
+import type {
+  BoostPadEvent,
+  BoostPadId,
+  BoostPadObservation,
+  BoostPadRuntimeState
+} from "@/physics/boost/BoostPadTypes";
 
 export interface PhysicsDiagnostics {
   readonly tick: number;
@@ -17,11 +23,11 @@ export interface PhysicsDiagnostics {
 }
 
 /**
- * Trimmed to what Phase 3 (physics foundation) actually implements. The
- * full physics spec section 30 interface also specifies boost-pad
- * methods, scenario/telemetry recording, and debug/camera controls —
- * those require systems built in later phases (6, 5 calibration loop,
- * 8/9) and are deferred; see docs/physics-deviations.md.
+ * Trimmed to what Phases 3, 5, and 6 actually implement. The full physics
+ * spec section 30 interface also specifies scenario/telemetry recording
+ * and debug/camera controls — those require systems built in later
+ * phases (5 calibration loop, 8/9) and are deferred; see
+ * docs/physics-deviations.md.
  */
 export interface BrowserPhysicsTestApi {
   ready(): boolean;
@@ -50,6 +56,12 @@ export interface BrowserPhysicsTestApi {
   setCarInput(carId: CarId, input: Partial<CarInput>): void;
   clearCarInput(carId: CarId): void;
   clearAllInputs(): void;
+
+  getBoostPadStates(): BoostPadObservation[];
+  setBoostPadState(padId: BoostPadId, state: Partial<BoostPadRuntimeState>): void;
+  collectBoostPadForCar(padId: BoostPadId, carId: CarId): void;
+  getBoostPadEvents(): readonly BoostPadEvent[];
+  clearBoostPadEvents(): void;
 
   stepTicks(count: number): void;
 
@@ -95,6 +107,11 @@ export function installPhysicsTestApi(
     setCarInput: (carId, input) => physics.setCarInput(carId, input),
     clearCarInput: (carId) => physics.clearCarInput(carId),
     clearAllInputs: () => physics.clearAllInputs(),
+    getBoostPadStates: () => physics.getBoostPadStates(),
+    setBoostPadState: (padId, state) => physics.setBoostPadState(padId, state),
+    collectBoostPadForCar: (padId, carId) => physics.collectBoostPadForCar(padId, carId),
+    getBoostPadEvents: () => physics.getBoostPadEvents(),
+    clearBoostPadEvents: () => physics.clearBoostPadEvents(),
     stepTicks: (count) => physics.stepTicks(count),
     getDiagnostics: () => ({
       tick: physics.getTick(),
