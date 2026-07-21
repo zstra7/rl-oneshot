@@ -14,6 +14,7 @@ import {
 } from "@/integration/ModuleContainer";
 import { PhysicsRenderBinding } from "@/integration/PhysicsRenderBinding";
 import { installAssetTestApi } from "@/assets/testing/BrowserAssetTestApi";
+import { installInputTestApi } from "@/input/testing/BrowserInputTestApi";
 import { installPhysicsTestApi } from "@/physics/testing/BrowserPhysicsTestApi";
 import { PlaceholderSceneRenderer } from "@/visual-language/PlaceholderSceneRenderer";
 
@@ -87,11 +88,20 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.modules = createNullModuleContainer();
 
-    for (const [name, module] of Object.entries(this.modules)) {
+    const { input, ...modulesWithGenericInit } = this.modules;
+
+    for (const [name, module] of Object.entries(modulesWithGenericInit)) {
       this.moduleStatus[name] = "initialising";
       await module.initialise();
       this.moduleStatus[name] = "ready";
     }
+
+    this.moduleStatus["input"] = "initialising";
+    // No menu/match-flow context switching exists yet (Phase 7); default
+    // straight to GAMEPLAY so KBM/gamepad can drive the debug car now.
+    input.initialise({ gameplayElement: canvas, initialContext: "GAMEPLAY" });
+    this.moduleStatus["input"] = "ready";
+    installInputTestApi(input, canvas);
 
     this.sceneRenderer = new PlaceholderSceneRenderer(canvas);
     this.moduleStatus["renderer"] = "initialising";
@@ -152,6 +162,8 @@ export class GameRuntime implements GameRuntimeFacade {
       const frameStart =
         typeof performance !== "undefined" ? performance.now() : Date.now();
 
+      this.modules?.input.updateBrowserFrame(timestampMs);
+
       const frameDelta = this.clock.computeFrameDelta(timestampMs);
       this.fixedStepsLastFrame = this.fixedStepCoordinator.advance(frameDelta);
 
@@ -173,6 +185,19 @@ export class GameRuntime implements GameRuntimeFacade {
   };
 
   private onFixedTick(tick: number): void {
+    if (this.modules) {
+      // Sample input for this exact tick and hand it to physics before
+      // stepping, per core architecture spec section 25 fixed-tick order
+      // (sample input -> submit CarInput -> step physics). Phase 3 stores
+      // CarInput but does not yet act on it (no ground/air controller
+      // until Phase 5), and `grounded: true` is a placeholder until the
+      // physics module exposes real suspension/ground-contact state.
+      const frame = this.modules.input.sampleGameplayInputForTick(tick, {
+        grounded: true
+      });
+      this.modules.physics.setCarInput("car-player", frame.car);
+    }
+
     // The single Rapier step location: core's one FixedStepCoordinator
     // drives physics directly rather than the physics module owning a
     // second accumulator, per core architecture spec rule "never step
