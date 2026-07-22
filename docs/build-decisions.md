@@ -408,3 +408,106 @@ single pipeline instance in one test rather than investigating the
 loader internals, since a second pipeline instance is not a real
 runtime scenario.) Verified visually via a menu screenshot showing
 exactly one ball at centre field.
+
+## Post-launch polish pass — R12 (Customise Car menu, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+New `CAR_CUSTOMISE` match state, reachable only from `MAIN_MENU`
+(`MatchFlowController.openCarCustomise`, mirroring `openSettings`'s
+gate), with a dedicated `src/components/menu/CarCustomise.vue` panel and
+a matching `ChaseCameraController.updateCustomiseCamera` branch — checked
+*before* the generic menu-orbit branch (`state === "CAR_CUSTOMISE"`
+short-circuits, so `CAR_CUSTOMISE` is deliberately absent from
+`ChaseCameraController`'s own `MENU_MATCH_STATES` list even though it is
+present in `MatchFlowController`'s and `GameRuntime`'s same-named lists —
+those two need it to stay in the "MENU" family for navigation/app-state
+purposes; the camera needs it to *not* fall into the generic menu-orbit
+branch). The dedicated camera orbits the live player car (radius 4.6,
+height 1.5, ~0.25 rad/s) instead of the field centre, so the car being
+customised fills the frame; the car itself stays stationary (menu physics
+idles, no live input in this state).
+
+**Colour override plumbing.** `settingsStore` gained a `car: {
+bodyColor, boostColor }` section (default `#4ff0ff` both, matching the
+built-in player cyan), validated with the same field-by-field
+`/^#[0-9a-f]{6}$/i` pattern as every other section. `AssetPipeline.
+setPlayerCarColorOverride(hex | null)` stores the live override;
+`createCarVisual("player")` derives a `TeamVisualProfile` from it via the
+new `CarDescriptors.derivePlayerProfile(hex)` — primary/emissive are the
+raw hex, secondary is `darkenHex(hex, 0.55)`. **Resolving the plan's
+`darkenHex` ambiguity:** the plan text says "`darkenHex(hex, 0.45)`" for
+the secondary call but then parenthetically describes the helper itself
+as "multiply RGB by 0.55" — those two numbers don't agree if the
+parameter means "darken by this fraction" vs. "the multiply factor
+itself". This build resolves it by making the parameter the literal
+multiply factor (`channel * factor`, clamped/rounded), and calling it
+with `factor = 0.55` everywhere (`derivePlayerProfile` passes `0.55`,
+not `0.45`) — consistent with the parenthetical's "multiply RGB by 0.55"
+and the simpler of the two readings. `darkenHex` itself is pure (no
+`THREE.Color`/canvas dependency) and unit-tested directly in
+`tests/unit/carColorOverride.spec.ts`, per the plan's suggestion to
+prefer testing colour derivation standalone over constructing a second
+`AssetPipeline` in the same test file (see the R8 section above for why
+that hangs). `createProceduralCarFallback` gained an optional third
+`colorOverride` parameter (used for the player fallback only); its
+`MaterialRegistry` cache key is suffixed with the override colour so a
+changed override can't reuse a stale cached material for a different
+colour.
+
+`PhysicsRenderBinding.rebuildCarVisual(carId)` drops the cached visual
+from both the scene root and its internal map; the existing per-frame
+sync loop's `let visual = this.carVisuals.get(carId); if (!visual) { …
+}` already lazily recreates whatever's missing, so no new creation path
+was needed — just eviction. A second new `PhysicsRenderBinding` method,
+`getCarPrimaryColorHex(carId)`, traverses the *live* bound visual
+(matching the GLB's `M_car` material name or the fallback's `CarBody`
+mesh name) for Playwright to assert the colour actually reached the
+rendered scene graph, not just settings/asset-pipeline state.
+
+**Boost-trail colour, scoped by call site not by a shared function.**
+`VfxModule.setPlayerBoostColor(hex | null)` feeds a new private
+`boostTrailColor(carId)` helper (override for the player's own car, team
+colour otherwise) that only `detectBoostTrails` (real gameplay boosting)
+and the new preview path call — `detectGoalCelebration` was deliberately
+left calling the original `teamColor(scoringTeam)` directly and untouched,
+so a player's custom boost colour never leaks into their own goal
+celebration burst (which must stay team-cyan per the plan).
+
+**Boost preview.** `VfxModule.setBoostPreview(carId | null)` drives a
+`updateRenderFrame`-integrated preview: every 3rd frame while set, it
+spawns the same two-particle burst `detectBoostTrails` would on a real
+boost draw, at the (stationary) car's rear, using `boostTrailColor`
+directly — bypassing the normal boost-consumption-delta detection
+entirely, since there is no real boost draw to detect on a parked menu
+car. `CarCustomise.vue` toggles this via `GameRuntime.
+setBoostPreviewEnabled(true/false)` in `onMounted`/`onBeforeUnmount`.
+
+**Menu-ghost stacking fix.** The Customise Car camera frames the *live*,
+recolourable `PhysicsRenderBinding` visual up close — but the static
+`MenuGhostPlayerCar` from `buildPlaceholderWorld` (a separate, never
+recoloured `THREE.Group`) is also visible at every "MENU" app-state,
+including `CAR_CUSTOMISE` (`MAIN_MENU`/`CAR_CUSTOMISE` map to the same
+`AppState`, per `mapMatchStateToAppState`). Left alone, the stale-colour
+ghost would sit stacked on the recoloured live car. Fixed by extending
+`GameRuntime.updateMenuPresentationVisibility` to also take the current
+`MatchState` and additionally hide `MenuGhostPlayerCar` (only) whenever
+`matchState === "CAR_CUSTOMISE"`. This surfaced a second, previously
+latent gap: `setAppState`'s own change-detection means the visibility
+update never re-ran on a `MAIN_MENU -> CAR_CUSTOMISE` transition (both
+map to the same `AppState`, so `next !== this.appState` is false) —
+`syncAppStateFromMatchFlow` now also tracks the last `MatchState` it ran
+the visibility update for and re-runs it on a `MatchState` change even
+when `AppState` didn't change.
+
+Playwright coverage in `tests/ui/car-customise.spec.ts`: main-menu entry
+point and camera-distance-to-car diagnostics; live colour-input ->
+`getPlayerCarColors()` + `getCarPrimaryColorHex()`-on-the-live-scene
+round trip; boost-preview particle count rising while the screen is open
+and decaying to 0 within 2s after leaving; persistence across a reload;
+BACK -> `MAIN_MENU`; and a gameplay smoke test (real match, LMB boost via
+`__PHYSICS_TEST__.setCarInput`, zero console errors) proving the custom
+boost-colour path doesn't regress real gameplay. Existing
+`tests/assets/car-visual.spec.ts` (opponent car stays untinted magenta —
+the override only ever touches `team === "player"`) and
+`tests/release/release-gate.spec.ts` (the new "CUSTOMISE CAR" menu item
+doesn't collide with `getByText("PLAY")`'s uniqueness assumption) still
+pass unmodified.
