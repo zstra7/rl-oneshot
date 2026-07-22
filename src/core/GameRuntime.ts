@@ -47,7 +47,10 @@ import type { CapturedBinding } from "@/input/InputControlsModule";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
-const MENU_MATCH_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS"];
+/** R12.2: matches settingsStore's `car.bodyColor`/`car.boostColor` default (`#4ff0ff`, the built-in player cyan). */
+const DEFAULT_PLAYER_CAR_COLOR = "#4ff0ff";
+
+const MENU_MATCH_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS", "CAR_CUSTOMISE"];
 
 /**
  * game-flow spec section 35 defines a 3-value `AppState` ("BOOT"|"MENU"|
@@ -105,6 +108,15 @@ export interface GameRuntimeFacade {
   openMainMenu(): void;
   openMatchSetup(): void;
   openSettings(): void;
+  openCarCustomise(): void;
+
+  /** R12.2: Customise Car live preview — applies the asset override, rebuilds the player's cached visual, and re-tints boost-trail VFX. */
+  setPlayerCarColors(colors: { bodyColor: string; boostColor: string }): void;
+  getPlayerCarColors(): { bodyColor: string; boostColor: string };
+  /** R12.2 test hook: live team-primary body colour off the player's currently-bound scene visual, null before it has spawned one. */
+  getPlayerCarPrimaryColorHex(): string | null;
+  /** R12.4: Customise Car boost-trail-in-action preview on the stationary menu player car. */
+  setBoostPreviewEnabled(enabled: boolean): void;
 
   selectMatchDuration(minutes: MatchDurationMinutes): void;
   startMatch(config?: Partial<MatchConfig>): void;
@@ -179,6 +191,8 @@ export class GameRuntime implements GameRuntimeFacade {
   private sceneRenderer: PlaceholderSceneRenderer | null = null;
   private placeholderWorldGroup: THREE.Group | null = null;
   private menuPresentationVisible = true;
+  /** R12.3: last matchState updateMenuPresentationVisibility ran for — see syncAppStateFromMatchFlow's comment for why this needs its own change check. */
+  private previousMatchStateForPresentation: MatchState | null = null;
   private physicsRenderBinding: PhysicsRenderBinding | null = null;
   private boostPadRenderBinding: BoostPadRenderBinding | null = null;
   private gameFlowTestApi: BrowserGameFlowTestApi | null = null;
@@ -188,6 +202,11 @@ export class GameRuntime implements GameRuntimeFacade {
   private audioEventAdapter: AudioEventAdapter | null = null;
   private pendingAudioSettings: AudioSettings | null = null;
   private pendingCameraSettings: CameraSettings | null = null;
+  /** R12.2: mirrors the live asset/VFX overrides so getPlayerCarColors() has something to report even before a visual has spawned. */
+  private playerCarColors: { bodyColor: string; boostColor: string } = {
+    bodyColor: DEFAULT_PLAYER_CAR_COLOR,
+    boostColor: DEFAULT_PLAYER_CAR_COLOR
+  };
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -526,9 +545,17 @@ export class GameRuntime implements GameRuntimeFacade {
     if (!this.modules) {
       return;
     }
-    const next = mapMatchStateToAppState(this.modules.gameFlow.getMatchState());
+    const matchState = this.modules.gameFlow.getMatchState();
+    const next = mapMatchStateToAppState(matchState);
     if (next !== this.appState) {
       this.setAppState(next);
+    } else if (matchState !== this.previousMatchStateForPresentation) {
+      // R12.3: MAIN_MENU <-> CAR_CUSTOMISE both map to the "MENU" AppState
+      // (mapMatchStateToAppState), so setAppState's own change-detection
+      // above never re-runs on that transition — the ghost-car visibility
+      // toggle below needs its own matchState-level change check to still
+      // fire for it.
+      this.updateMenuPresentationVisibility(this.appState, matchState);
     }
   }
 
@@ -554,7 +581,7 @@ export class GameRuntime implements GameRuntimeFacade {
   private setAppState(next: AppState): void {
     const previous = this.appState;
     this.appState = next;
-    this.updateMenuPresentationVisibility(next);
+    this.updateMenuPresentationVisibility(next, this.modules?.gameFlow.getMatchState() ?? null);
     this.dispatcher.emit("runtime:app-state-changed", { previous, next });
   }
 
@@ -565,17 +592,26 @@ export class GameRuntime implements GameRuntimeFacade {
    * on top of the live, physics-driven cars/ball during a match. Only
    * those three named children toggle; the stadium/starfield siblings
    * under the same root stay visible always.
+   *
+   * R12.3: the static ghost player car is additionally hidden during
+   * CAR_CUSTOMISE specifically — that screen's dedicated orbit camera
+   * frames the *live*, colour-overridable `PhysicsRenderBinding` car
+   * up close, and the static ghost (a separate, never-recoloured visual)
+   * would otherwise sit stacked on top of it showing the stale colour.
    */
-  private updateMenuPresentationVisibility(appState: AppState): void {
+  private updateMenuPresentationVisibility(appState: AppState, matchState: MatchState | null): void {
     this.menuPresentationVisible = appState === "MENU";
+    this.previousMatchStateForPresentation = matchState;
     if (!this.placeholderWorldGroup) {
       return;
     }
-    for (const name of ["MenuGhostPlayerCar", "MenuGhostOpponentCar"]) {
-      const object = this.placeholderWorldGroup.getObjectByName(name);
-      if (object) {
-        object.visible = this.menuPresentationVisible;
-      }
+    const playerGhost = this.placeholderWorldGroup.getObjectByName("MenuGhostPlayerCar");
+    if (playerGhost) {
+      playerGhost.visible = this.menuPresentationVisible && matchState !== "CAR_CUSTOMISE";
+    }
+    const opponentGhost = this.placeholderWorldGroup.getObjectByName("MenuGhostOpponentCar");
+    if (opponentGhost) {
+      opponentGhost.visible = this.menuPresentationVisible;
     }
   }
 
@@ -691,6 +727,31 @@ export class GameRuntime implements GameRuntimeFacade {
   public openSettings(): void {
     this.requireModules().gameFlow.openSettings();
     this.emitSessionStateChanged();
+  }
+
+  public openCarCustomise(): void {
+    this.requireModules().gameFlow.openCarCustomise();
+    this.emitSessionStateChanged();
+  }
+
+  public setPlayerCarColors(colors: { bodyColor: string; boostColor: string }): void {
+    this.playerCarColors = { ...colors };
+    const modules = this.requireModules();
+    modules.assets.setPlayerCarColorOverride(colors.bodyColor);
+    this.physicsRenderBinding?.rebuildCarVisual(PLAYER_CAR_ID);
+    this.vfxModule?.setPlayerBoostColor(colors.boostColor);
+  }
+
+  public getPlayerCarColors(): { bodyColor: string; boostColor: string } {
+    return { ...this.playerCarColors };
+  }
+
+  public getPlayerCarPrimaryColorHex(): string | null {
+    return this.physicsRenderBinding?.getCarPrimaryColorHex(PLAYER_CAR_ID) ?? null;
+  }
+
+  public setBoostPreviewEnabled(enabled: boolean): void {
+    this.vfxModule?.setBoostPreview(enabled ? PLAYER_CAR_ID : null);
   }
 
   public selectMatchDuration(minutes: MatchDurationMinutes): void {

@@ -12,6 +12,11 @@ function openSettings(): void {
   runtime.playUiSound("confirm");
   runtime.openSettings();
 }
+
+function openCarCustomise(): void {
+  runtime.playUiSound("confirm");
+  runtime.openCarCustomise();
+}
 </script>
 
 <template>
@@ -30,7 +35,16 @@ function openSettings(): void {
       >
         PLAY
       </button>
-      <button type="button" class="menu-item wo-item" data-index="02" @click="openSettings">
+      <button
+        type="button"
+        class="menu-item wo-item"
+        data-index="02"
+        data-testid="customise-car"
+        @click="openCarCustomise"
+      >
+        CUSTOMISE CAR
+      </button>
+      <button type="button" class="menu-item wo-item" data-index="03" @click="openSettings">
         SETTINGS
       </button>
     </nav>

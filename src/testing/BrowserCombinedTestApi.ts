@@ -43,6 +43,11 @@ export interface BrowserRuntimeTestApi {
   startBindingCapture(device: "keyboardMouse" | "gamepad"): void;
   takeCapturedBinding(): CapturedBinding | null;
   setAirRollSensitivity(value: number): void;
+  /** R12.2/R12.4: Customise Car live preview + boost-trail-in-action preview. */
+  setPlayerCarColors(colors: { bodyColor: string; boostColor: string }): void;
+  getPlayerCarColors(): { bodyColor: string; boostColor: string };
+  getPlayerCarPrimaryColorHex(): string | null;
+  setBoostPreviewEnabled(enabled: boolean): void;
 }
 
 /**

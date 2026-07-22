@@ -31,7 +31,7 @@ const CONTROLS_ACTIVE_STATES: readonly MatchState[] = [
   "OVERTIME_PLAYING"
 ];
 
-const MENU_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS"];
+const MENU_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS", "CAR_CUSTOMISE"];
 
 // R6 (plan/RAMPS_AND_FEATURES_PLAN.md): goal-scored blast radius/strength.
 const GOAL_BLAST_RADIUS = 16;
@@ -147,6 +147,13 @@ export class MatchFlowController {
   public openSettings(): void {
     if (MENU_STATES.includes(this.matchState)) {
       this.setMatchState("SETTINGS");
+    }
+  }
+
+  /** R12: only reachable from the main menu, mirroring openSettings' MENU_STATES gate but scoped tighter per the plan. */
+  public openCarCustomise(): void {
+    if (this.matchState === "MAIN_MENU") {
+      this.setMatchState("CAR_CUSTOMISE");
     }
   }
 

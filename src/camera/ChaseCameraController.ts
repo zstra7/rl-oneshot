@@ -13,6 +13,12 @@ import * as V from "@/physics/Vec3Math";
 
 const MENU_MATCH_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS"];
 
+/** R12.3: same "far-back" kickoff pose GameRuntime spawns the menu-presentation player car at (GameRuntime.initialise). */
+const CUSTOMISE_CAR_SPAWN_POSITION = { x: 0, y: 0.35, z: -24 };
+const CUSTOMISE_ORBIT_RADIUS = 4.6;
+const CUSTOMISE_ORBIT_HEIGHT = 1.5;
+const CUSTOMISE_ORBIT_ANGULAR_SPEED = 0.25;
+
 const UP = new THREE.Vector3(0, 1, 0);
 const SHAKE_RANDOM_SEED = 0x43414d31; // "CAM1"
 
@@ -45,6 +51,7 @@ export class ChaseCameraController implements RenderFrameModule {
   private initialised = false;
 
   private menuOrbitAngle = 0;
+  private customiseOrbitAngle = 0;
 
   private settings: CameraSettings = DEFAULT_CAMERA_SETTINGS;
   private smoothedFov: number = CAM.fov;
@@ -103,11 +110,44 @@ export class ChaseCameraController implements RenderFrameModule {
   }
 
   public updateRenderFrame(context: RenderFrameContext): void {
-    if (MENU_MATCH_STATES.includes(this.gameFlow.getMatchState())) {
+    const state = this.gameFlow.getMatchState();
+    if (state === "CAR_CUSTOMISE") {
+      this.updateCustomiseCamera(context);
+      return;
+    }
+    if (MENU_MATCH_STATES.includes(state)) {
       this.updateMenuCamera(context);
       return;
     }
     this.updateChaseCamera(context);
+  }
+
+  /**
+   * R12.3: dedicated Customise Car framing — a slow orbit around the live
+   * player car (not the generic menu-orbit-around-field-centre used by
+   * `updateMenuCamera`), so the car being customised fills the frame. The
+   * car itself stays stationary (menu physics idles; no inputs are live in
+   * this state) — only the camera moves.
+   */
+  private updateCustomiseCamera(context: RenderFrameContext): void {
+    const snapshot = this.physics.getRenderSnapshot(this.getAlpha());
+    const carTransform = snapshot.cars.get(this.playerCarId);
+    const carPosition = carTransform
+      ? new THREE.Vector3(carTransform.position.x, carTransform.position.y, carTransform.position.z)
+      : new THREE.Vector3(
+          CUSTOMISE_CAR_SPAWN_POSITION.x,
+          CUSTOMISE_CAR_SPAWN_POSITION.y,
+          CUSTOMISE_CAR_SPAWN_POSITION.z
+        );
+
+    this.customiseOrbitAngle += CUSTOMISE_ORBIT_ANGULAR_SPEED * context.frameDeltaSeconds;
+
+    const x = carPosition.x + Math.sin(this.customiseOrbitAngle) * CUSTOMISE_ORBIT_RADIUS;
+    const z = carPosition.z + Math.cos(this.customiseOrbitAngle) * CUSTOMISE_ORBIT_RADIUS;
+
+    this.camera.position.set(x, carPosition.y + CUSTOMISE_ORBIT_HEIGHT, z);
+    this.camera.lookAt(carPosition.x, carPosition.y + 0.6, carPosition.z);
+    this.initialised = false; // re-settle the chase camera instantly next match
   }
 
   private updateMenuCamera(context: RenderFrameContext): void {

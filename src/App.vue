@@ -9,6 +9,7 @@ import OvertimeBanner from "@/components/hud/OvertimeBanner.vue";
 import PauseMenu from "@/components/hud/PauseMenu.vue";
 import QuickChatOverlay from "@/components/hud/QuickChatOverlay.vue";
 import ResultsScreen from "@/components/hud/ResultsScreen.vue";
+import CarCustomise from "@/components/menu/CarCustomise.vue";
 import MainMenu from "@/components/menu/MainMenu.vue";
 import MatchSetup from "@/components/menu/MatchSetup.vue";
 import SettingsPanel from "@/components/menu/SettingsPanel.vue";
@@ -56,6 +57,7 @@ const showGameplayHud = computed(
       "MAIN_MENU",
       "MATCH_SETUP",
       "SETTINGS",
+      "CAR_CUSTOMISE",
       "MATCH_LOADING",
       "KICKOFF_SETUP",
       "MATCH_RESULTS"
@@ -74,6 +76,7 @@ const showGameplayHud = computed(
     <MainMenu v-if="matchState === 'MAIN_MENU'" />
     <MatchSetup v-else-if="matchState === 'MATCH_SETUP'" />
     <SettingsPanel v-else-if="matchState === 'SETTINGS'" />
+    <CarCustomise v-else-if="matchState === 'CAR_CUSTOMISE'" />
 
     <GameplayHud v-if="showGameplayHud" />
     <CountdownOverlay

@@ -24,7 +24,9 @@ const WHEEL_WIDTH = 0.22;
  */
 export function createProceduralCarFallback(
   context: ProceduralAssetContext,
-  team: CarTeam
+  team: CarTeam,
+  /** R12.2: Customise Car body-colour override for the player's fallback visual — undefined/null uses the fixed team colour. */
+  colorOverride?: THREE.ColorRepresentation | null
 ): THREE.Group {
   const { x: hitboxWidth, y: hitboxHeight, z: hitboxLength } =
     context.physicsMetadata.carHitboxSize;
@@ -33,11 +35,17 @@ export function createProceduralCarFallback(
   root.name = `ProceduralCarFallback_${team}`;
   root.userData["isFallbackVisual"] = true;
 
+  // R12.2: the override changes the *colour*, not the cache *key* — a
+  // stable key would let a stale cached material outlive a colour change,
+  // since MaterialRegistry.getOrCreate only runs its factory once per key.
+  const bodyMaterialKey = colorOverride
+    ? `car-fallback-body-${team}-override-${String(colorOverride)}`
+    : `car-fallback-body-${team}`;
   const bodyMaterial = context.materialRegistry.getOrCreate(
-    `car-fallback-body-${team}`,
+    bodyMaterialKey,
     () =>
       new THREE.MeshStandardMaterial({
-        color: TEAM_COLORS[team],
+        color: colorOverride ?? TEAM_COLORS[team],
         roughness: 0.5,
         metalness: 0.2
       })

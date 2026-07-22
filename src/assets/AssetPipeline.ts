@@ -14,7 +14,7 @@ import {
   type AssetPipelineState
 } from "@/assets/AssetTypes";
 import { CarAssetLoader } from "@/assets/cars/CarAssetLoader";
-import { getCarDescriptor, getTeamVisualProfile } from "@/assets/cars/CarDescriptors";
+import { derivePlayerProfile, getCarDescriptor, getTeamVisualProfile } from "@/assets/cars/CarDescriptors";
 import type { CarAssetInspectionReport, CarTeamId, LoadedCarSource } from "@/assets/cars/CarModelTypes";
 import { createProceduralCarFallback } from "@/assets/cars/ProceduralCarFallback";
 import { validateCarAsset } from "@/assets/cars/CarValidation";
@@ -58,6 +58,8 @@ export class AssetPipeline implements GameModule {
   private readonly errors: string[] = [];
   private context: ProceduralAssetContext | null = null;
   private activePreview: ProceduralPreviewHandle | null = null;
+  /** R12.2: Customise Car body-colour override for the player's car, or null for the fixed team-cyan default. */
+  private playerCarColorOverride: string | null = null;
 
   private readonly carLoader = new CarAssetLoader();
   private readonly loadedCarSources = new Map<CarTeamId, LoadedCarSource>();
@@ -224,11 +226,29 @@ export class AssetPipeline implements GameModule {
    * (`PhysicsRenderBinding`), so both show the same visual per car.
    */
   public createCarVisual(team: CarTeamId): THREE.Group {
+    const profile =
+      team === "player" && this.playerCarColorOverride
+        ? derivePlayerProfile(this.playerCarColorOverride)
+        : getTeamVisualProfile(team);
+
     const source = this.loadedCarSources.get(team);
     if (source && !this.carUsesFallback.get(team)) {
-      return this.carLoader.createInstance(source, getTeamVisualProfile(team));
+      return this.carLoader.createInstance(source, profile);
     }
-    return createProceduralCarFallback(this.requireContext(), team);
+    return createProceduralCarFallback(
+      this.requireContext(),
+      team,
+      team === "player" ? this.playerCarColorOverride : null
+    );
+  }
+
+  /** R12.2: Customise Car live-preview colour override for the player's car — null restores the fixed team-cyan default. */
+  public setPlayerCarColorOverride(hex: string | null): void {
+    this.playerCarColorOverride = hex;
+  }
+
+  public getPlayerCarColorOverride(): string | null {
+    return this.playerCarColorOverride;
   }
 
   public createBallVisual(): THREE.Group {

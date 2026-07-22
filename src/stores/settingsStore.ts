@@ -55,6 +55,10 @@ export interface AppSettings {
     readonly gamepad: GamepadBindings;
     readonly airRollSensitivity: number;
   };
+  readonly car: {
+    readonly bodyColor: string;
+    readonly boostColor: string;
+  };
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -103,6 +107,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     keyboardMouse: { ...DEFAULT_CONTROL_BINDINGS.keyboardMouse },
     gamepad: { ...DEFAULT_CONTROL_BINDINGS.gamepad },
     airRollSensitivity: DEFAULT_AIR_ROLL_SENSITIVITY
+  },
+  car: {
+    // R12.2: matches the built-in player cyan (VISUAL_PALETTE.playerCyan / GameRuntime's DEFAULT_PLAYER_CAR_COLOR).
+    bodyColor: "#4ff0ff",
+    boostColor: "#4ff0ff"
   }
 };
 
@@ -141,6 +150,13 @@ function isIntInRange(value: unknown, min: number, max: number): value is number
 
 function pickGamepadButton(value: unknown, fallback: number): number {
   return isIntInRange(value, 0, 17) ? value : fallback;
+}
+
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+
+/** R12.2: same field-by-field defaulting pattern as everything else in this file — a malformed hex falls back to the default rather than reaching the renderer. */
+function pickHexColor(value: unknown, fallback: string): string {
+  return typeof value === "string" && HEX_COLOR_PATTERN.test(value) ? value : fallback;
 }
 
 function pickKeyOrMouseBinding(value: unknown, fallback: KeyOrMouseBinding): KeyOrMouseBinding {
@@ -213,6 +229,7 @@ export function validateSettings(raw: unknown): AppSettings {
   const audio = (input["audio"] ?? {}) as Record<string, unknown>;
   const accessibility = (input["accessibility"] ?? {}) as Record<string, unknown>;
   const controls = (input["controls"] ?? {}) as Record<string, unknown>;
+  const car = (input["car"] ?? {}) as Record<string, unknown>;
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -290,6 +307,10 @@ export function validateSettings(raw: unknown): AppSettings {
         2.0,
         DEFAULT_SETTINGS.controls.airRollSensitivity
       )
+    },
+    car: {
+      bodyColor: pickHexColor(car["bodyColor"], DEFAULT_SETTINGS.car.bodyColor),
+      boostColor: pickHexColor(car["boostColor"], DEFAULT_SETTINGS.car.boostColor)
     }
   };
 }
@@ -339,6 +360,7 @@ export const useSettingsStore = defineStore("settings", {
         gamepad?: Partial<GamepadBindings>;
         airRollSensitivity?: number;
       };
+      car?: Partial<AppSettings["car"]>;
     }): void {
       this.settings = validateSettings({
         ...this.settings,
@@ -351,7 +373,8 @@ export const useSettingsStore = defineStore("settings", {
           keyboardMouse: { ...this.settings.controls.keyboardMouse, ...patch.controls?.keyboardMouse },
           gamepad: { ...this.settings.controls.gamepad, ...patch.controls?.gamepad },
           airRollSensitivity: patch.controls?.airRollSensitivity ?? this.settings.controls.airRollSensitivity
-        }
+        },
+        car: { ...this.settings.car, ...patch.car }
       });
       saveToStorage(this.settings);
     },

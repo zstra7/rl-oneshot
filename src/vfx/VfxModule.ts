@@ -109,6 +109,11 @@ export class VfxModule implements RenderFrameModule {
   private previousMatchState: string | null = null;
   private previousPlayerScore = 0;
   private previousOpponentScore = 0;
+  /** R12.2: Customise Car boost-trail colour override for the player's car, boost-trail spawn path only — goal celebration always keeps team colours. */
+  private playerBoostColorOverride: THREE.ColorRepresentation | null = null;
+  /** R12.4: car currently showing the stationary Customise Car boost-trail preview, or null while off-screen. */
+  private boostPreviewCarId: CarId | null = null;
+  private boostPreviewFrameCounter = 0;
   /**
    * Master Brief "Never Do These": "Never use Math.random() for
    * gameplay." Particle cosmetics don't feed back into gameplay/physics,
@@ -165,8 +170,62 @@ export class VfxModule implements RenderFrameModule {
     this.detectBoostTrails();
     this.detectBallImpact();
     this.detectGoalCelebration();
+    this.updateBoostPreview();
     this.stepParticles(dt);
     this.uploadBuffers();
+  }
+
+  /** R12.2: boost-trail spawn colour for `carId` — the live override for the player's own car, team colour otherwise. Kept distinct from `teamColor`/goal-celebration's colour lookup by call site, not by sharing this function. */
+  private boostTrailColor(carId: CarId): THREE.ColorRepresentation {
+    if (carId === PLAYER_CAR_ID && this.playerBoostColorOverride) {
+      return this.playerBoostColorOverride;
+    }
+    return teamColor(carIdToTeam(carId));
+  }
+
+  /** R12.2: live override applied only to the boost-trail spawn path (see `boostTrailColor`) — null restores the team-cyan default. */
+  public setPlayerBoostColor(hex: string | null): void {
+    this.playerBoostColorOverride = hex;
+  }
+
+  /** R12.4: Customise Car menu preview — while set, spawns a boost-trail burst at `carId`'s rear roughly every 3rd frame, bypassing the normal boost-consumption detection (the car is stationary in the menu, so there is no real boost draw to detect). Null stops the preview. */
+  public setBoostPreview(carId: CarId | null): void {
+    this.boostPreviewCarId = carId;
+    this.boostPreviewFrameCounter = 0;
+  }
+
+  private updateBoostPreview(): void {
+    if (!this.boostPreviewCarId) {
+      return;
+    }
+    this.boostPreviewFrameCounter += 1;
+    if (this.boostPreviewFrameCounter % 3 !== 0) {
+      return;
+    }
+
+    const carId = this.boostPreviewCarId;
+    const car = this.physics.getCarState(carId);
+    const forward = V.applyQuaternion(V.LOCAL_FORWARD, car.rotation);
+    const behind = V.sub(car.position, V.scale(forward, 0.7));
+    const color = this.boostTrailColor(carId);
+
+    for (let i = 0; i < 2; i += 1) {
+      this.spawn({
+        position: { x: behind.x, y: behind.y - 0.05, z: behind.z },
+        velocity: V.add(
+          V.scale(forward, -3 - this.random.range(0, 2)),
+          {
+            x: this.random.range(-0.75, 0.75),
+            y: this.random.range(-0.75, 0.75),
+            z: this.random.range(-0.75, 0.75)
+          }
+        ),
+        color,
+        size: 0.14 + this.random.range(0, 0.08),
+        maxLife: 0.35,
+        drag: 2.5
+      });
+    }
   }
 
   private detectBoostTrails(): void {
@@ -182,7 +241,7 @@ export class VfxModule implements RenderFrameModule {
 
       const forward = V.applyQuaternion(V.LOCAL_FORWARD, car.rotation);
       const behind = V.sub(car.position, V.scale(forward, 0.7));
-      const color = teamColor(carIdToTeam(carId));
+      const color = this.boostTrailColor(carId);
 
       for (let i = 0; i < 2; i += 1) {
         this.spawn({

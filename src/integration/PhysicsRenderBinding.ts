@@ -87,6 +87,54 @@ export class PhysicsRenderBinding implements RenderFrameModule {
     }
   }
 
+  /**
+   * R12.4 test hook: reads the live team-primary body colour off a car's
+   * currently-bound visual (real GLB's "M_car" material, or the procedural
+   * fallback's "CarBody" mesh) rather than the pipeline's profile
+   * derivation, so a Playwright assertion proves the colour actually made
+   * it onto the rendered scene graph, not just into settings state. Null
+   * before the car has spawned a visual.
+   */
+  public getCarPrimaryColorHex(carId: CarId): string | null {
+    const visual = this.carVisuals.get(carId);
+    if (!visual) {
+      return null;
+    }
+
+    let hex: string | null = null;
+    visual.traverse((object) => {
+      if (hex !== null || !(object instanceof THREE.Mesh)) {
+        return;
+      }
+      const material = Array.isArray(object.material) ? object.material[0] : object.material;
+      const standardMaterial = material as THREE.MeshStandardMaterial | undefined;
+      if (!standardMaterial?.color) {
+        return;
+      }
+      const isTeamPrimaryMesh = material?.name === "M_car" || object.name === "CarBody";
+      if (isTeamPrimaryMesh) {
+        hex = `#${standardMaterial.color.getHexString()}`;
+      }
+    });
+    return hex;
+  }
+
+  /**
+   * R12.2: drops the cached visual for `carId` from both the scene root
+   * and `carVisuals` — the next `updateRenderFrame` lazily recreates it via
+   * `assets.createCarVisual`, which by then reflects any freshly-applied
+   * `AssetPipeline.setPlayerCarColorOverride`. Used for instant live
+   * preview in the Customise Car menu rather than any full car re-spawn.
+   */
+  public rebuildCarVisual(carId: CarId): void {
+    const visual = this.carVisuals.get(carId);
+    if (!visual) {
+      return;
+    }
+    this.root.remove(visual);
+    this.carVisuals.delete(carId);
+  }
+
   public dispose(): void {
     this.root.clear();
     this.carVisuals.clear();

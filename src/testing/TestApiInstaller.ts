@@ -34,7 +34,11 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       getControlBindings: () => runtime.getControlBindings(),
       startBindingCapture: (device) => runtime.startBindingCapture(device),
       takeCapturedBinding: () => runtime.takeCapturedBinding(),
-      setAirRollSensitivity: (value) => runtime.setAirRollSensitivity(value)
+      setAirRollSensitivity: (value) => runtime.setAirRollSensitivity(value),
+      setPlayerCarColors: (colors) => runtime.setPlayerCarColors(colors),
+      getPlayerCarColors: () => runtime.getPlayerCarColors(),
+      getPlayerCarPrimaryColorHex: () => runtime.getPlayerCarPrimaryColorHex(),
+      setBoostPreviewEnabled: (enabled) => runtime.setBoostPreviewEnabled(enabled)
     },
     gameFlow: runtime.getGameFlowTestApi()
   };

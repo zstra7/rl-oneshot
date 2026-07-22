@@ -101,6 +101,55 @@ export function getTeamVisualProfile(team: CarTeamId): TeamVisualProfile {
   return TEAM_VISUAL_PROFILES[team];
 }
 
+/**
+ * R12.2: multiplies each RGB channel of a `#rrggbb` hex string by `factor`
+ * (0-1, darkens as it drops below 1) and re-encodes it, clamped/rounded per
+ * channel. Pure and side-effect-free so it is unit-testable without a
+ * THREE.Color/canvas context. Accepts only well-formed 6-digit hex (the
+ * settings-store validation layer is the enforcement point for anything
+ * user-supplied; this helper assumes it's already been validated).
+ */
+export function darkenHex(hex: string, factor: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!match) {
+    throw new Error(`darkenHex: expected a #rrggbb hex string, got "${hex}"`);
+  }
+  const raw = match[1]!;
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+
+  const scale = (channel: number): string => {
+    const scaled = Math.round(Math.min(255, Math.max(0, channel * factor)));
+    return scaled.toString(16).padStart(2, "0");
+  };
+
+  return `#${scale(r)}${scale(g)}${scale(b)}`;
+}
+
+/**
+ * R12.2: the "player" team-visual profile derived from a user-chosen body
+ * colour (Customise Car menu) instead of the fixed cyan default —
+ * `AssetPipeline.createCarVisual("player")` uses this in place of
+ * `getTeamVisualProfile("player")` whenever an override is set. The
+ * secondary/trim colour is the primary darkened 45% (factor 0.55, i.e.
+ * `darkenHex(hex, 0.55)`) so body and trim stay visually related the same
+ * way the built-in cyan/cyan-dark and magenta/magenta-dark pairs do;
+ * emissive matches the primary so the neon strip glows the chosen colour.
+ * Exported standalone (rather than only reachable through the full GLB-
+ * loading `AssetPipeline`) so unit tests can assert the colour derivation
+ * without constructing a pipeline/WebGL context.
+ */
+export function derivePlayerProfile(hex: string): TeamVisualProfile {
+  return {
+    teamId: "player",
+    primary: hex,
+    secondary: darkenHex(hex, 0.55),
+    emissive: hex,
+    patternId: "chevron-a"
+  };
+}
+
 export function getCarDescriptor(team: CarTeamId): CarAssetDescriptor {
   return team === "player" ? PLAYER_CAR_DESCRIPTOR : OPPONENT_CAR_DESCRIPTOR;
 }

@@ -48,6 +48,7 @@ onMounted(async () => {
   });
   runtime.setControlBindings(settings.controls);
   runtime.setAirRollSensitivity(settings.controls.airRollSensitivity);
+  runtime.setPlayerCarColors(settings.car);
 
   // Retro audio module spec section 5: the AudioContext stays suspended
   // until a real user gesture resumes it (browser autoplay policy) — a
