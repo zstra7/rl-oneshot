@@ -21,11 +21,12 @@ import { installInputTestApi } from "@/input/testing/BrowserInputTestApi";
 import { installPhysicsTestApi } from "@/physics/testing/BrowserPhysicsTestApi";
 import { createGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
 import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
-import type {
-  GameSessionState,
-  MatchConfig,
-  MatchDurationMinutes,
-  MatchState
+import {
+  MENU_NAVIGABLE_STATES,
+  type GameSessionState,
+  type MatchConfig,
+  type MatchDurationMinutes,
+  type MatchState
 } from "@/game-flow/MatchFlowTypes";
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
@@ -205,6 +206,8 @@ export class GameRuntime implements GameRuntimeFacade {
   private frameHandle: number | null = null;
   private fixedStepsLastFrame = 0;
   private frameTimeMs = 0;
+  /** R11: previous frame's `areControlsActive()`, to detect the false->true transition. */
+  private previousControlsActive = false;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -368,6 +371,8 @@ export class GameRuntime implements GameRuntimeFacade {
         alpha: this.fixedStepCoordinator.alpha
       });
 
+      this.updateMenuNavigationGating();
+
       const frameEnd =
         typeof performance !== "undefined" ? performance.now() : Date.now();
       this.frameTimeMs = frameEnd - frameStart;
@@ -378,6 +383,38 @@ export class GameRuntime implements GameRuntimeFacade {
 
     this.frameHandle = requestAnimationFrame(this.frame);
   };
+
+  /**
+   * R11: run once per rendered frame (after the fixed-tick advance so a
+   * match-state transition that happened this very frame — e.g. resume ->
+   * PLAYING — is already reflected). Gates gamepad edge collection between
+   * gameplay and menu-navigation contexts, arms the require-release re-arm
+   * mask on every menu->gameplay transition, and emits the sampled
+   * menu-navigation frame while a menu root is visible.
+   */
+  private updateMenuNavigationGating(): void {
+    const modules = this.modules;
+    if (!modules) {
+      return;
+    }
+
+    const matchState = modules.gameFlow.getMatchState();
+    const controlsActive = modules.gameFlow.areControlsActive();
+
+    modules.input.setGameplayEdgesEnabled(controlsActive);
+    modules.input.setMenuEdgesEnabled(MENU_NAVIGABLE_STATES.includes(matchState));
+
+    if (controlsActive && !this.previousControlsActive) {
+      modules.input.rearmGameplayInputs();
+      modules.input.clearPendingEdges();
+    }
+    this.previousControlsActive = controlsActive;
+
+    if (MENU_NAVIGABLE_STATES.includes(matchState)) {
+      const frame = modules.input.sampleMenuNavigation();
+      this.dispatcher.emit("runtime:menu-navigation", { frame });
+    }
+  }
 
   private onFixedTick(tick: number): void {
     const modules = this.modules;

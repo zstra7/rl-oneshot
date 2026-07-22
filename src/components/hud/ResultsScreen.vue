@@ -29,7 +29,7 @@ function returnToMenu(): void {
 </script>
 
 <template>
-  <div class="results-overlay" data-testid="results-screen">
+  <div class="results-overlay" data-testid="results-screen" data-menu-root>
     <div class="results-panel wo-panel">
       <h2 class="result wo-title" :class="resultLabel.toLowerCase()">{{ resultLabel }}</h2>
       <div class="score wo-numeral" data-testid="final-score">
@@ -42,7 +42,13 @@ function returnToMenu(): void {
         <button type="button" class="menu-item wo-item" data-index="01" autofocus @click="replayMatch()">
           REPLAY
         </button>
-        <button type="button" class="menu-item wo-item" data-index="02" @click="returnToMenu()">
+        <button
+          type="button"
+          class="menu-item wo-item"
+          data-index="02"
+          data-menu-back
+          @click="returnToMenu()"
+        >
           RETURN TO MENU
         </button>
       </div>

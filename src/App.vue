@@ -15,10 +15,15 @@ import SettingsPanel from "@/components/menu/SettingsPanel.vue";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import { useApplicationStore } from "@/stores/applicationStore";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
+import { useMenuGamepadNavigation } from "@/ui/useMenuGamepadNavigation";
 
 const applicationStore = useApplicationStore();
 const matchFlowStore = useMatchFlowStore();
 const runtime = useGameRuntime();
+
+// R11: console-convention gamepad menu navigation, instantiated once for
+// the whole app — owns its own runtime-event subscription/lifecycle.
+useMenuGamepadNavigation();
 
 // Registered during setup (before any child onMounted hooks run) so no
 // early "runtime:app-state-changed" event from GameCanvas's initialise()

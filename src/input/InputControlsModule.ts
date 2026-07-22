@@ -2,7 +2,8 @@ import {
   DEFAULT_KEYBOARD_BINDINGS,
   DEFAULT_MOUSE_BINDINGS,
   GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD,
-  STANDARD_GAMEPAD_AXES
+  STANDARD_GAMEPAD_AXES,
+  STANDARD_GAMEPAD_BUTTONS
 } from "@/input/bindings/DefaultBindings";
 import {
   DEFAULT_CONTROL_BINDINGS,
@@ -38,6 +39,21 @@ export interface InputInitialisationOptions {
   readonly gamepadProvider?: GamepadProvider;
 }
 
+/**
+ * R11: fixed (non-rebindable) gamepad menu-navigation surface. `up/down/
+ * left/right` are HELD states (dpad OR left stick, with hysteresis);
+ * `confirmPressed`/`backPressed` are one-shot edges (south/east) that clear
+ * on read — see `sampleMenuNavigation()`.
+ */
+export interface MenuNavigationFrame {
+  readonly up: boolean;
+  readonly down: boolean;
+  readonly left: boolean;
+  readonly right: boolean;
+  readonly confirmPressed: boolean;
+  readonly backPressed: boolean;
+}
+
 /** Result of a completed rebind capture (R10.2). */
 export interface CapturedBinding {
   readonly kind: "key" | "mouse" | "gamepad";
@@ -50,12 +66,27 @@ const STICK_ACTIVATION_THRESHOLD = 0.35;
 const AIR_ROLL_SENSITIVITY_MIN = 0.5;
 const AIR_ROLL_SENSITIVITY_MAX = 2.0;
 
+/** R11 menu-navigation stick hysteresis thresholds — see updateMenuStickHeld. */
+const MENU_STICK_ENGAGE_THRESHOLD = 0.5;
+const MENU_STICK_RELEASE_THRESHOLD = 0.35;
+
 function applyDeadzone(value: number): number {
   return Math.abs(value) < AXIS_DEADZONE ? 0 : value;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/** R11: engage at > 0.5, release only below 0.35, else keep the current state. */
+function axisHysteresis(currentlyHeld: boolean, magnitude: number): boolean {
+  if (magnitude > MENU_STICK_ENGAGE_THRESHOLD) {
+    return true;
+  }
+  if (magnitude < MENU_STICK_RELEASE_THRESHOLD) {
+    return false;
+  }
+  return currentlyHeld;
 }
 
 /**
@@ -78,6 +109,40 @@ export class InputControlsModule {
   private activeDevice: ActiveInputDevice = "none";
   private pendingEdges: ActionEdge[] = [];
   private edgeSequence = 0;
+
+  // -- R11: menu-navigation edge quarantine + require-release re-arm --
+
+  /**
+   * Set by GameRuntime from `matchFlow.areControlsActive()` once per
+   * browser frame. While false, `pollGamepad` must not enqueue gameplay
+   * edges (JUMP/BALL_CAMERA/PAUSE) from gamepad presses — otherwise
+   * pressing South to click RESUME on the pause menu leaves a queued JUMP
+   * edge that fires the instant play resumes.
+   */
+  private gameplayEdgesEnabled = true;
+  /**
+   * Set by GameRuntime from `MENU_NAVIGABLE_STATES.includes(matchState)`.
+   * While false, gamepad south/east presses must not be collected as menu
+   * confirm/back edges (mirror image of `gameplayEdgesEnabled` — the two
+   * are never simultaneously true for any real match state).
+   */
+  private menuEdgesEnabled = false;
+
+  private pendingMenuConfirmEdge = false;
+  private pendingMenuBackEdge = false;
+
+  /** Held-with-hysteresis left-stick menu-navigation directions (R11). */
+  private menuStickHeld = { up: false, down: false, left: false, right: false };
+
+  /**
+   * Require-release re-arm mask (R11): every gamepad button/keyboard
+   * code/mouse button held at the instant of a menu->gameplay transition
+   * is captured here by `rearmGameplayInputs()` and masked from gameplay
+   * sampling until it is physically released at least once.
+   */
+  private rearmedGamepadButtons = new Set<number>();
+  private rearmedKeyboardCodes = new Set<string>();
+  private rearmedMouseButtons = new Set<number>();
 
   private dodgeDeadzone = DEFAULT_HUMAN_DODGE_DEADZONE;
   private airRollSensitivity = DEFAULT_AIR_ROLL_SENSITIVITY;
@@ -240,6 +305,7 @@ export class InputControlsModule {
       this.assignedGamepadIndex = null;
       this.latestGamepadSnapshot = null;
       this.previousGamepadButtonsPressed = [];
+      this.menuStickHeld = { up: false, down: false, left: false, right: false };
       return;
     }
 
@@ -272,20 +338,59 @@ export class InputControlsModule {
         if (this.captureArmed === "gamepad") {
           this.capturedBinding = { kind: "gamepad", button: i };
           this.captureArmed = null;
-        } else if (i === g.jumpButton) {
-          this.pushEdge("JUMP", "pressed");
-        } else if (i === g.ballCameraButton) {
-          this.pushEdge("BALL_CAMERA", "pressed");
-        } else if (i === g.pauseButton) {
-          this.pushEdge("PAUSE", "pressed");
+        } else {
+          // R11 edge quarantine: gameplay edges (JUMP/BALL_CAMERA/PAUSE)
+          // and menu edges (confirm/back, fixed south/east — not
+          // rebindable) are collected from two mutually-exclusive gates so
+          // a South press at the pause menu can never also queue a
+          // gameplay JUMP edge.
+          if (this.gameplayEdgesEnabled) {
+            if (i === g.jumpButton) {
+              this.pushEdge("JUMP", "pressed");
+            } else if (i === g.ballCameraButton) {
+              this.pushEdge("BALL_CAMERA", "pressed");
+            } else if (i === g.pauseButton) {
+              this.pushEdge("PAUSE", "pressed");
+            }
+          }
+          if (this.menuEdgesEnabled) {
+            if (i === STANDARD_GAMEPAD_BUTTONS.south) {
+              this.pendingMenuConfirmEdge = true;
+            } else if (i === STANDARD_GAMEPAD_BUTTONS.east) {
+              this.pendingMenuBackEdge = true;
+            }
+          }
         }
-      } else if (!isPressed && wasPressed && i === g.jumpButton) {
+      } else if (!isPressed && wasPressed && i === g.jumpButton && this.gameplayEdgesEnabled) {
         this.pushEdge("JUMP", "released");
+      }
+
+      if (!isPressed) {
+        this.rearmedGamepadButtons.delete(i);
       }
     }
 
+    this.updateMenuStickHeld(gamepad);
+
     this.previousGamepadButtonsPressed = gamepad.buttons.map((button) => button.pressed);
     this.latestGamepadSnapshot = gamepad;
+  }
+
+  /**
+   * R11 stick hysteresis: engage a held direction at |axis| > 0.5, release
+   * only below 0.35. A stick hovering right at a single threshold cannot
+   * oscillate held/released across frames and machine-gun the focus.
+   */
+  private updateMenuStickHeld(gamepad: GamepadLike): void {
+    const leftX = gamepad.axes[STANDARD_GAMEPAD_AXES.leftX] ?? 0;
+    const leftY = gamepad.axes[STANDARD_GAMEPAD_AXES.leftY] ?? 0;
+
+    this.menuStickHeld = {
+      left: axisHysteresis(this.menuStickHeld.left, leftX < 0 ? -leftX : 0),
+      right: axisHysteresis(this.menuStickHeld.right, leftX > 0 ? leftX : 0),
+      up: axisHysteresis(this.menuStickHeld.up, leftY < 0 ? -leftY : 0),
+      down: axisHysteresis(this.menuStickHeld.down, leftY > 0 ? leftY : 0)
+    };
   }
 
   /** Test-only: swap in a VirtualGamepadProvider after initialise(). */
@@ -329,6 +434,79 @@ export class InputControlsModule {
     }
   }
 
+  // -- R11: menu-navigation surface --
+
+  /**
+   * Called once per browser frame by GameRuntime while `matchState` is
+   * menu-navigable. Held directions are re-derived fresh every call (dpad
+   * OR the hysteresis-tracked stick state); confirm/back are edges that
+   * clear on read — the single consumption point that guarantees one
+   * physical press produces exactly one `confirmPressed`/`backPressed`.
+   */
+  public sampleMenuNavigation(): MenuNavigationFrame {
+    const gamepad = this.latestGamepadSnapshot;
+    const dpadUp = gamepad?.buttons[STANDARD_GAMEPAD_BUTTONS.dpadUp]?.pressed ?? false;
+    const dpadDown = gamepad?.buttons[STANDARD_GAMEPAD_BUTTONS.dpadDown]?.pressed ?? false;
+    const dpadLeft = gamepad?.buttons[STANDARD_GAMEPAD_BUTTONS.dpadLeft]?.pressed ?? false;
+    const dpadRight = gamepad?.buttons[STANDARD_GAMEPAD_BUTTONS.dpadRight]?.pressed ?? false;
+
+    const confirmPressed = this.pendingMenuConfirmEdge;
+    const backPressed = this.pendingMenuBackEdge;
+    this.pendingMenuConfirmEdge = false;
+    this.pendingMenuBackEdge = false;
+
+    return {
+      up: dpadUp || this.menuStickHeld.up,
+      down: dpadDown || this.menuStickHeld.down,
+      left: dpadLeft || this.menuStickHeld.left,
+      right: dpadRight || this.menuStickHeld.right,
+      confirmPressed,
+      backPressed
+    };
+  }
+
+  /** R11 edge quarantine: GameRuntime sets this from `matchFlow.areControlsActive()`. */
+  public setGameplayEdgesEnabled(enabled: boolean): void {
+    this.gameplayEdgesEnabled = enabled;
+  }
+
+  /** R11 edge quarantine: GameRuntime sets this from `MENU_NAVIGABLE_STATES.includes(matchState)`. */
+  public setMenuEdgesEnabled(enabled: boolean): void {
+    this.menuEdgesEnabled = enabled;
+    if (!enabled) {
+      // Drop any stale, unconsumed confirm/back edge the instant the menu
+      // stops being navigable, so it can never resurface against a
+      // different menu that appears later.
+      this.pendingMenuConfirmEdge = false;
+      this.pendingMenuBackEdge = false;
+    }
+  }
+
+  /**
+   * R11 require-release re-arm: snapshot every currently-held gamepad
+   * button/keyboard code/mouse button and mask each from gameplay sampling
+   * until it is individually released. Call on every transition into a
+   * controls-active state (resume from pause, countdown GO after menus) —
+   * otherwise e.g. clicking RESUME with South (=jump on gamepad) still
+   * physically held makes the car jump the instant play resumes.
+   */
+  public rearmGameplayInputs(): void {
+    this.rearmedGamepadButtons = new Set(
+      this.latestGamepadSnapshot?.buttons
+        .map((button, index) => (button.pressed ? index : -1))
+        .filter((index) => index >= 0) ?? []
+    );
+    this.rearmedKeyboardCodes = new Set(this.keyboard?.getHeldCodes() ?? []);
+    this.rearmedMouseButtons = new Set(this.mouse?.getHeldButtons() ?? []);
+  }
+
+  /** R11: drop all queued gameplay + menu edges (paired with rearmGameplayInputs() on resume). */
+  public clearPendingEdges(): void {
+    this.pendingEdges = [];
+    this.pendingMenuConfirmEdge = false;
+    this.pendingMenuBackEdge = false;
+  }
+
   // -- R10.1/R10.2: bindings + rebind-capture surface --
 
   public setBindings(bindings: ControlBindings): void {
@@ -364,9 +542,51 @@ export class InputControlsModule {
 
   private isKeyOrMouseHeld(binding: KeyOrMouseBinding): boolean {
     if (binding.kind === "key") {
-      return this.keyboard?.isPressed(binding.code) ?? false;
+      return this.keyPressedForGameplay(binding.code);
     }
-    return this.mouse?.isPressed(binding.button) ?? false;
+    return this.mousePressedForGameplay(binding.button);
+  }
+
+  // -- R11 require-release re-arm: masked reads for gameplay sampling only.
+  // Each helper both (a) reports false while the underlying physical input
+  // is in the rearm mask, and (b) drops the mask entry the instant the
+  // input is physically released, so a single release re-arms it
+  // permanently rather than leaving it stuck masked forever.
+
+  private keyPressedForGameplay(code: string): boolean {
+    const held = this.keyboard?.isPressed(code) ?? false;
+    if (!held) {
+      this.rearmedKeyboardCodes.delete(code);
+      return false;
+    }
+    return !this.rearmedKeyboardCodes.has(code);
+  }
+
+  private mousePressedForGameplay(button: number): boolean {
+    const held = this.mouse?.isPressed(button) ?? false;
+    if (!held) {
+      this.rearmedMouseButtons.delete(button);
+      return false;
+    }
+    return !this.rearmedMouseButtons.has(button);
+  }
+
+  private gamepadButtonPressedForGameplay(gamepad: GamepadLike, index: number): boolean {
+    const held = gamepad.buttons[index]?.pressed ?? false;
+    if (!held) {
+      this.rearmedGamepadButtons.delete(index);
+      return false;
+    }
+    return !this.rearmedGamepadButtons.has(index);
+  }
+
+  private gamepadButtonValueForGameplay(gamepad: GamepadLike, index: number): number {
+    const value = gamepad.buttons[index]?.value ?? 0;
+    if (value <= 0) {
+      this.rearmedGamepadButtons.delete(index);
+      return 0;
+    }
+    return this.rearmedGamepadButtons.has(index) ? 0 : value;
   }
 
   private buildLogicalStateFromKeyboardMouse(): LogicalGameplayState {
@@ -374,27 +594,27 @@ export class InputControlsModule {
       return neutralLogicalGameplayState();
     }
 
-    const kb = this.keyboard;
     const b = this.bindings.keyboardMouse;
 
     const airRollModifier =
-      kb.isPressed(b.airRollModifierPrimary) || kb.isPressed(b.airRollModifierSecondary);
+      this.keyPressedForGameplay(b.airRollModifierPrimary) ||
+      this.keyPressedForGameplay(b.airRollModifierSecondary);
 
     return {
-      accelerate: kb.isPressed(b.accelerate) ? 1 : 0,
-      reverse: kb.isPressed(b.reverse) ? 1 : 0,
-      steerLeft: kb.isPressed(b.steerLeft) ? 1 : 0,
-      steerRight: kb.isPressed(b.steerRight) ? 1 : 0,
-      pitchNoseDown: kb.isPressed(b.pitchNoseDown) ? 1 : 0,
-      pitchNoseUp: kb.isPressed(b.pitchNoseUp) ? 1 : 0,
-      yawLeft: kb.isPressed(b.yawLeft) ? 1 : 0,
-      yawRight: kb.isPressed(b.yawRight) ? 1 : 0,
+      accelerate: this.keyPressedForGameplay(b.accelerate) ? 1 : 0,
+      reverse: this.keyPressedForGameplay(b.reverse) ? 1 : 0,
+      steerLeft: this.keyPressedForGameplay(b.steerLeft) ? 1 : 0,
+      steerRight: this.keyPressedForGameplay(b.steerRight) ? 1 : 0,
+      pitchNoseDown: this.keyPressedForGameplay(b.pitchNoseDown) ? 1 : 0,
+      pitchNoseUp: this.keyPressedForGameplay(b.pitchNoseUp) ? 1 : 0,
+      yawLeft: this.keyPressedForGameplay(b.yawLeft) ? 1 : 0,
+      yawRight: this.keyPressedForGameplay(b.yawRight) ? 1 : 0,
       airRollLeft: false,
       airRollRight: false,
       airRollModifier,
       jumpHeld: this.isKeyOrMouseHeld(b.jump),
       boostHeld: this.isKeyOrMouseHeld(b.boost),
-      powerslideHeld: kb.isPressed(b.powerslide) || airRollModifier
+      powerslideHeld: this.keyPressedForGameplay(b.powerslide) || airRollModifier
     };
   }
 
@@ -409,15 +629,15 @@ export class InputControlsModule {
     const leftX = applyDeadzone(gamepad.axes[STANDARD_GAMEPAD_AXES.leftX] ?? 0);
     const leftY = applyDeadzone(gamepad.axes[STANDARD_GAMEPAD_AXES.leftY] ?? 0);
 
-    const accelerateValue = gamepad.buttons[g.accelerateButton]?.value ?? 0;
-    const reverseValue = gamepad.buttons[g.reverseButton]?.value ?? 0;
+    const accelerateValue = this.gamepadButtonValueForGameplay(gamepad, g.accelerateButton);
+    const reverseValue = this.gamepadButtonValueForGameplay(gamepad, g.reverseButton);
     // Air-roll/powerslide modifier is a dedicated face button (west/X by
     // default, matching RL), not the brake trigger — braking mid-air must
     // not turn stick input into roll. R10 semantic-trap fix: this now
     // consumes bindings.gamepad.airRollModifierButton (default matches
     // powerslideButton's value) so the binding the rebind UI displays is
     // the one actually driving air-roll.
-    const airRollModifier = gamepad.buttons[g.airRollModifierButton]?.pressed ?? false;
+    const airRollModifier = this.gamepadButtonPressedForGameplay(gamepad, g.airRollModifierButton);
 
     return {
       accelerate: accelerateValue > GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD ? accelerateValue : 0,
@@ -431,9 +651,9 @@ export class InputControlsModule {
       airRollLeft: false,
       airRollRight: false,
       airRollModifier,
-      jumpHeld: gamepad.buttons[g.jumpButton]?.pressed ?? false,
-      boostHeld: gamepad.buttons[g.boostButton]?.pressed ?? false,
-      powerslideHeld: gamepad.buttons[g.powerslideButton]?.pressed ?? false
+      jumpHeld: this.gamepadButtonPressedForGameplay(gamepad, g.jumpButton),
+      boostHeld: this.gamepadButtonPressedForGameplay(gamepad, g.boostButton),
+      powerslideHeld: this.gamepadButtonPressedForGameplay(gamepad, g.powerslideButton)
     };
   }
 
@@ -464,7 +684,12 @@ export class InputControlsModule {
 
     const rearViewHeld =
       this.activeDevice === "gamepad"
-        ? this.latestGamepadSnapshot?.buttons[this.bindings.gamepad.rearViewButton]?.pressed ?? false
+        ? this.latestGamepadSnapshot
+          ? this.gamepadButtonPressedForGameplay(
+              this.latestGamepadSnapshot,
+              this.bindings.gamepad.rearViewButton
+            )
+          : false
         : this.isKeyOrMouseHeld(this.bindings.keyboardMouse.rearView);
 
     const camera: CameraInput = {

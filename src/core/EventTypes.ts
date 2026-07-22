@@ -1,5 +1,6 @@
 import type { AppState } from "@/core/ApplicationState";
 import type { GameSessionState } from "@/game-flow/MatchFlowTypes";
+import type { MenuNavigationFrame } from "@/input/InputControlsModule";
 
 export interface RuntimeErrorRecord {
   readonly message: string;
@@ -38,6 +39,15 @@ export interface SessionStateChangedEvent {
 }
 
 /**
+ * R11: emitted once per rendered frame while `matchState` is menu-navigable
+ * (`MENU_NAVIGABLE_STATES`), carrying the sampled gamepad menu-navigation
+ * frame for `useMenuGamepadNavigation` to consume.
+ */
+export interface MenuNavigationEvent {
+  readonly frame: MenuNavigationFrame;
+}
+
+/**
  * Extended incrementally as each module's phase lands (physics, match,
  * input, assets events per core architecture spec section 18). Only
  * runtime-owned events exist as of Phase 1 — do not invent event contracts
@@ -48,4 +58,5 @@ export interface TypedEventMap {
   "runtime:fixed-tick": FixedTickAdvancedEvent;
   "runtime:error": RuntimeErrorEvent;
   "runtime:session-state-changed": SessionStateChangedEvent;
+  "runtime:menu-navigation": MenuNavigationEvent;
 }

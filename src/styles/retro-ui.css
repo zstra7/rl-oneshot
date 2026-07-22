@@ -119,6 +119,21 @@
   border-left-color: var(--ui-ink);
 }
 
+/**
+ * R11: controller menu navigation moves focus programmatically
+ * (`HTMLElement.focus()`), which does not reliably trigger
+ * `:focus-visible` in every browser — an explicit `:focus` outline here
+ * guarantees the focused item is always visibly indicated regardless of
+ * how focus arrived (pointer, keyboard, or gamepad).
+ */
+.wo-item:focus,
+.duration-item:focus,
+.tab:focus,
+.chip:focus {
+  outline: 2px solid var(--ui-amber);
+  outline-offset: 2px;
+}
+
 .wo-chip {
   transform: skewX(var(--skew));
 }

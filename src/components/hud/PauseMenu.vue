@@ -24,10 +24,17 @@ function returnToMenu(): void {
 </script>
 
 <template>
-  <div class="pause-overlay" data-testid="pause-menu">
+  <div class="pause-overlay" data-testid="pause-menu" data-menu-root>
     <div class="pause-panel wo-panel">
       <h2 class="heading wo-title">PAUSED</h2>
-      <button type="button" class="menu-item wo-item" data-index="01" autofocus @click="resumeMatch()">
+      <button
+        type="button"
+        class="menu-item wo-item"
+        data-index="01"
+        autofocus
+        data-menu-back
+        @click="resumeMatch()"
+      >
         RESUME
       </button>
       <button type="button" class="menu-item wo-item" data-index="02" @click="restartMatch()">

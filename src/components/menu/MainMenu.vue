@@ -15,7 +15,7 @@ function openSettings(): void {
 </script>
 
 <template>
-  <div class="menu-panel main-menu" data-testid="main-menu">
+  <div class="menu-panel main-menu" data-testid="main-menu" data-menu-root>
     <h1 class="title">
       <span class="wo-label title-kicker">SPACE</span>
       <span class="wo-title title-main">CARBALL</span>

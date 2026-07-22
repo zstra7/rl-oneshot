@@ -363,7 +363,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="menu-panel settings-panel" data-testid="settings-panel">
+  <div class="menu-panel settings-panel" data-testid="settings-panel" data-menu-root>
     <h2 class="heading wo-title">SETTINGS</h2>
 
     <div class="category-tabs" role="tablist" aria-label="Settings categories">
@@ -772,7 +772,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <button type="button" class="menu-item wo-item" data-index="03" @click="back()">BACK</button>
+    <button type="button" class="menu-item wo-item" data-index="03" data-menu-back @click="back()">BACK</button>
   </div>
 </template>
 

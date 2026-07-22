@@ -42,7 +42,7 @@ function back(): void {
 </script>
 
 <template>
-  <div class="menu-panel match-setup" data-testid="match-setup">
+  <div class="menu-panel match-setup" data-testid="match-setup" data-menu-root>
     <h2 class="heading wo-title">MATCH SETUP</h2>
 
     <div class="wo-label row-label">DURATION</div>
@@ -85,7 +85,7 @@ function back(): void {
       >
         START MATCH
       </button>
-      <button type="button" class="menu-item wo-item" data-index="02" @click="back()">BACK</button>
+      <button type="button" class="menu-item wo-item" data-index="02" data-menu-back @click="back()">BACK</button>
     </div>
   </div>
 </template>
