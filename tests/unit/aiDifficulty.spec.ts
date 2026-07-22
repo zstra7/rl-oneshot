@@ -86,13 +86,15 @@ describe("AI difficulty and tactics (Phase 10)", () => {
     expect(ai.getDifficulty()).toBe("hard");
     ai.setDifficulty("easy");
     expect(ai.getDifficulty()).toBe("easy");
+    ai.setDifficulty("legend");
+    expect(ai.getDifficulty()).toBe("legend");
   });
 
-  it("difficulty ordering holds statistically: hard reacts faster than medium reacts faster than easy", async () => {
+  it("difficulty ordering holds statistically: legend reacts faster than hard reacts faster than medium reacts faster than easy", async () => {
     const seeds = [1, 2, 3, 4, 5];
-    const results: Record<AiDifficulty, number[]> = { easy: [], medium: [], hard: [] };
+    const results: Record<AiDifficulty, number[]> = { easy: [], medium: [], hard: [], legend: [] };
 
-    for (const difficulty of ["easy", "medium", "hard"] as const) {
+    for (const difficulty of ["easy", "medium", "hard", "legend"] as const) {
       for (const seed of seeds) {
         results[difficulty].push(await measureReactionLagTicks(difficulty, seed));
       }
@@ -100,13 +102,14 @@ describe("AI difficulty and tactics (Phase 10)", () => {
 
     const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
 
-    // Hard is not omniscient: it still has a nonzero perception delay,
+    // Legend is not omniscient: it still has a nonzero perception delay,
     // never reacts on the very same tick as the surprise event.
-    expect(Math.min(...results.hard)).toBeGreaterThan(0);
+    expect(Math.min(...results.legend)).toBeGreaterThan(0);
 
+    expect(avg(results.legend)).toBeLessThan(avg(results.hard));
     expect(avg(results.hard)).toBeLessThan(avg(results.medium));
     expect(avg(results.medium)).toBeLessThan(avg(results.easy));
-  }, 30_000);
+  }, 45_000);
 
   it("same seed and same scenario produce the same outcome (AI spec section 8 determinism)", async () => {
     async function runOnce(): Promise<{ x: number; z: number }> {

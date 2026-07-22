@@ -8,7 +8,7 @@ declare const __APP_VERSION__: string;
 interface ImportMetaEnv {
   readonly VITE_APP_TITLE?: string;
   readonly VITE_DEFAULT_AI_DIFFICULTY?:
-    "easy" | "medium" | "hard";
+    "easy" | "medium" | "hard" | "legend";
   readonly VITE_DEFAULT_MATCH_MINUTES?:
     "1" | "3" | "10";
   readonly VITE_ENABLE_DEBUG_UI?:

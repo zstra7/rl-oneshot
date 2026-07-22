@@ -78,3 +78,24 @@ each one-second slice of the 30-second window, rather than giving the
 AI 30 uninterrupted seconds free to reach either goal — this is a test-
 robustness fix for a match-timer test that was never meant to exercise
 AI scoring behaviour, not a change to AI behaviour itself.
+
+## R9 — "Legend" difficulty (plan/RAMPS_AND_FEATURES_PLAN.md)
+
+A 4th real tier above hard, exposed in match setup alongside the other
+three (not tournament-exclusive): `LEGEND_AI` in `src/ai/AiDifficulty.ts`
+is a tuned-up hard — lower reaction/own-state delay and perception
+noise, higher tactical/prediction Hz, a longer planning horizon with
+more candidates, higher shot accuracy/skill-parameter values across the
+board, and a longer post-mistake cooldown (10s vs. hard's 7s). Also
+extended `OpponentAiController`'s two `difficulty === "hard"` gates
+(limited aerial pursuit eligibility) to include `"legend"` — without
+that, legend's higher `aerialSkill` (0.6 vs. hard's 0.48) would never
+actually be exercised, since the aerial-pursuit code path was
+hard-difficulty-only rather than skill-threshold-gated.
+
+**Measured reaction-lag ordering** (`tests/unit/aiDifficulty.spec.ts`'s
+`measureReactionLagTicks`, 5 seeds, averaged, at 120 ticks/s): easy ≈57
+ticks (0.475s), medium ≈27 ticks (0.225s), hard ≈17 ticks (0.142s),
+legend ≈11 ticks (0.092s) — strictly decreasing as intended, and legend
+is still not omniscient (`Math.min(...results.legend) > 0`, i.e. it
+never reacts on the very same tick as the surprise event).

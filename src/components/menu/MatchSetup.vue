@@ -10,7 +10,7 @@ const runtime = useGameRuntime();
 const matchFlowStore = useMatchFlowStore();
 
 const durations: MatchDurationMinutes[] = [1, 3, 10];
-const difficulties: AiDifficulty[] = ["easy", "medium", "hard"];
+const difficulties: AiDifficulty[] = ["easy", "medium", "hard", "legend"];
 
 const selected = computed(() => matchFlowStore.session.selectedDurationMinutes);
 

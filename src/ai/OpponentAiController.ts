@@ -109,7 +109,7 @@ export class OpponentAiController {
     this.updateMistakeState(context.tick);
 
     if (!controlledCar.grounded) {
-      if (this.difficulty === "hard" && this.aerialPursuitTicksRemaining > 0) {
+      if ((this.difficulty === "hard" || this.difficulty === "legend") && this.aerialPursuitTicksRemaining > 0) {
         this.aerialPursuitTicksRemaining -= 1;
         this.lastDebugState = { mode: "attack", targetPosition: ball.position };
         return computeAerialPursuitInput(controlledCar, ball.position);
@@ -255,7 +255,7 @@ export class OpponentAiController {
     const horizontalDistance = flatDistance(carPosition, ball.position);
 
     if (ballHeight > JUMP_BALL_HEIGHT_THRESHOLD && horizontalDistance < JUMP_TRIGGER_RADIUS) {
-      if (this.difficulty === "hard" && this.params.aerialSkill > 0.3) {
+      if ((this.difficulty === "hard" || this.difficulty === "legend") && this.params.aerialSkill > 0.3) {
         this.aerialPursuitTicksRemaining = Math.round(
           this.params.maximumAerialTime * RL_CONSTANTS.physicsHz
         );

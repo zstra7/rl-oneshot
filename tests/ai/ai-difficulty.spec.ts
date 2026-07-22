@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
     .toBe(true);
 });
 
-test("match setup shows EASY/MEDIUM/HARD difficulty buttons, medium selected by default", async ({
+test("match setup shows EASY/MEDIUM/HARD/LEGEND difficulty buttons, medium selected by default", async ({
   page
 }) => {
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.openMatchSetup());
@@ -18,6 +18,7 @@ test("match setup shows EASY/MEDIUM/HARD difficulty buttons, medium selected by 
   await expect(page.getByTestId("difficulty-easy")).toBeVisible();
   await expect(page.getByTestId("difficulty-medium")).toBeVisible();
   await expect(page.getByTestId("difficulty-hard")).toBeVisible();
+  await expect(page.getByTestId("difficulty-legend")).toBeVisible();
 
   const difficulty = await page.evaluate(() => window.__GAME_TEST__?.runtime.getAiDifficulty());
   expect(difficulty).toBe("medium");
@@ -29,6 +30,10 @@ test("selecting a difficulty takes effect immediately on the live AI", async ({ 
   await page.getByTestId("difficulty-hard").click();
   let difficulty = await page.evaluate(() => window.__GAME_TEST__?.runtime.getAiDifficulty());
   expect(difficulty).toBe("hard");
+
+  await page.getByTestId("difficulty-legend").click();
+  difficulty = await page.evaluate(() => window.__GAME_TEST__?.runtime.getAiDifficulty());
+  expect(difficulty).toBe("legend");
 
   await page.getByTestId("difficulty-easy").click();
   difficulty = await page.evaluate(() => window.__GAME_TEST__?.runtime.getAiDifficulty());
