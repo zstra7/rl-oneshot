@@ -120,39 +120,54 @@ function clampLinearVelocity(body: RAPIER.RigidBody, maxSpeed: number): void {
   }
 }
 
-const AUTO_FLIP_UPSIDE_DOWN_THRESHOLD = -0.35;
-const AUTO_FLIP_SPEED_THRESHOLD = 2.0;
-const AUTO_FLIP_ANGULAR_SPEED_THRESHOLD = 2.0;
-const AUTO_FLIP_SECONDS = 1.0;
+const AUTO_FLIP_UPRIGHT_UP_Y = 0.55;
+const AUTO_FLIP_SPEED_THRESHOLD = 6.0;
+const AUTO_FLIP_ANGULAR_SPEED_THRESHOLD = 4.0;
+const AUTO_FLIP_MAX_HEIGHT = 1.2;
+const AUTO_FLIP_SECONDS = 0.75;
 
 /**
- * WS7.B (plan/POLISH_OVERHAUL_PLAN.md): a car stranded upside down,
- * airborne and roughly stationary for `AUTO_FLIP_SECONDS` gets righted
- * automatically. Real Rocket League has no auto-flip (players dodge out
- * themselves) — this is a deliberate product deviation requested for
- * this game, see docs/physics-deviations.md.
+ * R3 (plan/RAMPS_AND_FEATURES_PLAN.md): a car stranded in a non-driveable
+ * pose — upside down, on its side, or standing on its nose/tail — roughly
+ * stationary for `AUTO_FLIP_SECONDS`, gets righted automatically. Real
+ * Rocket League has no auto-flip (players dodge out themselves) — this is
+ * a deliberate product deviation requested for this game, see
+ * docs/physics-deviations.md.
+ *
+ * v2 (R3) widened this from WS7.B's "upside down only, stationary" case:
+ * the speed/angular-speed gates were raised so a car still drifting
+ * qualifies (no more "wait for the car to stop completely"), and the
+ * `up.y` threshold was raised from -0.35 (near-fully-inverted) to 0.55
+ * (anything not close to upright) so side-stuck and nose/tail-stand poses
+ * qualify too.
  */
 function applyAutoFlipIfStranded(car: CarEntity, dt: number): void {
   const rotation = car.body.rotation();
   const up = V.applyQuaternion(V.UP, rotation);
   const linvel = car.body.linvel();
   const angvel = car.body.angvel();
+  const translation = car.body.translation();
 
-  // Deliberately not gated on `!grounded`: a car that has settled
-  // upside down on the floor is exactly the case this needs to fix, and
-  // the suspension probes (which rotate with the body) can still report
-  // ground contact for a symmetric car collider resting on its roof —
-  // confirmed empirically (a Vitest debug trace showed `grounded: true`
-  // with a downward-pointing support normal within a couple of ticks of
-  // an upside-down spawn). up.y this negative already excludes every
-  // normal driving/aerial orientation, so the speed/angular-speed gates
-  // alone are enough to avoid misfiring mid-dodge or mid-recovery.
-  const strandedUpsideDown =
-    up.y < AUTO_FLIP_UPSIDE_DOWN_THRESHOLD &&
+  // Surface-contact exemption, not input-gated: wheels resting/driving on
+  // any upward-facing surface (floor, ramp, fillet segment —
+  // `supportNormal.y > 0.05`, true even on the steepest R1 fillet
+  // segment) means the car is recoverable by its own controls and must
+  // never be auto-flipped, whether or not throttle is held (a genuinely
+  // stuck-on-its-side player will be mashing throttle, so gating on input
+  // would defeat the point). This also can't misfire on the vertical wall
+  // itself: that only begins at fillet-top height (y=2), above
+  // `AUTO_FLIP_MAX_HEIGHT` — see docs/physics-deviations.md for the full
+  // per-case reasoning.
+  const onDriveableSurface = car.runtime.grounded && car.runtime.supportNormal.y > 0.05;
+
+  const strandedNonUpright =
+    up.y < AUTO_FLIP_UPRIGHT_UP_Y &&
+    translation.y < AUTO_FLIP_MAX_HEIGHT &&
     V.length(linvel) < AUTO_FLIP_SPEED_THRESHOLD &&
-    V.length(angvel) < AUTO_FLIP_ANGULAR_SPEED_THRESHOLD;
+    V.length(angvel) < AUTO_FLIP_ANGULAR_SPEED_THRESHOLD &&
+    !onDriveableSurface;
 
-  car.runtime.invertedSeconds = strandedUpsideDown ? car.runtime.invertedSeconds + dt : 0;
+  car.runtime.invertedSeconds = strandedNonUpright ? car.runtime.invertedSeconds + dt : 0;
 
   if (car.runtime.invertedSeconds < AUTO_FLIP_SECONDS) {
     return;
@@ -165,7 +180,6 @@ function applyAutoFlipIfStranded(car: CarEntity, dt: number): void {
   const flatForward = { x: forward.x, y: 0, z: forward.z };
   const yaw = V.length(flatForward) < 0.1 ? 0 : Math.atan2(-flatForward.x, -flatForward.z);
 
-  const translation = car.body.translation();
   car.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
   car.body.setTranslation({ x: translation.x, y: translation.y + 0.5, z: translation.z }, true);
   car.body.setAngvel({ x: 0, y: 0, z: 0 }, true);

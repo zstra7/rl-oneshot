@@ -653,3 +653,46 @@ itself but surfaced by writing real tests against it:**
   ~2m fillet and all the way up the flat 20m vertical wall to the
   ceiling within 360 ticks, whose unrelated ceiling-contact impulse
   spike is not what those tests are verifying (fillet-climb smoothness).
+
+## Post-launch polish pass — R3 (auto-flip v2, `PhysicsFacade.ts`)
+
+The original auto-flip (WS7.B) only handled "upside down and fully
+stopped." Two problems reported: (1) it didn't catch a car stranded on
+its side or standing on its nose/tail, and (2) any throttle-based or
+speed-based gating risked either never triggering for a slow drift, or
+— worse — misfiring while the player was legitimately still driving up
+a wall/ramp (a car climbing a fillet is tilted and slow near the top).
+
+**Fix — a contact-based predicate, not a pose/input heuristic.** A car
+is "stranded" only when it is *not* resting on a driveable surface:
+`!(car.runtime.grounded && car.runtime.supportNormal.y > 0.05)`. This
+reuses the same per-tick suspension-probe contact state the wheel/drive
+code already computes, so a car climbing a wall or ramp — whose contact
+normal necessarily has some `y` component from the fillet geometry, or
+whose wheels are in contact with a shallower-than-horizontal but still
+"floor-like" surface — is correctly exempt for as long as it's actually
+touching that surface, regardless of throttle input. Releasing input
+mid-climb (coasting) does not end the exemption, because the exemption
+was never input-gated to begin with. Combined with the existing
+`up.y < 0.55`, `height < 1.2m`, low linear/angular speed thresholds and
+a 0.75s sustained-stranded timer (`invertedSeconds`), this fires for
+upside-down, on-side, nose-stand, and tail-stand poses alike — any
+orientation where `up.y` is low, not just the upside-down case — while
+never triggering for a car that's touching any surface with a
+meaningfully upward-facing normal.
+
+Widened thresholds from the original: `AUTO_FLIP_SPEED_THRESHOLD` 6.0
+(was gated differently before), `AUTO_FLIP_ANGULAR_SPEED_THRESHOLD` 4.0,
+so a slow drift while stranded still counts as "roughly stationary" and
+gets righted, matching the "auto-flip should work while drifting"
+requirement.
+
+New tests in `tests/unit/autoFlip.spec.ts` cover side/nose/tail-stand
+righting (including that horizontal drift is preserved at the instant
+of righting, before tire friction on the new grounded orientation
+legitimately bleeds it off over subsequent ticks — not a bug), a raised
+non-flip speed threshold check, and two dedicated regression tests
+proving the contact-based exemption never misfires: climbing a wall
+fillet under sustained throttle, and coasting (input released) partway
+up a ramp climb — both assert no single-tick `up.y` jump from below 0.7
+to above 0.99 (the signature of a teleport-righting) across 300 ticks.
