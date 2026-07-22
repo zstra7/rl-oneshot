@@ -696,3 +696,40 @@ proving the contact-based exemption never misfires: climbing a wall
 fillet under sustained throttle, and coasting (input released) partway
 up a ramp climb — both assert no single-tick `up.y` jump from below 0.7
 to above 0.99 (the signature of a teleport-righting) across 300 ticks.
+
+## Post-launch polish pass — R5 (camera steady through flips, `ChaseCameraController.ts`)
+
+**Root cause:** the normal-cam branch of `updateChaseCamera` recomputed
+the chase direction every frame from the car's flattened forward vector.
+During a dodge the body tumbles: the flattened forward swings wildly
+(diagonal/side flips) or degenerates through vertical (front/back flips,
+only caught by the pre-existing `lengthSq < 0.01` fallback). The result
+was a visible camera whip mid-flip that "corrects" once the car lands —
+real Rocket League's camera holds its line through a dodge instead
+(ball cam is unaffected, since its direction is derived from car↔ball
+positions, not the car's own orientation).
+
+**Fix:** while `playerCar.dodgeState !== "none"` (and only in the
+non-ball-cam branch), the chase direction is pinned to whatever yaw was
+already smoothed when the dodge began (`dodgeYawHold`), instead of being
+re-derived from the tumbling forward vector each frame. The hold clears
+back to `null` the instant the dodge ends, so normal smoothing
+seamlessly picks the car's actual heading back up — matching the
+"camera holds through the flip, catches up after" feel. `updateFov` was
+refactored to take the already-fetched `playerCar` state as a parameter
+instead of re-fetching it, since `updateChaseCamera` now needs that
+state earlier for the dodge check anyway.
+
+New unit test `tests/unit/cameraFlipYaw.spec.ts` constructs a real
+`ChaseCameraController` against a real `PhysicsFacade` (a `THREE.
+PerspectiveCamera` plus a `{ getMatchState: () => "PLAYING" }` game-flow
+stub is enough — the controller only reads camera/physics/match-state,
+never mutates physics), drives to a settled yaw, triggers a real
+diagonal dodge through the same jump→jump-with-pitch/yaw input sequence
+`dodgeFlip.spec.ts` uses, and asserts the camera's yaw (derived from its
+diagnostics target/position, i.e. what it's actually looking at) never
+drifts more than ~3.4° from the pre-dodge yaw while `dodgeState !==
+"none"`. Verified meaningful by temporarily reverting the fix and
+confirming the test fails with a ~360° (6.28 rad) swing — the full whip
+the fix eliminates. A second test confirms ball-cam behaviour is
+unaffected (no NaN, camera stays finite) through the same dodge.

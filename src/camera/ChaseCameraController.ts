@@ -52,6 +52,7 @@ export class ChaseCameraController implements RenderFrameModule {
   private previousBallVelocity: V.Vec3Like = { x: 0, y: 0, z: 0 };
   private shakeEnergy = 0;
   private readonly shakeRandom = new SeededRandom(SHAKE_RANDOM_SEED);
+  private dodgeYawHold: number | null = null;
 
   public constructor(
     private readonly physics: PhysicsFacade,
@@ -129,6 +130,7 @@ export class ChaseCameraController implements RenderFrameModule {
     if (!carTransform) {
       return;
     }
+    const playerCar = this.physics.getCarState(this.playerCarId);
 
     const carPosition = new THREE.Vector3(
       carTransform.position.x,
@@ -156,13 +158,28 @@ export class ChaseCameraController implements RenderFrameModule {
       chaseDirection = carPosition.clone().sub(ballPosition);
       chaseDirection.y = 0;
     } else {
-      // Normal cam: directly behind the car's own facing. Velocity is
-      // deliberately not used here — it flips 180° on reversing, which
-      // real Rocket League's camera does not do; the yaw smoothing below
-      // supplies the "camera swings out in turns" lag instead.
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(carQuaternion);
-      chaseDirection = forward.clone().negate();
-      chaseDirection.y = 0;
+      const dodging = playerCar.dodgeState !== "none";
+      if (dodging) {
+        // R5: hold the yaw the camera had when the dodge started — a
+        // tumbling body's flattened forward vector swings wildly
+        // (diagonal/side flips) or degenerates through vertical
+        // (front/back flips), which otherwise whips the chase direction
+        // around mid-flip. Real Rocket League's camera holds its line
+        // through a dodge instead of tracking the tumble.
+        if (this.dodgeYawHold === null) {
+          this.dodgeYawHold = this.smoothedYaw;
+        }
+        chaseDirection = new THREE.Vector3(Math.sin(this.dodgeYawHold), 0, Math.cos(this.dodgeYawHold));
+      } else {
+        this.dodgeYawHold = null;
+        // Normal cam: directly behind the car's own facing. Velocity is
+        // deliberately not used here — it flips 180° on reversing, which
+        // real Rocket League's camera does not do; the yaw smoothing below
+        // supplies the "camera swings out in turns" lag instead.
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(carQuaternion);
+        chaseDirection = forward.clone().negate();
+        chaseDirection.y = 0;
+      }
     }
 
     if (chaseDirection.lengthSq() < 0.01) {
@@ -252,11 +269,10 @@ export class ChaseCameraController implements RenderFrameModule {
     this.camera.position.copy(shakenPosition);
     this.camera.lookAt(this.smoothedTarget);
 
-    this.updateFov(context);
+    this.updateFov(context, playerCar);
   }
 
-  private updateFov(context: RenderFrameContext): void {
-    const playerCar = this.physics.getCarState(this.playerCarId);
+  private updateFov(context: RenderFrameContext, playerCar: ReturnType<PhysicsFacade["getCarState"]>): void {
     const targetFov = this.settings.fov + (playerCar.supersonic ? CAM.supersonicFovKick : 0);
     const alpha = 1 - Math.exp(-CAM.supersonicFovSmoothingRate * context.frameDeltaSeconds);
     const nextFov = this.smoothedFov + (targetFov - this.smoothedFov) * alpha;
