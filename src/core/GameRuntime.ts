@@ -497,7 +497,7 @@ export class GameRuntime implements GameRuntimeFacade {
     if (!this.placeholderWorldGroup) {
       return;
     }
-    for (const name of ["MenuGhostBall", "MenuGhostPlayerCar", "MenuGhostOpponentCar"]) {
+    for (const name of ["MenuGhostPlayerCar", "MenuGhostOpponentCar"]) {
       const object = this.placeholderWorldGroup.getObjectByName(name);
       if (object) {
         object.visible = this.menuPresentationVisible;

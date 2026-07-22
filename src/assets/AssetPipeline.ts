@@ -262,13 +262,12 @@ export class AssetPipeline implements GameModule {
     root.add(createDefaultStarfield(context));
 
     // WS7.C (plan/POLISH_OVERHAUL_PLAN.md): named so GameRuntime can
-    // toggle just these three children's visibility once a match goes
-    // live, leaving the stadium/starfield (siblings under the same
-    // root) always visible.
-    const ball = createProceduralBallVisual(context);
-    ball.name = "MenuGhostBall";
-    ball.position.set(0, context.physicsMetadata.ballRadius + 2, 0);
-    root.add(ball);
+    // toggle these children's visibility once a match goes live, leaving
+    // the stadium/starfield (siblings under the same root) always
+    // visible. R8 (plan/RAMPS_AND_FEATURES_PLAN.md): the ghost ball
+    // itself was removed — it duplicated the live physics-driven ball
+    // (which already rests on the floor at the menu, see WS5.B), so the
+    // menu showed two balls. The physics ball is now the only menu ball.
 
     // WS7.A: mirrors PhysicsFacade's default (far-back) kickoff pose —
     // player facing +Z (yaw pi), opponent facing -Z (identity).

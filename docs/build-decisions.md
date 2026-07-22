@@ -381,3 +381,30 @@ Playwright tests in `tests/ui/quick-chat.spec.ts` cover the 3-message
 spam and fade-out timing, that a player goal never triggers it, and that
 triggering a spam and immediately returning to the main menu produces no
 console errors and the messages still clear on their own schedule.
+
+## Post-launch polish pass — R8 (single menu ball, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+**Root cause:** the menu scene rendered two balls — a static
+`MenuGhostBall` placeholder mesh from `AssetPipeline.buildPlaceholderWorld`
+(floated at `ballRadius + 2`) *and* the live physics-driven ball
+(resting on the floor at `ballRadius` since WS5.B), rendered on top of
+it via `PhysicsRenderBinding`. The ghost cars happened to overlap their
+physics counterparts pixel-for-pixel, so only the ball read as visibly
+doubled.
+
+**Fix:** deleted the `MenuGhostBall` mesh entirely from
+`buildPlaceholderWorld` — the physics-driven ball is now the only menu
+ball. `GameRuntime.updateMenuPresentationVisibility`'s toggle-name list
+was trimmed to just `MenuGhostPlayerCar`/`MenuGhostOpponentCar` (the
+ghost cars are unaffected by this change and still need the visibility
+toggle for WS7.C). New unit test `tests/unit/menuGhostBall.spec.ts`
+constructs a real `AssetPipeline`, calls `buildPlaceholderWorld()`
+directly, and asserts `getObjectByName("MenuGhostBall")` is `undefined`
+while the two ghost cars are still present. (Constructing a *second*
+`AssetPipeline` instance in the same test file hung indefinitely on
+`initialise()` — some shared loader/cache state doesn't tolerate two
+concurrent pipelines; worked around by asserting both facts from a
+single pipeline instance in one test rather than investigating the
+loader internals, since a second pipeline instance is not a real
+runtime scenario.) Verified visually via a menu screenshot showing
+exactly one ball at centre field.
