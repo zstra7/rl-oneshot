@@ -1,12 +1,14 @@
 import {
-  DEFAULT_GAMEPAD_BINDINGS,
   DEFAULT_KEYBOARD_BINDINGS,
   DEFAULT_MOUSE_BINDINGS,
   GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD,
-  POWERSLIDE_KEYBOARD_BINDING,
-  POWERSLIDE_KEYBOARD_BINDING_ALT,
   STANDARD_GAMEPAD_AXES
 } from "@/input/bindings/DefaultBindings";
+import {
+  DEFAULT_CONTROL_BINDINGS,
+  type ControlBindings,
+  type KeyOrMouseBinding
+} from "@/input/bindings/BindingsConfig";
 import { BrowserGamepadProvider } from "@/input/gamepad/BrowserGamepadProvider";
 import type { GamepadLike, GamepadProvider } from "@/input/gamepad/GamepadProvider";
 import type {
@@ -21,7 +23,7 @@ import type {
   SystemInputFrame,
   UiInputFrame
 } from "@/input/InputTypes";
-import { DEFAULT_HUMAN_DODGE_DEADZONE } from "@/input/InputTypes";
+import { DEFAULT_AIR_ROLL_SENSITIVITY, DEFAULT_HUMAN_DODGE_DEADZONE } from "@/input/InputTypes";
 import {
   buildCarInput,
   neutralLogicalGameplayState,
@@ -36,11 +38,24 @@ export interface InputInitialisationOptions {
   readonly gamepadProvider?: GamepadProvider;
 }
 
+/** Result of a completed rebind capture (R10.2). */
+export interface CapturedBinding {
+  readonly kind: "key" | "mouse" | "gamepad";
+  readonly code?: string;
+  readonly button?: number;
+}
+
 const AXIS_DEADZONE = 0.15;
 const STICK_ACTIVATION_THRESHOLD = 0.35;
+const AIR_ROLL_SENSITIVITY_MIN = 0.5;
+const AIR_ROLL_SENSITIVITY_MAX = 2.0;
 
 function applyDeadzone(value: number): number {
   return Math.abs(value) < AXIS_DEADZONE ? 0 : value;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 /**
@@ -65,6 +80,16 @@ export class InputControlsModule {
   private edgeSequence = 0;
 
   private dodgeDeadzone = DEFAULT_HUMAN_DODGE_DEADZONE;
+  private airRollSensitivity = DEFAULT_AIR_ROLL_SENSITIVITY;
+
+  /** R10.1: the rebindable action->physical-input map, live-swappable via setBindings(). */
+  private bindings: ControlBindings = DEFAULT_CONTROL_BINDINGS;
+
+  // R10.2 rebind-UI capture support: while armed, the next matching press is
+  // recorded into capturedBinding instead of being dispatched as gameplay
+  // input (suppressed from the edge queues).
+  private captureArmed: "keyboardMouse" | "gamepad" | null = null;
+  private capturedBinding: CapturedBinding | null = null;
 
   private onBlur = () => this.handleFocusLoss();
   private onVisibilityChange = () => {
@@ -109,28 +134,56 @@ export class InputControlsModule {
   private handleKeyboardPress(code: string): void {
     this.activeDevice = "keyboard-mouse";
 
-    if (code === "Space") {
+    if (this.captureArmed === "keyboardMouse") {
+      if (code === "Escape") {
+        this.captureArmed = null;
+      } else {
+        this.capturedBinding = { kind: "key", code };
+        this.captureArmed = null;
+      }
+      return;
+    }
+
+    const b = this.bindings.keyboardMouse;
+
+    if (code === b.ballCamera) {
       this.pushEdge("BALL_CAMERA", "pressed");
-    } else if (code === "Escape") {
+    } else if (code === b.pause) {
       this.pushEdge("PAUSE", "pressed");
+    }
+
+    if (b.jump.kind === "key" && b.jump.code === code) {
+      this.pushEdge("JUMP", "pressed");
     }
   }
 
-  private handleKeyboardRelease(_code: string): void {
+  private handleKeyboardRelease(code: string): void {
     // Only press-edges are tracked for BALL_CAMERA/PAUSE (consume-once
     // actions); release edges are not currently needed by any consumer.
+    const jump = this.bindings.keyboardMouse.jump;
+    if (jump.kind === "key" && jump.code === code) {
+      this.pushEdge("JUMP", "released");
+    }
   }
 
   private handleMousePress(button: number): void {
     this.activeDevice = "keyboard-mouse";
 
-    if (button === DEFAULT_MOUSE_BINDINGS.jump) {
+    if (this.captureArmed === "keyboardMouse") {
+      this.capturedBinding = { kind: "mouse", button };
+      this.captureArmed = null;
+      return;
+    }
+
+    const jump = this.bindings.keyboardMouse.jump;
+    if (jump.kind === "mouse" && jump.button === button) {
       this.pushEdge("JUMP", "pressed");
     }
   }
 
   private handleMouseRelease(button: number): void {
-    if (button === DEFAULT_MOUSE_BINDINGS.jump) {
+    const jump = this.bindings.keyboardMouse.jump;
+    if (jump.kind === "mouse" && jump.button === button) {
       this.pushEdge("JUMP", "released");
     }
   }
@@ -190,14 +243,16 @@ export class InputControlsModule {
       return;
     }
 
+    const g = this.bindings.gamepad;
+
     // Promote to "gamepad" on analog activity too, not just a button edge —
     // otherwise moving the stick or squeezing a trigger never activates the
     // pad, and any keyboard/mouse touch (including the one-time audio-resume
     // gesture) leaves it stuck on "keyboard-mouse" until a pad button press.
     const leftXActivity = Math.abs(gamepad.axes[STANDARD_GAMEPAD_AXES.leftX] ?? 0);
     const leftYActivity = Math.abs(gamepad.axes[STANDARD_GAMEPAD_AXES.leftY] ?? 0);
-    const accelerateActivity = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.accelerateButton]?.value ?? 0;
-    const reverseActivity = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.reverseButton]?.value ?? 0;
+    const accelerateActivity = gamepad.buttons[g.accelerateButton]?.value ?? 0;
+    const reverseActivity = gamepad.buttons[g.reverseButton]?.value ?? 0;
     if (
       leftXActivity > STICK_ACTIVATION_THRESHOLD ||
       leftYActivity > STICK_ACTIVATION_THRESHOLD ||
@@ -213,14 +268,18 @@ export class InputControlsModule {
 
       if (isPressed && !wasPressed) {
         this.activeDevice = "gamepad";
-        if (i === DEFAULT_GAMEPAD_BINDINGS.jumpButton) {
+
+        if (this.captureArmed === "gamepad") {
+          this.capturedBinding = { kind: "gamepad", button: i };
+          this.captureArmed = null;
+        } else if (i === g.jumpButton) {
           this.pushEdge("JUMP", "pressed");
-        } else if (i === DEFAULT_GAMEPAD_BINDINGS.ballCameraButton) {
+        } else if (i === g.ballCameraButton) {
           this.pushEdge("BALL_CAMERA", "pressed");
-        } else if (i === DEFAULT_GAMEPAD_BINDINGS.pauseButton) {
+        } else if (i === g.pauseButton) {
           this.pushEdge("PAUSE", "pressed");
         }
-      } else if (!isPressed && wasPressed && i === DEFAULT_GAMEPAD_BINDINGS.jumpButton) {
+      } else if (!isPressed && wasPressed && i === g.jumpButton) {
         this.pushEdge("JUMP", "released");
       }
     }
@@ -270,17 +329,56 @@ export class InputControlsModule {
     }
   }
 
+  // -- R10.1/R10.2: bindings + rebind-capture surface --
+
+  public setBindings(bindings: ControlBindings): void {
+    this.bindings = bindings;
+  }
+
+  public getBindings(): ControlBindings {
+    return this.bindings;
+  }
+
+  public startBindingCapture(device: "keyboardMouse" | "gamepad"): void {
+    this.captureArmed = device;
+    this.capturedBinding = null;
+  }
+
+  public cancelBindingCapture(): void {
+    this.captureArmed = null;
+  }
+
+  public takeCapturedBinding(): CapturedBinding | null {
+    const captured = this.capturedBinding;
+    this.capturedBinding = null;
+    return captured;
+  }
+
+  public getAirRollSensitivity(): number {
+    return this.airRollSensitivity;
+  }
+
+  public setAirRollSensitivity(value: number): void {
+    this.airRollSensitivity = clamp(value, AIR_ROLL_SENSITIVITY_MIN, AIR_ROLL_SENSITIVITY_MAX);
+  }
+
+  private isKeyOrMouseHeld(binding: KeyOrMouseBinding): boolean {
+    if (binding.kind === "key") {
+      return this.keyboard?.isPressed(binding.code) ?? false;
+    }
+    return this.mouse?.isPressed(binding.button) ?? false;
+  }
+
   private buildLogicalStateFromKeyboardMouse(): LogicalGameplayState {
     if (!this.keyboard || !this.mouse) {
       return neutralLogicalGameplayState();
     }
 
     const kb = this.keyboard;
-    const mouse = this.mouse;
-    const b = DEFAULT_KEYBOARD_BINDINGS;
+    const b = this.bindings.keyboardMouse;
 
     const airRollModifier =
-      kb.isPressed(POWERSLIDE_KEYBOARD_BINDING) || kb.isPressed(POWERSLIDE_KEYBOARD_BINDING_ALT);
+      kb.isPressed(b.airRollModifierPrimary) || kb.isPressed(b.airRollModifierSecondary);
 
     return {
       accelerate: kb.isPressed(b.accelerate) ? 1 : 0,
@@ -294,9 +392,9 @@ export class InputControlsModule {
       airRollLeft: false,
       airRollRight: false,
       airRollModifier,
-      jumpHeld: mouse.isPressed(DEFAULT_MOUSE_BINDINGS.jump),
-      boostHeld: mouse.isPressed(DEFAULT_MOUSE_BINDINGS.boost),
-      powerslideHeld: airRollModifier
+      jumpHeld: this.isKeyOrMouseHeld(b.jump),
+      boostHeld: this.isKeyOrMouseHeld(b.boost),
+      powerslideHeld: kb.isPressed(b.powerslide) || airRollModifier
     };
   }
 
@@ -306,15 +404,20 @@ export class InputControlsModule {
       return neutralLogicalGameplayState();
     }
 
+    const g = this.bindings.gamepad;
+
     const leftX = applyDeadzone(gamepad.axes[STANDARD_GAMEPAD_AXES.leftX] ?? 0);
     const leftY = applyDeadzone(gamepad.axes[STANDARD_GAMEPAD_AXES.leftY] ?? 0);
 
-    const accelerateValue = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.accelerateButton]?.value ?? 0;
-    const reverseValue = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.reverseButton]?.value ?? 0;
+    const accelerateValue = gamepad.buttons[g.accelerateButton]?.value ?? 0;
+    const reverseValue = gamepad.buttons[g.reverseButton]?.value ?? 0;
     // Air-roll/powerslide modifier is a dedicated face button (west/X by
     // default, matching RL), not the brake trigger — braking mid-air must
-    // not turn stick input into roll.
-    const airRollModifier = gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.powerslideButton]?.pressed ?? false;
+    // not turn stick input into roll. R10 semantic-trap fix: this now
+    // consumes bindings.gamepad.airRollModifierButton (default matches
+    // powerslideButton's value) so the binding the rebind UI displays is
+    // the one actually driving air-roll.
+    const airRollModifier = gamepad.buttons[g.airRollModifierButton]?.pressed ?? false;
 
     return {
       accelerate: accelerateValue > GAMEPAD_TRIGGER_ACTIVATION_THRESHOLD ? accelerateValue : 0,
@@ -328,9 +431,9 @@ export class InputControlsModule {
       airRollLeft: false,
       airRollRight: false,
       airRollModifier,
-      jumpHeld: gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.jumpButton]?.pressed ?? false,
-      boostHeld: gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.boostButton]?.pressed ?? false,
-      powerslideHeld: gamepad.buttons[DEFAULT_GAMEPAD_BINDINGS.powerslideButton]?.pressed ?? false
+      jumpHeld: gamepad.buttons[g.jumpButton]?.pressed ?? false,
+      boostHeld: gamepad.buttons[g.boostButton]?.pressed ?? false,
+      powerslideHeld: gamepad.buttons[g.powerslideButton]?.pressed ?? false
     };
   }
 
@@ -338,7 +441,10 @@ export class InputControlsModule {
     tick: number,
     context: GameplayInputContext
   ): HumanGameplayInputFrame {
-    const carControlProfile: CarControlProfile = { dodgeDeadzone: this.dodgeDeadzone };
+    const carControlProfile: CarControlProfile = {
+      dodgeDeadzone: this.dodgeDeadzone,
+      airRollSensitivity: this.airRollSensitivity
+    };
 
     if (this.context !== "GAMEPLAY") {
       return neutralGameplayFrame(tick, this.activeDevice, carControlProfile);
@@ -358,8 +464,8 @@ export class InputControlsModule {
 
     const rearViewHeld =
       this.activeDevice === "gamepad"
-        ? this.latestGamepadSnapshot?.buttons[DEFAULT_GAMEPAD_BINDINGS.rearViewButton]?.pressed ?? false
-        : this.mouse?.isPressed(DEFAULT_MOUSE_BINDINGS.rearView) ?? false;
+        ? this.latestGamepadSnapshot?.buttons[this.bindings.gamepad.rearViewButton]?.pressed ?? false
+        : this.isKeyOrMouseHeld(this.bindings.keyboardMouse.rearView);
 
     const camera: CameraInput = {
       toggleBallCameraPressed: ballCameraPressed,
@@ -370,7 +476,7 @@ export class InputControlsModule {
     };
 
     const system: SystemInputFrame = {
-      scoreboardHeld: this.keyboard?.isPressed(DEFAULT_KEYBOARD_BINDINGS.scoreboard) ?? false,
+      scoreboardHeld: this.keyboard?.isPressed(this.bindings.keyboardMouse.scoreboard) ?? false,
       pausePressed,
       skipPresentationPressed: false
     };
@@ -388,6 +494,9 @@ export class InputControlsModule {
 
   public sampleUiInput(): UiInputFrame {
     const kb = this.keyboard;
+    // UI-navigation keys are fixed and not part of the rebindable
+    // ControlBindings surface (R10.1) — they stay sourced from the
+    // DefaultBindings constants directly.
     const b = DEFAULT_KEYBOARD_BINDINGS;
 
     const navigateX = kb?.isPressed(b.uiRight) ? 1 : kb?.isPressed(b.uiLeft) ? -1 : 0;
@@ -404,6 +513,8 @@ export class InputControlsModule {
       tabRightPressed: false,
       pointerMoved: this.mouse?.consumeMoved() ?? false,
       ...(pointerPosition ? { pointerPosition } : {}),
+      // Raw pointer semantics (LMB/RMB), independent of the rebindable
+      // boost/jump gameplay actions.
       pointerPrimaryPressed: this.mouse?.isPressed(DEFAULT_MOUSE_BINDINGS.boost) ?? false,
       pointerSecondaryPressed: this.mouse?.isPressed(DEFAULT_MOUSE_BINDINGS.jump) ?? false
     };
@@ -411,7 +522,7 @@ export class InputControlsModule {
 
   public sampleSystemInput(): SystemInputFrame {
     return {
-      scoreboardHeld: this.keyboard?.isPressed(DEFAULT_KEYBOARD_BINDINGS.scoreboard) ?? false,
+      scoreboardHeld: this.keyboard?.isPressed(this.bindings.keyboardMouse.scoreboard) ?? false,
       pausePressed: false,
       skipPresentationPressed: false
     };

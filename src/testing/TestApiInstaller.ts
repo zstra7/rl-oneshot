@@ -29,7 +29,12 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       getVisualPreset: () => runtime.getVisualPreset(),
       getVisualDiagnostics: () => runtime.getVisualDiagnostics(),
       getVfxActiveParticleCount: () => runtime.getVfxActiveParticleCount(),
-      setAccessibilityOverrides: (options) => runtime.setAccessibilityOverrides(options)
+      setAccessibilityOverrides: (options) => runtime.setAccessibilityOverrides(options),
+      setControlBindings: (bindings) => runtime.setControlBindings(bindings),
+      getControlBindings: () => runtime.getControlBindings(),
+      startBindingCapture: (device) => runtime.startBindingCapture(device),
+      takeCapturedBinding: () => runtime.takeCapturedBinding(),
+      setAirRollSensitivity: (value) => runtime.setAirRollSensitivity(value)
     },
     gameFlow: runtime.getGameFlowTestApi()
   };

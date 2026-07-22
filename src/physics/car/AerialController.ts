@@ -29,10 +29,14 @@ export function applyAerialRotation(car: CarEntity, parameters: PhysicsParameter
     parameters.aerial.yawDamping,
     parameters.aerial.dampingInputReduction
   );
+  // R10.3: air-roll sensitivity is a per-car control-profile multiplier on
+  // the roll axis only (not pitch/yaw) — it scales how much rotational
+  // acceleration a given input magnitude produces, physics-real for both
+  // digital (roll=±1) and analog input.
   const rollAccel = computeAxisAcceleration(
     rollInput,
     localAngularVelocity.z,
-    RL_CONSTANTS.maxRollAngularAcceleration,
+    RL_CONSTANTS.maxRollAngularAcceleration * car.controlProfile.airRollSensitivity,
     parameters.aerial.rollDamping,
     parameters.aerial.dampingInputReduction
   );

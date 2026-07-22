@@ -1,6 +1,7 @@
 import type RAPIER from "@dimforge/rapier3d-compat";
 
 import {
+  DEFAULT_AIR_ROLL_SENSITIVITY,
   DEFAULT_DODGE_DEADZONE,
   NEUTRAL_CAR_INPUT,
   type CarControlProfile,
@@ -31,7 +32,7 @@ export function createCarEntity(
     collider,
     currentInput: { ...NEUTRAL_CAR_INPUT },
     previousInput: { ...NEUTRAL_CAR_INPUT },
-    controlProfile: { dodgeDeadzone: DEFAULT_DODGE_DEADZONE },
+    controlProfile: { dodgeDeadzone: DEFAULT_DODGE_DEADZONE, airRollSensitivity: DEFAULT_AIR_ROLL_SENSITIVITY },
     runtime: createInitialCarRuntimeState(initialBoost)
   };
 }

@@ -46,6 +46,8 @@ onMounted(async () => {
     shakeIntensity: settings.camera.shakeIntensity,
     shakeEnabled: settings.gameplay.cameraShakeEnabled
   });
+  runtime.setControlBindings(settings.controls);
+  runtime.setAirRollSensitivity(settings.controls.airRollSensitivity);
 
   // Retro audio module spec section 5: the AudioContext stays suspended
   // until a real user gesture resumes it (browser autoplay policy) — a

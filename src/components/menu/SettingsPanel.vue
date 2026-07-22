@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import {
-  DEFAULT_GAMEPAD_BINDINGS,
-  DEFAULT_KEYBOARD_BINDINGS,
-  DEFAULT_MOUSE_BINDINGS
-} from "@/input/bindings/DefaultBindings";
+  DEFAULT_CONTROL_BINDINGS,
+  type GamepadBindings,
+  type KeyOrMouseBinding,
+  type KeyboardMouseBindings
+} from "@/input/bindings/BindingsConfig";
+import { STANDARD_GAMEPAD_BUTTONS } from "@/input/bindings/DefaultBindings";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
 import type { CelebrationIntensity, DensityLevel } from "@/stores/settingsStore";
@@ -113,6 +115,251 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
   settingsStore.update({ audio: { [key]: !settings.value.audio[key] } });
   applyLiveAudioSettings();
 }
+
+// -- R10.4: rebindable controls --
+
+type ControlsDevice = "keyboardMouse" | "gamepad";
+type KbmActionKey = keyof KeyboardMouseBindings;
+type GamepadActionKey = keyof GamepadBindings;
+
+const UNION_ACTIONS: readonly KbmActionKey[] = ["jump", "boost", "rearView"];
+
+function isUnionAction(key: KbmActionKey): boolean {
+  return (UNION_ACTIONS as readonly string[]).includes(key);
+}
+
+const controlsDevice = ref<ControlsDevice>("keyboardMouse");
+const capturingDevice = ref<ControlsDevice | null>(null);
+const capturingAction = ref<string | null>(null);
+let gamepadPollHandle: number | null = null;
+
+const kbmRows: readonly { key: KbmActionKey; label: string }[] = [
+  { key: "accelerate", label: "ACCELERATE" },
+  { key: "reverse", label: "REVERSE" },
+  { key: "steerLeft", label: "STEER LEFT" },
+  { key: "steerRight", label: "STEER RIGHT" },
+  { key: "pitchNoseDown", label: "PITCH NOSE DOWN" },
+  { key: "pitchNoseUp", label: "PITCH NOSE UP" },
+  { key: "yawLeft", label: "YAW LEFT" },
+  { key: "yawRight", label: "YAW RIGHT" },
+  { key: "airRollModifierPrimary", label: "AIR ROLL / POWERSLIDE (PRIMARY)" },
+  { key: "airRollModifierSecondary", label: "AIR ROLL / POWERSLIDE (SECONDARY)" },
+  { key: "powerslide", label: "POWERSLIDE" },
+  { key: "jump", label: "JUMP" },
+  { key: "boost", label: "BOOST" },
+  { key: "rearView", label: "REAR VIEW" },
+  { key: "ballCamera", label: "BALL CAMERA" },
+  { key: "scoreboard", label: "SCOREBOARD" },
+  { key: "pause", label: "PAUSE" }
+];
+
+const gamepadRows: readonly { key: GamepadActionKey; label: string }[] = [
+  { key: "accelerateButton", label: "ACCELERATE" },
+  { key: "reverseButton", label: "REVERSE" },
+  { key: "airRollModifierButton", label: "AIR ROLL / POWERSLIDE" },
+  { key: "jumpButton", label: "JUMP" },
+  { key: "boostButton", label: "BOOST" },
+  { key: "powerslideButton", label: "POWERSLIDE" },
+  { key: "ballCameraButton", label: "BALL CAMERA" },
+  { key: "scoreboardButton", label: "SCOREBOARD" },
+  { key: "pauseButton", label: "PAUSE" },
+  { key: "rearViewButton", label: "REAR VIEW" }
+];
+
+const KEY_LABELS: Record<string, string> = {
+  ShiftLeft: "LSHIFT",
+  ShiftRight: "RSHIFT",
+  ControlLeft: "LCTRL",
+  ControlRight: "RCTRL",
+  AltLeft: "LALT",
+  AltRight: "RALT",
+  Space: "SPACE",
+  Escape: "ESC",
+  Tab: "TAB",
+  Enter: "ENTER",
+  ArrowUp: "UP",
+  ArrowDown: "DOWN",
+  ArrowLeft: "LEFT",
+  ArrowRight: "RIGHT"
+};
+
+function friendlyKeyLabel(code: string): string {
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  return KEY_LABELS[code] ?? code.toUpperCase();
+}
+
+function friendlyMouseLabel(button: number): string {
+  const names: Record<number, string> = { 0: "LMB", 1: "MMB", 2: "RMB" };
+  return names[button] ?? `MOUSE ${button}`;
+}
+
+const GAMEPAD_BUTTON_NAMES: Record<number, string> = Object.fromEntries(
+  Object.entries(STANDARD_GAMEPAD_BUTTONS).map(([name, index]) => [index, name.toUpperCase()])
+);
+
+function friendlyGamepadLabel(button: number): string {
+  return GAMEPAD_BUTTON_NAMES[button] ? `BTN ${button} (${GAMEPAD_BUTTON_NAMES[button]})` : `BTN ${button}`;
+}
+
+function friendlyKeyOrMouseLabel(binding: KeyOrMouseBinding): string {
+  return binding.kind === "key" ? friendlyKeyLabel(binding.code) : friendlyMouseLabel(binding.button);
+}
+
+function kbmRowLabel(key: KbmActionKey): string {
+  if (capturingDevice.value === "keyboardMouse" && capturingAction.value === key) {
+    return "PRESS A KEY…";
+  }
+  const value = settings.value.controls.keyboardMouse[key];
+  return typeof value === "string" ? friendlyKeyLabel(value) : friendlyKeyOrMouseLabel(value);
+}
+
+function gamepadRowLabel(key: GamepadActionKey): string {
+  if (capturingDevice.value === "gamepad" && capturingAction.value === key) {
+    return "PRESS A BUTTON…";
+  }
+  return friendlyGamepadLabel(settings.value.controls.gamepad[key]);
+}
+
+function serializeKbmValue(key: KbmActionKey): string {
+  const value = settings.value.controls.keyboardMouse[key];
+  if (typeof value === "string") {
+    return `key:${value}`;
+  }
+  return value.kind === "key" ? `key:${value.code}` : `mouse:${value.button}`;
+}
+
+const kbmValueCounts = computed(() => {
+  const counts = new Map<string, number>();
+  for (const row of kbmRows) {
+    const serialized = serializeKbmValue(row.key);
+    counts.set(serialized, (counts.get(serialized) ?? 0) + 1);
+  }
+  return counts;
+});
+
+function isKbmDuplicate(key: KbmActionKey): boolean {
+  return (kbmValueCounts.value.get(serializeKbmValue(key)) ?? 0) > 1;
+}
+
+const gamepadValueCounts = computed(() => {
+  const counts = new Map<number, number>();
+  for (const row of gamepadRows) {
+    const value = settings.value.controls.gamepad[row.key];
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return counts;
+});
+
+function isGamepadDuplicate(key: GamepadActionKey): boolean {
+  return (gamepadValueCounts.value.get(settings.value.controls.gamepad[key]) ?? 0) > 1;
+}
+
+function applyControls(): void {
+  runtime.setControlBindings(settings.value.controls);
+}
+
+function endCapture(): void {
+  window.removeEventListener("keydown", handleCaptureKeydown, true);
+  window.removeEventListener("mousedown", handleCaptureMousedown, true);
+  if (gamepadPollHandle !== null) {
+    window.clearInterval(gamepadPollHandle);
+    gamepadPollHandle = null;
+  }
+  capturingDevice.value = null;
+  capturingAction.value = null;
+}
+
+function handleCaptureKeydown(event: KeyboardEvent): void {
+  event.preventDefault();
+  const action = capturingAction.value as KbmActionKey | null;
+  if (!action) {
+    return;
+  }
+  if (event.code === "Escape") {
+    endCapture();
+    return;
+  }
+  const patch: Partial<KeyboardMouseBindings> = isUnionAction(action)
+    ? { [action]: { kind: "key", code: event.code } }
+    : { [action]: event.code };
+  settingsStore.update({ controls: { keyboardMouse: patch } });
+  applyControls();
+  endCapture();
+}
+
+function handleCaptureMousedown(event: MouseEvent): void {
+  const action = capturingAction.value as KbmActionKey | null;
+  if (!action) {
+    return;
+  }
+  if (!isUnionAction(action)) {
+    // Key-only rows ignore a mouse capture and stay armed (R10.4).
+    event.preventDefault();
+    return;
+  }
+  event.preventDefault();
+  settingsStore.update({
+    controls: { keyboardMouse: { [action]: { kind: "mouse", button: event.button } } }
+  });
+  applyControls();
+  endCapture();
+}
+
+function pollGamepadCapture(): void {
+  const captured = runtime.takeCapturedBinding();
+  if (!captured || captured.kind !== "gamepad" || typeof captured.button !== "number") {
+    return;
+  }
+  const action = capturingAction.value as GamepadActionKey | null;
+  if (action) {
+    settingsStore.update({ controls: { gamepad: { [action]: captured.button } } });
+    applyControls();
+  }
+  endCapture();
+}
+
+function startKbmCapture(action: KbmActionKey): void {
+  endCapture();
+  capturingDevice.value = "keyboardMouse";
+  capturingAction.value = action;
+  runtime.startBindingCapture("keyboardMouse");
+  window.addEventListener("keydown", handleCaptureKeydown, true);
+  window.addEventListener("mousedown", handleCaptureMousedown, true);
+}
+
+function startGamepadCapture(action: GamepadActionKey): void {
+  endCapture();
+  capturingDevice.value = "gamepad";
+  capturingAction.value = action;
+  runtime.startBindingCapture("gamepad");
+  gamepadPollHandle = window.setInterval(pollGamepadCapture, 100);
+}
+
+function selectControlsDevice(device: ControlsDevice): void {
+  endCapture();
+  controlsDevice.value = device;
+}
+
+function resetBindingsToDefaults(): void {
+  endCapture();
+  settingsStore.update({
+    controls: {
+      keyboardMouse: { ...DEFAULT_CONTROL_BINDINGS.keyboardMouse },
+      gamepad: { ...DEFAULT_CONTROL_BINDINGS.gamepad }
+    }
+  });
+  applyControls();
+}
+
+function setAirRollSensitivity(value: number): void {
+  settingsStore.update({ controls: { airRollSensitivity: value } });
+  runtime.setAirRollSensitivity(value);
+}
+
+onBeforeUnmount(() => {
+  endCapture();
+});
 </script>
 
 <template>
@@ -391,16 +638,80 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
         </label>
       </div>
 
-      <div v-else-if="activeCategory === 'CONTROLS'" class="rows">
-        <div class="row"><span class="row-label">THROTTLE / REVERSE</span><span class="binding">{{ DEFAULT_KEYBOARD_BINDINGS.accelerate }} / {{ DEFAULT_KEYBOARD_BINDINGS.reverse }}</span></div>
-        <div class="row"><span class="row-label">STEER</span><span class="binding">{{ DEFAULT_KEYBOARD_BINDINGS.steerLeft }} / {{ DEFAULT_KEYBOARD_BINDINGS.steerRight }}</span></div>
-        <div class="row"><span class="row-label">JUMP</span><span class="binding">MOUSE {{ DEFAULT_MOUSE_BINDINGS.jump }}</span></div>
-        <div class="row"><span class="row-label">BOOST</span><span class="binding">MOUSE {{ DEFAULT_MOUSE_BINDINGS.boost }}</span></div>
-        <div class="row"><span class="row-label">POWERSLIDE / AIR ROLL</span><span class="binding">{{ DEFAULT_KEYBOARD_BINDINGS.airRollModifierPrimary }}</span></div>
-        <div class="row"><span class="row-label">BALL CAMERA</span><span class="binding">{{ DEFAULT_KEYBOARD_BINDINGS.ballCamera }}</span></div>
-        <div class="row"><span class="row-label">PAUSE</span><span class="binding">{{ DEFAULT_KEYBOARD_BINDINGS.pause }}</span></div>
-        <div class="row"><span class="row-label">GAMEPAD BOOST</span><span class="binding">BUTTON {{ DEFAULT_GAMEPAD_BINDINGS.boostButton }}</span></div>
-        <p class="hint">Rebinding is not yet available.</p>
+      <div v-else-if="activeCategory === 'CONTROLS'" class="rows controls-rows">
+        <div class="button-group device-chips">
+          <button
+            type="button"
+            class="chip"
+            :class="{ active: controlsDevice === 'keyboardMouse' }"
+            data-testid="bindings-device-keyboard"
+            @click="selectControlsDevice('keyboardMouse')"
+          >
+            KEYBOARD &amp; MOUSE
+          </button>
+          <button
+            type="button"
+            class="chip"
+            :class="{ active: controlsDevice === 'gamepad' }"
+            data-testid="bindings-device-gamepad"
+            @click="selectControlsDevice('gamepad')"
+          >
+            CONTROLLER
+          </button>
+        </div>
+
+        <template v-if="controlsDevice === 'keyboardMouse'">
+          <div v-for="row in kbmRows" :key="row.key" class="row">
+            <span class="wo-label row-label">{{ row.label }}</span>
+            <button
+              type="button"
+              class="chip binding-chip"
+              :class="{
+                capturing: capturingDevice === 'keyboardMouse' && capturingAction === row.key,
+                duplicate: isKbmDuplicate(row.key)
+              }"
+              :data-testid="`binding-${row.key}`"
+              @click="startKbmCapture(row.key)"
+            >
+              {{ kbmRowLabel(row.key) }}
+            </button>
+          </div>
+        </template>
+        <template v-else>
+          <div v-for="row in gamepadRows" :key="row.key" class="row">
+            <span class="wo-label row-label">{{ row.label }}</span>
+            <button
+              type="button"
+              class="chip binding-chip"
+              :class="{
+                capturing: capturingDevice === 'gamepad' && capturingAction === row.key,
+                duplicate: isGamepadDuplicate(row.key)
+              }"
+              :data-testid="`binding-gamepad-${row.key}`"
+              @click="startGamepadCapture(row.key)"
+            >
+              {{ gamepadRowLabel(row.key) }}
+            </button>
+          </div>
+        </template>
+
+        <button type="button" class="chip reset-chip" data-testid="bindings-reset" @click="resetBindingsToDefaults()">
+          RESET TO DEFAULTS
+        </button>
+
+        <label class="slider-row">
+          <span class="row-label">AIR ROLL SENSITIVITY</span>
+          <input
+            type="range"
+            min="0.5"
+            max="2.0"
+            step="0.05"
+            data-testid="air-roll-sensitivity"
+            :value="settings.controls.airRollSensitivity"
+            @input="setAirRollSensitivity(Number(($event.target as HTMLInputElement).value))"
+          />
+          <span class="slider-value">{{ settings.controls.airRollSensitivity.toFixed(2) }}</span>
+        </label>
       </div>
 
       <div v-else-if="activeCategory === 'ACCESSIBILITY'" class="rows">
@@ -583,6 +894,47 @@ function toggleAudioFlag(key: "enabled" | "musicEnabled"): void {
   font-size: 0.7rem;
   color: var(--ui-dim);
   margin: 0.25rem 0 0 0;
+}
+
+.controls-rows {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.device-chips {
+  margin-bottom: 0.25rem;
+}
+
+.binding-chip {
+  min-width: 6rem;
+  text-align: center;
+}
+
+.binding-chip.capturing {
+  border-color: var(--ui-amber, #ffb400);
+  color: var(--ui-amber, #ffb400);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.binding-chip.duplicate {
+  border-color: rgba(255, 180, 0, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(255, 180, 0, 0.25);
+}
+
+.reset-chip {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 .menu-item {

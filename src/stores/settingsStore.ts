@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
 
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
+import { DEFAULT_CONTROL_BINDINGS, type GamepadBindings, type KeyOrMouseBinding, type KeyboardMouseBindings } from "@/input/bindings/BindingsConfig";
+import { DEFAULT_AIR_ROLL_SENSITIVITY } from "@/input/InputTypes";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
 
 const STORAGE_KEY = "space-carball-settings-v1";
@@ -48,6 +50,11 @@ export interface AppSettings {
     readonly largerHud: boolean;
     readonly disableDithering: boolean;
   };
+  readonly controls: {
+    readonly keyboardMouse: KeyboardMouseBindings;
+    readonly gamepad: GamepadBindings;
+    readonly airRollSensitivity: number;
+  };
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -91,6 +98,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     teamPatternMode: false,
     largerHud: false,
     disableDithering: false
+  },
+  controls: {
+    keyboardMouse: { ...DEFAULT_CONTROL_BINDINGS.keyboardMouse },
+    gamepad: { ...DEFAULT_CONTROL_BINDINGS.gamepad },
+    airRollSensitivity: DEFAULT_AIR_ROLL_SENSITIVITY
   }
 };
 
@@ -115,6 +127,77 @@ function pickNumericEnum<T extends number>(value: unknown, allowed: readonly T[]
   return typeof value === "number" && (allowed as readonly number[]).includes(value) ? (value as T) : fallback;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function pickKeyCode(value: unknown, fallback: string): string {
+  return isNonEmptyString(value) ? value : fallback;
+}
+
+function isIntInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+}
+
+function pickGamepadButton(value: unknown, fallback: number): number {
+  return isIntInRange(value, 0, 17) ? value : fallback;
+}
+
+function pickKeyOrMouseBinding(value: unknown, fallback: KeyOrMouseBinding): KeyOrMouseBinding {
+  if (value && typeof value === "object") {
+    const v = value as Record<string, unknown>;
+    if (v["kind"] === "key" && isNonEmptyString(v["code"])) {
+      return { kind: "key", code: v["code"] };
+    }
+    if (v["kind"] === "mouse" && isIntInRange(v["button"], 0, 4)) {
+      return { kind: "mouse", button: v["button"] };
+    }
+  }
+  return fallback;
+}
+
+/** R10.4: field-by-field defaulting, same pattern as every other settings section. */
+function validateKeyboardMouseBindings(raw: unknown): KeyboardMouseBindings {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const d = DEFAULT_CONTROL_BINDINGS.keyboardMouse;
+  return {
+    accelerate: pickKeyCode(input["accelerate"], d.accelerate),
+    reverse: pickKeyCode(input["reverse"], d.reverse),
+    steerLeft: pickKeyCode(input["steerLeft"], d.steerLeft),
+    steerRight: pickKeyCode(input["steerRight"], d.steerRight),
+    pitchNoseDown: pickKeyCode(input["pitchNoseDown"], d.pitchNoseDown),
+    pitchNoseUp: pickKeyCode(input["pitchNoseUp"], d.pitchNoseUp),
+    yawLeft: pickKeyCode(input["yawLeft"], d.yawLeft),
+    yawRight: pickKeyCode(input["yawRight"], d.yawRight),
+    airRollModifierPrimary: pickKeyCode(input["airRollModifierPrimary"], d.airRollModifierPrimary),
+    airRollModifierSecondary: pickKeyCode(input["airRollModifierSecondary"], d.airRollModifierSecondary),
+    powerslide: pickKeyCode(input["powerslide"], d.powerslide),
+    ballCamera: pickKeyCode(input["ballCamera"], d.ballCamera),
+    scoreboard: pickKeyCode(input["scoreboard"], d.scoreboard),
+    pause: pickKeyCode(input["pause"], d.pause),
+    jump: pickKeyOrMouseBinding(input["jump"], d.jump),
+    boost: pickKeyOrMouseBinding(input["boost"], d.boost),
+    rearView: pickKeyOrMouseBinding(input["rearView"], d.rearView)
+  };
+}
+
+function validateGamepadBindings(raw: unknown): GamepadBindings {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const d = DEFAULT_CONTROL_BINDINGS.gamepad;
+  return {
+    accelerateButton: pickGamepadButton(input["accelerateButton"], d.accelerateButton),
+    reverseButton: pickGamepadButton(input["reverseButton"], d.reverseButton),
+    airRollModifierButton: pickGamepadButton(input["airRollModifierButton"], d.airRollModifierButton),
+    jumpButton: pickGamepadButton(input["jumpButton"], d.jumpButton),
+    boostButton: pickGamepadButton(input["boostButton"], d.boostButton),
+    powerslideButton: pickGamepadButton(input["powerslideButton"], d.powerslideButton),
+    ballCameraButton: pickGamepadButton(input["ballCameraButton"], d.ballCameraButton),
+    scoreboardButton: pickGamepadButton(input["scoreboardButton"], d.scoreboardButton),
+    pauseButton: pickGamepadButton(input["pauseButton"], d.pauseButton),
+    rearViewButton: pickGamepadButton(input["rearViewButton"], d.rearViewButton)
+  };
+}
+
 /**
  * Settings spec section 25: "Validate loaded settings and fall back
  * safely." Every field is individually sanitised against
@@ -129,6 +212,7 @@ export function validateSettings(raw: unknown): AppSettings {
   const graphics = (input["graphics"] ?? {}) as Record<string, unknown>;
   const audio = (input["audio"] ?? {}) as Record<string, unknown>;
   const accessibility = (input["accessibility"] ?? {}) as Record<string, unknown>;
+  const controls = (input["controls"] ?? {}) as Record<string, unknown>;
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -196,6 +280,16 @@ export function validateSettings(raw: unknown): AppSettings {
       disableDithering: isBoolean(accessibility["disableDithering"])
         ? accessibility["disableDithering"]
         : DEFAULT_SETTINGS.accessibility.disableDithering
+    },
+    controls: {
+      keyboardMouse: validateKeyboardMouseBindings(controls["keyboardMouse"]),
+      gamepad: validateGamepadBindings(controls["gamepad"]),
+      airRollSensitivity: clampNumber(
+        controls["airRollSensitivity"],
+        0.5,
+        2.0,
+        DEFAULT_SETTINGS.controls.airRollSensitivity
+      )
     }
   };
 }
@@ -240,6 +334,11 @@ export const useSettingsStore = defineStore("settings", {
       graphics?: Partial<AppSettings["graphics"]>;
       audio?: Partial<AppSettings["audio"]>;
       accessibility?: Partial<AppSettings["accessibility"]>;
+      controls?: {
+        keyboardMouse?: Partial<KeyboardMouseBindings>;
+        gamepad?: Partial<GamepadBindings>;
+        airRollSensitivity?: number;
+      };
     }): void {
       this.settings = validateSettings({
         ...this.settings,
@@ -247,7 +346,12 @@ export const useSettingsStore = defineStore("settings", {
         camera: { ...this.settings.camera, ...patch.camera },
         graphics: { ...this.settings.graphics, ...patch.graphics },
         audio: { ...this.settings.audio, ...patch.audio },
-        accessibility: { ...this.settings.accessibility, ...patch.accessibility }
+        accessibility: { ...this.settings.accessibility, ...patch.accessibility },
+        controls: {
+          keyboardMouse: { ...this.settings.controls.keyboardMouse, ...patch.controls?.keyboardMouse },
+          gamepad: { ...this.settings.controls.gamepad, ...patch.controls?.gamepad },
+          airRollSensitivity: patch.controls?.airRollSensitivity ?? this.settings.controls.airRollSensitivity
+        }
       });
       saveToStorage(this.settings);
     },

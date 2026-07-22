@@ -41,6 +41,8 @@ import { RetroAudioModule } from "@/audio/RetroAudioModule";
 import { installAudioTestApi } from "@/audio/testing/BrowserAudioTestApi";
 import { AudioEventAdapter } from "@/integration/AudioEventAdapter";
 import { DEFAULT_AUDIO_SETTINGS, type AudioDiagnostics, type AudioSettings } from "@/audio/AudioTypes";
+import type { ControlBindings } from "@/input/bindings/BindingsConfig";
+import type { CapturedBinding } from "@/input/InputControlsModule";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
@@ -160,6 +162,14 @@ export interface GameRuntimeFacade {
   playUiSound(kind: "navigate" | "confirm" | "cancel"): void;
 
   isMenuPresentationVisible(): boolean;
+
+  /** R10.2: live rebindable-control surface, forwarded to InputControlsModule. */
+  setControlBindings(bindings: ControlBindings): void;
+  getControlBindings(): ControlBindings;
+  startBindingCapture(device: "keyboardMouse" | "gamepad"): void;
+  takeCapturedBinding(): CapturedBinding | null;
+  /** R10.3: clamped 0.5-2.0, applied on the next tick's carControlProfile. */
+  setAirRollSensitivity(value: number): void;
 }
 
 export class GameRuntime implements GameRuntimeFacade {
@@ -708,6 +718,26 @@ export class GameRuntime implements GameRuntimeFacade {
 
   public setAccessibilityOverrides(options: { reducedJitter: boolean; disableDithering: boolean }): void {
     this.sceneRenderer?.setAccessibilityOverrides(options);
+  }
+
+  public setControlBindings(bindings: ControlBindings): void {
+    this.requireModules().input.setBindings(bindings);
+  }
+
+  public getControlBindings(): ControlBindings {
+    return this.requireModules().input.getBindings();
+  }
+
+  public startBindingCapture(device: "keyboardMouse" | "gamepad"): void {
+    this.requireModules().input.startBindingCapture(device);
+  }
+
+  public takeCapturedBinding(): CapturedBinding | null {
+    return this.requireModules().input.takeCapturedBinding();
+  }
+
+  public setAirRollSensitivity(value: number): void {
+    this.requireModules().input.setAirRollSensitivity(value);
   }
 
   public async resumeAudioFromGesture(): Promise<void> {

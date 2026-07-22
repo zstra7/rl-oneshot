@@ -6,6 +6,8 @@ import type { CameraSettings } from "@/camera/CameraSettings";
 import type { AppState } from "@/core/ApplicationState";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
 import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
+import type { ControlBindings } from "@/input/bindings/BindingsConfig";
+import type { CapturedBinding } from "@/input/InputControlsModule";
 import type { VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
 
 export interface BrowserRuntimeTestApi {
@@ -35,6 +37,12 @@ export interface BrowserRuntimeTestApi {
   getVisualDiagnostics(): VisualDiagnostics;
   getVfxActiveParticleCount(): number;
   setAccessibilityOverrides(options: { reducedJitter: boolean; disableDithering: boolean }): void;
+  /** R10.2/R10.3: rebindable controls + air-roll sensitivity, for Playwright. */
+  setControlBindings(bindings: ControlBindings): void;
+  getControlBindings(): ControlBindings;
+  startBindingCapture(device: "keyboardMouse" | "gamepad"): void;
+  takeCapturedBinding(): CapturedBinding | null;
+  setAirRollSensitivity(value: number): void;
 }
 
 /**

@@ -64,9 +64,12 @@ export interface CarInput {
 
 export interface CarControlProfile {
   dodgeDeadzone: number;
+  airRollSensitivity: number;
 }
 
 export const DEFAULT_HUMAN_DODGE_DEADZONE = 0.8;
+/** R10.3: multiplier on maxRollAngularAcceleration, clamped [0.5, 2.0]. */
+export const DEFAULT_AIR_ROLL_SENSITIVITY = 1.0;
 
 export interface CameraInput {
   toggleBallCameraPressed: boolean;
