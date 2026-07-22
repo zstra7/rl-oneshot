@@ -557,3 +557,99 @@ unified goals, floor→wall fillets with wall driving, seated boost pads.
   1500ms wait — fixed by replacing that fixed wait with
   `expect.poll(...).toBe(0)` so a late burst still gets time to decay
   before the assertion runs.
+
+## Post-launch polish pass — R1 (arena ramps v2, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+Replaced the divergent physics-only `fillet()` (`TestArenaPresets.ts`) and
+visual-only `createWallFillets()` (`StadiumGeometryFactory.ts`) with one
+shared generator, `src/physics/arena/ArenaRampGeometry.ts`, consumed
+identically by both — eliminates the whole "physics and visuals disagree"
+bug class, root-caused as follows:
+
+- **Mid-field drive-through ghost ramp.** The old right side-wall visual
+  fillet used `rotation.set(Math.PI/2, 0, Math.PI/2)`. Under three.js
+  Euler XYZ composition (R = Rx·Ry·Rz) that maps the cylinder's 60m
+  length axis onto world **X**, not Z, laying the quarter-pipe tube
+  across the middle of the field at `(18, 2, 0)` — with no matching
+  physics collider (the physics side was already correct for that wall),
+  so it was purely a drive-through visual artifact.
+- **Invisible side ramps.** The old left fillet mesh was an open-ended
+  `CylinderGeometry` whose outward faces pointed away from the arc centre
+  — viewed from inside the arena you saw the concave (back, culled) side
+  of a default `FrontSide` material, and post-WS8 that material was also
+  the near-black unmapped floor base, so even a stray backface fragment
+  would have read as "really dark".
+- **Goal-side ramps backwards + broken physics.** Visually, the old end
+  fillet's `rotation.set(0, 0, Math.PI/2)` swept the arc into the wrong
+  quadrant (floating above the intended position, curving the wrong
+  way). Physically, `fillet()`'s `axis === "z"` branch reused
+  `quatAxisX(sign * theta)` for both end walls — tipping the surface
+  normal **into the wall** on both runs (the correct sign for the
+  `axis === "z"` case is `quatAxisX(-sign * theta)`), so cars nosed into
+  segment edges and stopped dead: "I just drive straight into the wall."
+- **No corners at all.** The four wall-wall junctions were square, with
+  full-length fillet runs simply interpenetrating at right angles.
+
+**New generator design.** `filletRun(wallBase, inward, runHalfLength)`
+derives its run axis as `inward` rotated 90° (`runDir = (inward.z, 0,
+-inward.x)`), then tilts the template box about that *world-space* axis
+by the arc angle. This is a single formula whose surface-normal sign is
+automatically correct for every wall (proved as a general property: the
+horizontal component of the tilted normal always works out to `inward *
+sin(theta)`, i.e. always non-negative-into-the-field, independent of
+which wall or corner panel it's computed for — no more per-wall sign
+case to get wrong). The right-wall case reduces exactly to the old
+(already-correct) collider values, used as the anchor regression test.
+Curved corners (`CORNER_RADIUS = 6.0`, 6 panels × 15° each) chamfer each
+rectangular corner with the same `filletRun` helper plus a glass-material
+vertical wall panel per segment; straight walls/end-run segments are
+shortened to meet the corners exactly at their arc endpoints (verified
+by a "no gaps" coverage test sampling stations along every wall/corner
+base line).
+
+**Visual side**: ramps use the floor's own concrete texture (falling back
+to a light flat grey, `0x8a929e` — never the near-black floor-base
+colour) so they read "as visible as the floor" per the request; corner
+wall panels reuse the transparent glass-shell material so the arena
+stays visually consistent. Straight glass side/end walls are shortened by
+`CORNER_RADIUS` on each end to meet the corner panels without an
+overlapping double-alpha transparency seam. Structural ribs are confined
+to the straight run between corners (`|z| ≤ halfLength - CORNER_RADIUS`)
+so none floats inside a corner arc.
+
+**Bugs found and fixed along the way, unrelated to the ramp geometry
+itself but surfaced by writing real tests against it:**
+
+- **`PhysicsFacade.raycastArena` always returned `null`**, unconditionally,
+  for every call — a pre-existing bug, never caught before because no
+  other code path or test ever exercised this method (camera collision
+  avoidance uses a height clamp instead, not a raycast). Root cause:
+  `Collider.parent()` in `@dimforge/rapier3d-compat` constructs a *fresh*
+  `RigidBody` wrapper object on every call, so
+  `arenaBodies.includes(collider.parent())` (reference-equality
+  `Array.includes`) never matched, even for an arena collider's own
+  body — the ray-cast filter predicate rejected every collider
+  unconditionally. Fixed by comparing `RigidBody.handle` (a stable
+  numeric id) instead of object identity. Found and fixed via the new
+  "raycast closure sweep" test (`wallDriving.spec.ts`), which is also a
+  reminder that **Rapier's spatial-query broad-phase structures are only
+  built during `world.step()`** — a freshly-initialised, never-stepped
+  world reports no hits at all even for colliders created before the
+  first step; the closure-sweep test steps once before raycasting.
+- **`aiUnstuck.spec.ts`'s wall-pin regression test became chaos-sensitive
+  to unrelated collider additions.** Adding the 24 corner-wall colliders
+  (positioned nowhere near that test's spawn/escape path, geometrically
+  verified clear) still perturbed the exact floating-point evolution of
+  a long (10s), chaotic AI simulation enough to land the rolling
+  stuck-window scan on a different — and unrelated — "car idling near
+  the stationary ball in open field" moment several seconds after the
+  actual wall-escape the test is meant to verify. Fixed by restricting
+  the rolling-window scan to windows starting near the wall (matching
+  the test's own stated purpose), rather than loosening the movement
+  threshold.
+- **New end-wall wall-climb unit tests needed a shorter duration (260
+  vs. the side-wall test's 360 ticks).** The end runs are narrower and,
+  empirically, sustained throttle+boost carries the car up past the
+  ~2m fillet and all the way up the flat 20m vertical wall to the
+  ceiling within 360 ticks, whose unrelated ceiling-contact impulse
+  spike is not what those tests are verifying (fillet-climb smoothness).

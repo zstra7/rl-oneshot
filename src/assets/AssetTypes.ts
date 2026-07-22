@@ -94,5 +94,10 @@ export const DEFAULT_STADIUM_DIMENSIONS: StadiumGenerationDimensions = {
   goalWidth: GOAL_HALF_WIDTH * 2,
   goalHeight: GOAL_HEIGHT,
   goalDepth: GOAL_DEPTH,
-  cornerRadius: 4
+  // R1 (plan/RAMPS_AND_FEATURES_PLAN.md): kept in sync with
+  // `ArenaRampGeometry.CORNER_RADIUS` for documentation purposes only —
+  // `StadiumGeometryFactory` imports `CORNER_RADIUS` directly from physics
+  // rather than reading this field, per the plan's "one dims source for
+  // ramp geometry" rule (this field is otherwise currently unused).
+  cornerRadius: 6
 };

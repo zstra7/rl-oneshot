@@ -365,6 +365,9 @@ export class AssetPipeline implements GameModule {
     transparentMeshCount: number;
     floorMaterialOpaque: boolean;
     floorPanelCount: number;
+    rampSegmentCount: number;
+    cornerPanelCount: number;
+    rampMaterialTextured: boolean;
   } {
     const context = this.requireContext();
     const stadium = createStadiumBlockout(context);
@@ -372,6 +375,9 @@ export class AssetPipeline implements GameModule {
     let transparentMeshCount = 0;
     let floorMaterialOpaque = true;
     let floorPanelCount = 0;
+    let rampSegmentCount = 0;
+    let cornerPanelCount = 0;
+    let rampMaterialTextured = false;
 
     stadium.traverse((object) => {
       const mesh = object as THREE.Mesh;
@@ -391,9 +397,25 @@ export class AssetPipeline implements GameModule {
       if (mesh.name === "FloorPanel") {
         floorPanelCount += 1;
       }
+      if (mesh.name === "RampSegment") {
+        rampSegmentCount += 1;
+        if (standardMaterial?.map) {
+          rampMaterialTextured = true;
+        }
+      }
+      if (mesh.name === "CornerWallPanel") {
+        cornerPanelCount += 1;
+      }
     });
 
-    return { transparentMeshCount, floorMaterialOpaque, floorPanelCount };
+    return {
+      transparentMeshCount,
+      floorMaterialOpaque,
+      floorPanelCount,
+      rampSegmentCount,
+      cornerPanelCount,
+      rampMaterialTextured
+    };
   }
 
   public dispose(): void {

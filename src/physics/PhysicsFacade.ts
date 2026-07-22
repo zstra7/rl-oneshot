@@ -705,7 +705,16 @@ export class PhysicsFacade implements GameModule {
   ): number | null {
     const world = this.requireWorld();
     const ray = new RAPIER.Ray(origin, direction);
-    const arenaBodies = this.arenaBodies;
+    // R1 (plan/RAMPS_AND_FEATURES_PLAN.md): compare by `.handle`, not
+    // object identity — `Collider.parent()` constructs a fresh `RigidBody`
+    // wrapper instance on every call (a rapier3d-compat wasm-binding
+    // pattern), so `arenaBodies.includes(collider.parent())` always
+    // returned `false` even for an arena collider's own body, making this
+    // method return `null` unconditionally. Found via the new raycast
+    // closure-sweep test — this method was previously never exercised by
+    // any other code path (camera collision avoidance uses a different,
+    // non-raycast height clamp instead) or test.
+    const arenaBodyHandles = new Set(this.arenaBodies.map((body) => body.handle));
 
     const hit = world.castRay(
       ray,
@@ -715,7 +724,10 @@ export class PhysicsFacade implements GameModule {
       undefined,
       undefined,
       undefined,
-      (collider) => arenaBodies.includes(collider.parent() as RAPIER.RigidBody)
+      (collider) => {
+        const parent = collider.parent();
+        return parent !== null && arenaBodyHandles.has(parent.handle);
+      }
     );
 
     return hit ? hit.timeOfImpact : null;

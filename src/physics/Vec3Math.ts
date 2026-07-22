@@ -100,3 +100,26 @@ export function yawFacing(from: Vec3Like, to: Vec3Like): QuatLike {
   const theta = Math.atan2(-dx, -dz);
   return { x: 0, y: Math.sin(theta / 2), z: 0, w: Math.cos(theta / 2) };
 }
+
+/**
+ * R1 (plan/RAMPS_AND_FEATURES_PLAN.md): a quaternion rotating by `angle`
+ * radians about `axis` (must be unit length).
+ */
+export function quatFromAxisAngle(axis: Vec3Like, angle: number): QuatLike {
+  const s = Math.sin(angle / 2);
+  return { x: axis.x * s, y: axis.y * s, z: axis.z * s, w: Math.cos(angle / 2) };
+}
+
+/**
+ * Hamilton product `a * b`: applying the resulting quaternion to a vector is
+ * equivalent to applying `b` first, then `a` (standard quaternion composition
+ * order, matching `applyQuaternion`'s convention).
+ */
+export function quatMultiply(a: QuatLike, b: QuatLike): QuatLike {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+  };
+}

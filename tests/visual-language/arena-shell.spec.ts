@@ -8,10 +8,13 @@ test.beforeEach(async ({ page }) => {
     .toBe(true);
 });
 
-test("the arena shell has at least 6 transparent glass meshes and the floor stays opaque", async ({ page }) => {
+test("the arena shell has at least 30 transparent glass meshes and the floor stays opaque", async ({ page }) => {
+  // R1 (plan/RAMPS_AND_FEATURES_PLAN.md): the 24 curved corner wall
+  // panels use the same transparent glass material, raising the floor
+  // from the original 6 (2 side walls + ceiling + 2 end-wall groups).
   const info = await page.evaluate(() => window.__ASSET_TEST__?.getStadiumShellInfo());
   expect(info).toBeTruthy();
-  expect(info!.transparentMeshCount).toBeGreaterThanOrEqual(6);
+  expect(info!.transparentMeshCount).toBeGreaterThanOrEqual(30);
   expect(info!.floorMaterialOpaque).toBe(true);
 });
 
