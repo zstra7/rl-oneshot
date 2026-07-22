@@ -733,3 +733,33 @@ drifts more than ~3.4° from the pre-dodge yaw while `dodgeState !==
 confirming the test fails with a ~360° (6.28 rad) swing — the full whip
 the fix eliminates. A second test confirms ball-cam behaviour is
 unaffected (no NaN, camera stays finite) through the same dodge.
+
+## Post-launch polish pass — R6 (goal-scored blast force, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+Real Rocket League throws cars near the scored-on goal mouth away in a
+small shockwave when a goal is scored — purely a feel/spectacle beat,
+absent before this pass. `PhysicsFacade.applyRadialCarImpulse(centre,
+radius, maxDeltaV)` applies a mass-scaled impulse to every car within
+`radius` of `centre`, with linear falloff by distance and a fixed 0.35
+upward component (so cars get thrown up and out, not just sideways);
+cars beyond `radius` are untouched. `MatchFlowController.processGoal`
+calls it once per goal, before the score/state transitions, centred on
+`getGoalSensorCentre(otherTeam(scoringTeam))` (the goal that was scored
+on) with `GOAL_BLAST_RADIUS = 16`, `GOAL_BLAST_MAX_DELTA_V = 18`. Physics
+owns the impulse math; game-flow only decides *when* to fire it — the
+same "physics is the source of truth for anything physical" split used
+throughout this project.
+
+New tests in `tests/unit/goalBlast.spec.ts` cover the physics method in
+isolation (nearby car gets thrown away from centre with a positive
+vertical component; a car outside the radius is essentially untouched)
+and the full match-flow integration (a car parked at the scored-on goal
+gets kicked while a midfield car is unaffected; exactly one impulse
+fires per goal — no repeated kicks while the goal-celebration state is
+latched, verified by asserting speed only ever decays after the initial
+kick, never spikes back up). A Playwright test in `tests/game-flow/
+match-flow.spec.ts` exercises the same path end-to-end through
+`simulateGoal`. `getGoalSensorCentre` was also added to
+`BrowserPhysicsTestApi`/`__PHYSICS_TEST__` (it already existed on
+`PhysicsFacade` as a test-only accessor) so the Playwright test can
+locate the goal mouth without hardcoding arena coordinates.

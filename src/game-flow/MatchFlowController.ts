@@ -1,7 +1,7 @@
 import type { BallSerializableState } from "@/physics/PhysicsTypes";
 import type { PhysicsFacade } from "@/physics/PhysicsFacade";
 import { RL_CONSTANTS } from "@/physics/PhysicsConstants";
-import type { TeamId } from "@/core/TeamTypes";
+import { otherTeam, type TeamId } from "@/core/TeamTypes";
 import {
   BALL_FLOOR_CONTACT_HEIGHT_TOLERANCE,
   BALL_FLOOR_CONTACT_MAX_VERTICAL_SPEED,
@@ -32,6 +32,10 @@ const CONTROLS_ACTIVE_STATES: readonly MatchState[] = [
 ];
 
 const MENU_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS"];
+
+// R6 (plan/RAMPS_AND_FEATURES_PLAN.md): goal-scored blast radius/strength.
+const GOAL_BLAST_RADIUS = 16;
+const GOAL_BLAST_MAX_DELTA_V = 18;
 
 const PAUSABLE_STATES: readonly MatchState[] = [
   "PLAYING",
@@ -289,6 +293,13 @@ export class MatchFlowController {
 
   private processGoal(scoringTeam: TeamId): void {
     this.goalLatch = true;
+
+    // R6 (plan/RAMPS_AND_FEATURES_PLAN.md): a demolition-style shockwave
+    // on the scored-on goal, throwing nearby cars away from the mouth.
+    const goalCentre = this.requirePhysics().getGoalSensorCentre(otherTeam(scoringTeam));
+    if (goalCentre) {
+      this.requirePhysics().applyRadialCarImpulse(goalCentre, GOAL_BLAST_RADIUS, GOAL_BLAST_MAX_DELTA_V);
+    }
 
     if (scoringTeam === "player") {
       this.playerScore += 1;

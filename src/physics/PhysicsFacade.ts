@@ -705,6 +705,27 @@ export class PhysicsFacade implements GameModule {
   }
 
   /**
+   * R6 (plan/RAMPS_AND_FEATURES_PLAN.md): a real-RL-style "goal explosion"
+   * shockwave — cars within `radius` of `centre` get a velocity change of
+   * up to `maxDeltaV` (linear falloff with distance), directed away from
+   * `centre` horizontally with a small upward component, mass-scaled so
+   * the impulse produces the same delta-v regardless of car mass.
+   */
+  public applyRadialCarImpulse(centre: V.Vec3Like, radius: number, maxDeltaV: number): void {
+    for (const car of this.carRegistry.getAllStable()) {
+      const toCar = V.sub(car.body.translation(), centre);
+      const distance = V.length(toCar);
+      if (distance > radius) {
+        continue;
+      }
+      const falloff = 1 - distance / radius;
+      const dirH = distance < 1e-4 ? { x: 0, y: 0, z: 0 } : V.normalize({ x: toCar.x, y: 0, z: toCar.z });
+      const dir = V.normalize({ x: dirH.x, y: 0.35, z: dirH.z });
+      car.body.applyImpulse(V.scale(dir, RL_CONSTANTS.carMass * maxDeltaV * falloff), true);
+    }
+  }
+
+  /**
    * Camera-collision avoidance (game-flow spec section 21): casts a ray
    * from `origin` toward `direction` (normalised) and returns the
    * distance to the nearest *arena* collider hit within `maxDistance`, or

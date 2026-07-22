@@ -17,6 +17,7 @@ import type {
   BoostPadRuntimeState
 } from "@/physics/boost/BoostPadTypes";
 import type { GoalScoredEvent } from "@/physics/goal/GoalTypes";
+import type { TeamId } from "@/core/TeamTypes";
 
 export interface PhysicsDiagnostics {
   readonly tick: number;
@@ -66,6 +67,7 @@ export interface BrowserPhysicsTestApi {
 
   getGoalEvents(): readonly GoalScoredEvent[];
   clearGoalEvents(): void;
+  getGoalSensorCentre(defendingTeam: TeamId): { x: number; y: number; z: number } | null;
 
   stepTicks(count: number): void;
 
@@ -118,6 +120,7 @@ export function installPhysicsTestApi(
     clearBoostPadEvents: () => physics.clearBoostPadEvents(),
     getGoalEvents: () => physics.getGoalEvents(),
     clearGoalEvents: () => physics.clearGoalEvents(),
+    getGoalSensorCentre: (defendingTeam) => physics.getGoalSensorCentre(defendingTeam),
     stepTicks: (count) => physics.stepTicks(count),
     getDiagnostics: () => ({
       tick: physics.getTick(),

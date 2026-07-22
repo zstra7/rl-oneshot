@@ -144,6 +144,37 @@ test("a goal increments score once, celebrates, resets, and restarts the countdo
   expect(afterReset?.playerScore).toBe(1);
 });
 
+test("R6: a goal blasts a nearby parked car away from the scored-on goal", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.selectMatchDuration(3);
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
+  await page.evaluate(() => {
+    const centre = window.__PHYSICS_TEST__?.getGoalSensorCentre("opponent");
+    if (!centre) {
+      return;
+    }
+    window.__PHYSICS_TEST__?.setCarState("car-player", {
+      position: { x: centre.x + 3, y: 0.6, z: centre.z + (centre.z < 0 ? 4 : -4) },
+      linearVelocity: { x: 0, y: 0, z: 0 }
+    });
+  });
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(30));
+
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.simulateGoal("player"));
+  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameTicks(2));
+
+  const playerState = await page.evaluate(() => window.__PHYSICS_TEST__?.getCarState("car-player"));
+  const speed = Math.hypot(
+    playerState!.linearVelocity.x,
+    playerState!.linearVelocity.y,
+    playerState!.linearVelocity.z
+  );
+  expect(speed).toBeGreaterThan(6);
+});
+
 test("results screen shows victory/defeat, final score, and replay/return buttons", async ({
   page
 }) => {
