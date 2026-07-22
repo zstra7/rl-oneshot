@@ -404,6 +404,20 @@ invariants encode every bug above):
 - `docs/physics-deviations.md` + `docs/visual-language-deviations.md`: new "Arena ramps
   v2" section — root causes above, the runDir invariant, the shared-generator decision.
 
+**Scope + consistency notes:**
+
+- **Dimension-consistency gate**: the generator is driven by the physics constants,
+  but the straight glass walls are still sized from `context.stadiumDimensions`.
+  Add one unit test asserting `DEFAULT_STADIUM_DIMENSIONS.fieldWidth / 2 ===
+  TEST_ARENA_DIMENSIONS.halfWidth`, same for length, **and**
+  `interiorHeight === TEST_ARENA_DIMENSIONS.height` — if `interiorHeight` differs
+  today, size the corner glass panels from `stadiumDimensions.interiorHeight`
+  (visual) while keeping collider height from physics, and document the split.
+  Without this check a silent dims drift would misalign corner glass vs colliders.
+- **Explicitly out of scope**: wall→ceiling fillets and ceiling driving. The user's
+  ask is the floor-level perimeter — up the walls and around the corners. Note this
+  in `docs/visual-language-deviations.md` so it isn't read as an omission.
+
 **Commit point R1** (source + tests + docs), then run full vitest + targeted Playwright.
 
 ---
@@ -567,6 +581,10 @@ false-positive it prevents.
    - `AssetPipeline.initialise` context `visualPreset`
    - `PlaceholderSceneRenderer.getVisualPreset()`'s `?? "balanced"` fallback in
      `GameRuntime` (grep `"balanced"` across `src/` and update every default).
+3. **"Max settings" also means the density defaults**: `DEFAULT_SETTINGS.graphics.
+   particleDensity: "normal" → "high"` and `starDensity: "normal" → "high"`
+   (`glowEnabled` already defaults true; `fullscreen` stays false). Grep `tests/`
+   for `"normal"` density assertions on defaults and update any that exist.
 
 ### Gates
 
@@ -845,23 +863,43 @@ exactly, so only the ball reads as doubled.
 New `src/input/bindings/BindingsConfig.ts`:
 
 ```ts
-export interface KeyboardBindings {   // KeyboardEvent.code values
+/** A KB&M-mode binding: either a KeyboardEvent.code or a MouseEvent.button. */
+export type KeyOrMouseBinding =
+  | { readonly kind: "key"; readonly code: string }
+  | { readonly kind: "mouse"; readonly button: number };
+
+export interface KeyboardMouseBindings {
+  // key-only actions (KeyboardEvent.code values):
   accelerate: string; reverse: string; steerLeft: string; steerRight: string;
   pitchNoseDown: string; pitchNoseUp: string; yawLeft: string; yawRight: string;
   airRollModifierPrimary: string; airRollModifierSecondary: string;
   powerslide: string;                 // NEW distinct action (default ShiftLeft, replacing the loose consts)
   ballCamera: string; scoreboard: string; pause: string;
+  // key-OR-mouse actions (defaults: mouse 2 / 0 / 1 — today's behaviour). Union
+  // because "all controls rebindable" must include the common "jump on a key"
+  // case; a mouse-only slot would silently forbid it.
+  jump: KeyOrMouseBinding; boost: KeyOrMouseBinding; rearView: KeyOrMouseBinding;
 }
-export interface MouseBindings { boost: number; rearView: number; jump: number; }
 export interface GamepadBindings {   // button indices (existing shape, unchanged keys)
   accelerateButton: number; reverseButton: number; airRollModifierButton: number;
   jumpButton: number; boostButton: number; powerslideButton: number;
   ballCameraButton: number; scoreboardButton: number; pauseButton: number;
   rearViewButton: number;
 }
-export interface ControlBindings { keyboard: KeyboardBindings; mouse: MouseBindings; gamepad: GamepadBindings; }
+export interface ControlBindings { keyboardMouse: KeyboardMouseBindings; gamepad: GamepadBindings; }
 export const DEFAULT_CONTROL_BINDINGS: ControlBindings = …  // built from the existing DEFAULT_* consts
 ```
+
+**Gamepad air-roll semantic trap (fix while refactoring, don't copy it):** the
+current `DEFAULT_GAMEPAD_BINDINGS.airRollModifierButton` is `leftTrigger`, but
+`buildLogicalStateFromGamepad` deliberately ignores it and reads
+`powerslideButton` (west) for the air-roll modifier (see the in-code comment about
+braking mid-air). If the rebind UI showed and rebound the *unused* `leftTrigger`
+entry, the binding would appear dead. Resolve: the refactored logical builder
+consumes `bindings.gamepad.airRollModifierButton`, and its **default changes to
+west (2)** — same value as `powerslideButton` — preserving today's actual
+behaviour while making the displayed binding the consumed one. Duplicate values
+are legal (see below).
 
 Every in-game action has a default (they all already do — the table above is exactly
 the current default surface; `POWERSLIDE_KEYBOARD_BINDING`/`_ALT` fold into
@@ -883,11 +921,13 @@ this in docs).
   `buildLogicalStateFromGamepad`, `sampleGameplayInputForTick`'s `rearViewHeld`,
   `sampleSystemInput` scoreboard.
 - **Capture support** for the rebind UI:
-  `startBindingCapture(device: "keyboard" | "mouse" | "gamepad")`,
-  `cancelBindingCapture()`, `takeCapturedBinding(): { device; code?: string; button?: number } | null`.
-  While armed: the next keyboard press / mouse press / gamepad button edge is stored
-  as the capture (and suppressed from edges), keyboard `Escape` cancels. Gamepad
-  capture hooks into the existing `pollGamepad` button-edge loop.
+  `startBindingCapture(device: "keyboardMouse" | "gamepad")`,
+  `cancelBindingCapture()`, `takeCapturedBinding(): { kind: "key" | "mouse" | "gamepad"; code?: string; button?: number } | null`.
+  While armed in keyboardMouse mode, the next keyboard press **or** mouse press is
+  stored (whichever comes first — the union rows accept either; key-only rows
+  ignore a mouse capture and stay armed); keyboard `Escape` cancels. Gamepad
+  capture hooks into the existing `pollGamepad` button-edge loop. Captured presses
+  are suppressed from the edge queues.
 - `GameRuntime` facade: `setControlBindings`, `getControlBindings`,
   `startBindingCapture`, `takeCapturedBinding`, `setAirRollSensitivity` forwarding to
   the input module; wire into `installTestApis` runtime surface for Playwright.
@@ -908,11 +948,12 @@ this in docs).
 ### R10.4 Settings + UI
 
 - `settingsStore`: new section
-  `controls: { keyboard: …, mouse: …, gamepad: …, airRollSensitivity: number }`,
-  defaults from `DEFAULT_CONTROL_BINDINGS`; validation: keyboard values must be
-  non-empty strings, mouse/gamepad values integers 0–17, unknown keys dropped, missing
-  keys defaulted (field-by-field like every other section); `airRollSensitivity`
-  clamped 0.5–2.0.
+  `controls: { keyboardMouse: …, gamepad: …, airRollSensitivity: number }`,
+  defaults from `DEFAULT_CONTROL_BINDINGS`; validation: key values must be non-empty
+  strings, mouse buttons integers 0–4, gamepad buttons integers 0–17,
+  `KeyOrMouseBinding` unions checked by `kind` (malformed → default), unknown keys
+  dropped, missing keys defaulted (field-by-field like every other section);
+  `airRollSensitivity` clamped 0.5–2.0.
 - Boot wiring (`GameCanvas.vue`): `runtime.setControlBindings(settings.controls)` +
   `runtime.setAirRollSensitivity(settings.controls.airRollSensitivity)`.
 - `SettingsPanel.vue` CONTROLS tab rework:
@@ -955,9 +996,15 @@ this in docs).
   3. Gamepad: connect virtual pad, device chip CONTROLLER, click
      `binding-gamepad-boostButton`, `setVirtualGamepadState` button 5 pressed →
      chip `BTN 5`; in match, button 5 held → diagnostics `output.car.boost === true`.
-  4. Reset-to-defaults restores W.
-  5. Air-roll slider: set 2.0 → `runtime.getDiagnostics` (input) carControlProfile
+  4. **Cross-device union**: rebind `jump` (a key-or-mouse row) to `Space` via
+     keyboard capture → in match, pressing Space jumps (diagnostics jump edge) and
+     RMB no longer does; duplicate-with-ballCamera is permitted (both fire).
+  5. Reset-to-defaults restores W (and jump back to RMB).
+  6. Air-roll slider: set 2.0 → `runtime.getDiagnostics` (input) carControlProfile
      reflects 2.0.
+  7. Gamepad air-roll: with defaults, hold west (2) airborne + stick left →
+     diagnostics `output.car.roll !== 0` (proves the consumed binding is the one
+     the UI displays, per the semantic-trap fix).
 - **Existing suites**: `tests/input/foundation.spec.ts` must pass **unmodified** —
   it exercises the default bindings end-to-end and is the no-regression anchor for
   the refactor. Ditto `tests/physics/car-driving.spec.ts`, `tests/ui/settings.spec.ts`
@@ -1290,9 +1337,21 @@ export interface TournamentPublicState {
 - `ResultsScreen.vue`: when `tournamentStore.state.active && phase === "in-match"`
   … (phase will still be in-match until CONTINUE) — condition on `active`: replace
   REPLAY/RETURN buttons with CONTINUE (`data-testid="tournament-continue"`) →
-  `runtime.continueTournament()` and LEAVE TOURNAMENT → `runtime.leaveTournament()`.
+  `runtime.continueTournament()` and LEAVE TOURNAMENT (`data-menu-back`, so the
+  controller's B button works here too) → `runtime.leaveTournament()`.
   Non-tournament rendering unchanged (existing tests must pass untouched).
 - `App.vue`: mount the two new components in the v-if chain.
+- **Abandonment safety net (closes a real leak)**: the pause menu's RETURN TO MENU
+  (and any other path that calls `gameFlow.returnToMenu()` directly) would bypass
+  `leaveTournament()`, leaving the tournament active with `matchState MAIN_MENU`
+  and the AI difficulty stuck on the round's value. Do **not** chase every call
+  site — centralise: in `GameRuntime`'s existing per-tick state sync, when
+  `matchState` transitions to `MAIN_MENU` while `tournament.active`, call
+  `tournament.leave()` + restore the saved difficulty/duration. All explicit
+  leave/return buttons then reduce to the same one code path.
+- UI-sound parity: every new button calls `runtime.playUiSound` (navigate on chip
+  selects, confirm on BEGIN/PLAY/CONTINUE, cancel on LEAVE/BACK) — matching the
+  existing menus.
 
 ### Gates
 
@@ -1305,7 +1364,10 @@ export interface TournamentPublicState {
   otherwise cover via Playwright only): difficulty saved/restored around a tournament.
 - **Playwright `tests/game-flow/tournament.spec.ts`** (use the deterministic
   fast-forward patterns from `match-flow.spec.ts`: park opponent at (40,1,40),
-  `simulateGoal("player")`, `advanceGameSeconds` with ball re-parking loop):
+  `simulateGoal("player")`, `advanceGameSeconds` with ball re-parking loop —
+  **re-park the opponent inside the loop too**: unlike the existing tests, the
+  later rounds run hard/legend AI, which drives back from (40,1,40) fast enough
+  to score during a 60 s fast-forward and corrupt the scripted result):
   1. Menu → TOURNAMENT → bracket setup visible; pick 1 MIN → BEGIN → bracket phase,
      round-0 slat `data-state="current"`, opponent "ROOKIE ROVERS".
   2. PLAY NEXT GAME → countdown → PLAYING; `runtime.getAiDifficulty() === "easy"`;
@@ -1320,6 +1382,10 @@ export interface TournamentPublicState {
      forward) → CONTINUE → bracket ELIMINATED state → RETURN TO MENU.
   6. LEAVE TOURNAMENT mid-bracket returns to menu and a subsequent normal PLAY match
      works (state fully reset).
+  7. **Abandonment safety net**: mid-tournament match, pause → RETURN TO MENU (the
+     pause menu's own button, not the tournament LEAVE) → tournament inactive
+     (`getTournamentState().active === false`), AI difficulty restored to the
+     pre-tournament value, and a subsequent normal match runs clean.
 - Existing: full `match-flow.spec.ts` + `release-gate` untouched and green.
 - Docs: `build-decisions.md` (tournament design, session-only persistence),
   `implementation-progress.md`.
@@ -1360,9 +1426,11 @@ export interface TournamentPublicState {
 | PhysicsFacade | AUTO_FLIP: upY / speed / angSpeed / height / seconds | 0.55 / 6.0 / 4.0 / 1.2 / 0.75 |
 | PsxRenderSettings | authentic / balanced / clean res | 480×270 / 640×360 / 960×540 |
 | settingsStore | graphics.preset default | "clean" |
+| settingsStore | particleDensity / starDensity defaults | "high" / "high" |
 | MatchFlowController | GOAL_BLAST_RADIUS / MAX_DELTA_V | 16 / 18 |
 | AiDifficulty | LEGEND_AI | table in R9 |
 | Input | airRollSensitivity default / range | 1.0 / 0.5–2.0 |
+| Input | gamepad airRollModifierButton default | west (2) — was unused leftTrigger, see R10.1 |
 | QuickChat | stagger / lifetime | 300 ms / 3000 ms |
 
 ## Appendix B — Test inventory
