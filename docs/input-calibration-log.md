@@ -1,5 +1,72 @@
 # Input Calibration Log
 
+## Post-launch polish pass — R10 (rebindable controls + air-roll sensitivity, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+- **Rebindable controls, fully live**: a new `ControlBindings` model
+  (`src/input/bindings/BindingsConfig.ts`, `DEFAULT_CONTROL_BINDINGS`) covers
+  every keyboard/mouse/gamepad gameplay action. `jump`/`boost`/`rearView` are
+  a `KeyOrMouseBinding` union (`{kind:"key",code}` or `{kind:"mouse",button}`)
+  rather than mouse-only slots, so "rebind jump to a key" — a common request —
+  isn't structurally forbidden. UI-navigation keys (`uiUp`/`uiDown`/etc.) are
+  **not** part of this surface and stay fixed, as spec'd. `InputControlsModule`
+  now holds `private bindings: ControlBindings` (`setBindings`/`getBindings`)
+  and every previously-hardcoded `DEFAULT_KEYBOARD_BINDINGS`/
+  `DEFAULT_MOUSE_BINDINGS`/`DEFAULT_GAMEPAD_BINDINGS`/`POWERSLIDE_*` reference
+  in the gameplay-input path (including the easy-to-miss literal `"Space"`/
+  `"Escape"` checks in `handleKeyboardPress`) now reads `this.bindings.*`.
+- **Gamepad air-roll semantic trap, fixed while refactoring**: before R10,
+  `DEFAULT_GAMEPAD_BINDINGS.airRollModifierButton` was `leftTrigger`, but
+  `buildLogicalStateFromGamepad` never read it — it deliberately read
+  `powerslideButton` (west) instead, so braking mid-air wouldn't accidentally
+  turn stick input into roll (see the WS1 entry above). Had the old rebind-UI
+  sketch simply displayed and let players rebind `airRollModifierButton`, the
+  binding would have appeared completely dead — any rebind of it would change
+  nothing, because the code path consuming air-roll input never looked at it.
+  Fixed at the root: `buildLogicalStateFromGamepad` now consumes
+  `bindings.gamepad.airRollModifierButton` directly, and its *default* changes
+  from `leftTrigger` to `west` (2) — the same value `powerslideButton` already
+  had — so default behaviour is bit-for-bit unchanged (confirmed by
+  `tests/input/foundation.spec.ts` passing unmodified) while the binding the
+  rebind UI shows is now the one actually driving the game. Duplicate values
+  across different actions (e.g. `airRollModifierButton === powerslideButton`)
+  are legal and expected, not a bug — the UI hints at them with an amber tint
+  rather than blocking. `tests/input/rebinding.spec.ts` pins both the default
+  (`west`/`BTN 2`) and the actual consumed behaviour (west + stick-left while
+  airborne produces roll).
+- **Rebind capture**: `InputControlsModule.startBindingCapture(device)` /
+  `cancelBindingCapture()` / `takeCapturedBinding()`. While armed for
+  `"keyboardMouse"`, the next keyboard or mouse press is captured *and
+  suppressed* from the normal action-edge queues (so rebinding accelerate to
+  `P` doesn't also fire a stray edge into whatever `P` used to do — nothing,
+  today, but the suppression is unconditional so it can't regress later). The
+  settings-panel UI additionally runs its own component-local, capture-phase
+  `window` keydown/mousedown listeners (with `preventDefault`) so it can
+  render "PRESS A KEY…" and the resolved value immediately; both layers see
+  the same real DOM event, and only the module's capture-suppression prevents
+  it from also being processed as gameplay input. Gamepad capture reuses the
+  existing `pollGamepad` button-edge loop and is polled by the settings panel
+  every 100 ms via `takeCapturedBinding()`.
+- **Air-roll sensitivity, physics-real**: `CarControlProfile.
+  airRollSensitivity` (`DEFAULT_AIR_ROLL_SENSITIVITY = 1.0`, clamped to
+  [0.5, 2.0] by `InputControlsModule.setAirRollSensitivity`) is threaded
+  through the per-tick `carControlProfile` into `PhysicsFacade.
+  setCarControlProfile` exactly like `dodgeDeadzone` already was. `Aerial
+  Controller.applyAerialRotation` multiplies only
+  `RL_CONSTANTS.maxRollAngularAcceleration` by it — pitch and yaw are
+  untouched — so it scales actual rotational acceleration for both digital
+  (`roll: ±1`) and analog stick input, not a cosmetic UI-only curve.
+  `createCarEntity` initialises the field to the default so pre-R10 car-
+  creation call sites never see `undefined`. `tests/unit/
+  airRollSensitivity.spec.ts` pins the physical effect directly (0.6 vs 1.8
+  sensitivity on identical `roll: 1` input produces >1.5x more accumulated
+  angular speed within 30 ticks, well below the ~3x actually observed at that
+  sensitivity ratio).
+- Settings persistence: `settingsStore`'s new `controls` section validates
+  field-by-field like every other section (bad key codes/out-of-range
+  button indices/malformed `KeyOrMouseBinding` unions fall back to the
+  matching default field, not the whole section) — see
+  `tests/unit/controlBindings.spec.ts`.
+
 ## Post-launch polish pass — WS1 (plan/POLISH_OVERHAUL_PLAN.md)
 
 - **Confirmed and fixed the real "controller does not work at all" bug**:
