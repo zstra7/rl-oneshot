@@ -7,6 +7,7 @@ import GameplayHud from "@/components/hud/GameplayHud.vue";
 import GoalBanner from "@/components/hud/GoalBanner.vue";
 import OvertimeBanner from "@/components/hud/OvertimeBanner.vue";
 import PauseMenu from "@/components/hud/PauseMenu.vue";
+import QuickChatOverlay from "@/components/hud/QuickChatOverlay.vue";
 import ResultsScreen from "@/components/hud/ResultsScreen.vue";
 import MainMenu from "@/components/menu/MainMenu.vue";
 import MatchSetup from "@/components/menu/MatchSetup.vue";
@@ -63,6 +64,7 @@ const showGameplayHud = computed(
     <div class="wo-vignette" aria-hidden="true"></div>
 
     <GameCanvas />
+    <QuickChatOverlay />
 
     <MainMenu v-if="matchState === 'MAIN_MENU'" />
     <MatchSetup v-else-if="matchState === 'MATCH_SETUP'" />

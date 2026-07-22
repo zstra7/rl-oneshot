@@ -357,3 +357,27 @@ Playwright verification — held for the rest of the pass. Final state:
 all ten workstreams complete, documented per-area in their respective
 `docs/*-deviations.md`, and verified via the full check in
 `docs/implementation-progress.md`'s closing entry.
+
+## Post-launch polish pass — R7 (quick-chat overlay, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+New `src/components/hud/QuickChatOverlay.vue`, mounted unconditionally
+in `App.vue` (rendered right after `GameCanvas`, so it sits above the
+scene canvas but below the scanline/vignette overlays which pin to
+`z-index: 40`; its own `z-index: 5` keeps it above the HUD/menu panels
+too, which set none). Pure UI layer: watches `matchFlowStore.session.
+opponentScore` for an increase (increment-only guard, so score resets
+on replay/return-to-menu never spam) and pushes three staggered "CPU:
+WHAT A SAVE!" messages via `setTimeout` (DOM timers run independent of
+the paused sim RAF loop, which matters for deterministic tests), each
+auto-fading and removing itself a few seconds later. All pending timeout
+handles are tracked and cleared in `onBeforeUnmount` so navigating away
+mid-spam can't throw once the component (hypothetically) unmounts —
+though in practice it never does, being mounted unconditionally.
+`settingsStore.settings.accessibility.reducedFlashes` disables the
+slide-in/fade animations (content still appears/disappears, just without
+motion) without touching whether the messages fire at all.
+
+Playwright tests in `tests/ui/quick-chat.spec.ts` cover the 3-message
+spam and fade-out timing, that a player goal never triggers it, and that
+triggering a spam and immediately returning to the main menu produces no
+console errors and the messages still clear on their own schedule.
