@@ -360,6 +360,18 @@ export class GameRuntime implements GameRuntimeFacade {
       const frameStart =
         typeof performance !== "undefined" ? performance.now() : Date.now();
 
+      // R11: apply this frame's gameplay/menu edge gates + the
+      // require-release re-arm *before* polling the gamepad or advancing
+      // any fixed ticks, reading match state as committed by the end of
+      // the previous frame. Ordering matters: a menu->gameplay transition
+      // (e.g. clicking RESUME) happens inside emitMenuNavigationFrame()
+      // below, i.e. at the *end* of the frame it occurs on — deferring the
+      // re-arm to the following frame's applyMenuNavigationGates() call
+      // means it always runs before that frame's pollGamepad/fixed-tick
+      // advance ever samples gameplay input in the new state, so a still
+      // -held button is masked before the first tick that could act on it.
+      this.applyMenuNavigationGates();
+
       this.modules?.input.updateBrowserFrame(timestampMs);
 
       const frameDelta = this.clock.computeFrameDelta(timestampMs);
@@ -371,7 +383,7 @@ export class GameRuntime implements GameRuntimeFacade {
         alpha: this.fixedStepCoordinator.alpha
       });
 
-      this.updateMenuNavigationGating();
+      this.emitMenuNavigationFrame();
 
       const frameEnd =
         typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -385,14 +397,13 @@ export class GameRuntime implements GameRuntimeFacade {
   };
 
   /**
-   * R11: run once per rendered frame (after the fixed-tick advance so a
-   * match-state transition that happened this very frame — e.g. resume ->
-   * PLAYING — is already reflected). Gates gamepad edge collection between
-   * gameplay and menu-navigation contexts, arms the require-release re-arm
-   * mask on every menu->gameplay transition, and emits the sampled
-   * menu-navigation frame while a menu root is visible.
+   * R11: gates gamepad edge collection between gameplay and
+   * menu-navigation contexts and arms the require-release re-arm mask on
+   * every menu->gameplay transition. Must run before `updateBrowserFrame`
+   * (gamepad poll) and the fixed-tick advance each frame — see the call
+   * site comment in `frame()` for why ordering is load-bearing here.
    */
-  private updateMenuNavigationGating(): void {
+  private applyMenuNavigationGates(): void {
     const modules = this.modules;
     if (!modules) {
       return;
@@ -409,7 +420,23 @@ export class GameRuntime implements GameRuntimeFacade {
       modules.input.clearPendingEdges();
     }
     this.previousControlsActive = controlsActive;
+  }
 
+  /**
+   * R11: emits the sampled menu-navigation frame once per rendered frame
+   * while a `[data-menu-root]` screen is visible. Runs after the fixed-tick
+   * advance so a state transition from *this* frame's ticks is reflected;
+   * confirm/back handling inside the composable's event listener (e.g.
+   * RESUME) may itself flip match state again before this call returns —
+   * that flip is picked up by the *next* frame's applyMenuNavigationGates().
+   */
+  private emitMenuNavigationFrame(): void {
+    const modules = this.modules;
+    if (!modules) {
+      return;
+    }
+
+    const matchState = modules.gameFlow.getMatchState();
     if (MENU_NAVIGABLE_STATES.includes(matchState)) {
       const frame = modules.input.sampleMenuNavigation();
       this.dispatcher.emit("runtime:menu-navigation", { frame });

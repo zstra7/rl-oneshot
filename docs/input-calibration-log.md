@@ -67,6 +67,97 @@
   matching default field, not the whole section) — see
   `tests/unit/controlBindings.spec.ts`.
 
+## Post-launch polish pass — R11 (controller menu navigation, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+- **Fixed (non-rebindable) console-convention mapping**: gamepad d-pad/
+  left-stick now moves DOM focus through whichever `[data-menu-root]`
+  screen is visible (MainMenu, MatchSetup, SettingsPanel, PauseMenu,
+  ResultsScreen), South (`STANDARD_GAMEPAD_BUTTONS.south`) activates the
+  focused element, East triggers the screen's `[data-menu-back]`. This is
+  deliberately *not* part of the R10 `ControlBindings` rebinding surface —
+  console UX convention, same reasoning as the already-fixed UI-navigation
+  keys.
+- **Three classic polling-input double-action leaks, each closed with its
+  own mechanism** (all four are gated by
+  `tests/ui/controller-navigation.spec.ts`'s "anti-double-trigger" tests):
+  1. *Single consumption point*: `InputControlsModule.
+     sampleMenuNavigation()` clears its own `confirmPressed`/`backPressed`
+     edge flags on read, and is called exactly once per rendered frame
+     (`GameRuntime.emitMenuNavigationFrame`, mirroring the existing
+     "`pollGamepad` runs exactly once per browser frame" invariant) — one
+     physical press produces exactly one `confirmPressed`, regardless of
+     how many frames it stays held, because a *new* edge still requires a
+     full release first (same rising-edge detection `pollGamepad` already
+     used for gameplay edges).
+  2. *Stick hysteresis*: `up`/`down`/`left`/`right` "held" states from the
+     left stick engage at `|axis| > 0.5` and release only below `0.35`
+     (`axisHysteresis` in `InputControlsModule.ts`) — a stick resting
+     right at a single threshold value can't oscillate held/released
+     across frames and machine-gun the focus. Held-repeat timing itself
+     (`useMenuGamepadNavigation.ts`): first move immediate, then a 380ms
+     delay, then repeats every 140ms.
+  3. *Edge quarantine across context switches*: `InputControlsModule` now
+     tracks `gameplayEdgesEnabled`/`menuEdgesEnabled` flags, set once per
+     frame by `GameRuntime.applyMenuNavigationGates()` from
+     `matchFlow.areControlsActive()` / the new `MENU_NAVIGABLE_STATES`
+     list (`MatchFlowTypes.ts`). `pollGamepad`'s South/East rising edges
+     only ever populate *one* of two completely separate queues — the
+     existing gameplay `pendingEdges` array (JUMP/BALL_CAMERA/PAUSE) or
+     the new menu confirm/back booleans — gated by these flags, which are
+     never simultaneously true for any real match state. Without this, a
+     South press to click RESUME on the pause menu would leave a queued
+     gameplay JUMP edge that fires the instant play resumes (pre-R11, the
+     pause-menu early return in `GameRuntime.onFixedTick` already meant
+     such edges sat queued rather than being dropped, then got consumed
+     the moment gameplay sampling resumed — this is the literal root
+     cause the quarantine removes). Keyboard/mouse gameplay edges are
+     unaffected — this quarantine is gamepad-only, since KB&M has no menu-
+     navigation surface to be quarantined from.
+  4. *Require-release re-arm on resume*: even with clean edge queues, the
+     physics module's own per-car jump edge-detector operates on the
+     *held* `CarInput.jump` boolean, not on the edge-queue mechanism above
+     — so clicking RESUME with South (=jump on gamepad by default) still
+     physically held would make `jumpHeld` read `true` on the very first
+     post-resume gameplay tick regardless of any edge-queue fix, and the
+     physics side (frozen at `jump:false` across the pause) would see a
+     rising edge and jump. `InputControlsModule.rearmGameplayInputs()`
+     snapshots every currently-held gamepad button/keyboard code/mouse
+     button into three `Set`s and masks each from **gameplay** sampling
+     (`keyPressedForGameplay`/`mousePressedForGameplay`/
+     `gamepadButton{Pressed,Value}ForGameplay`) until it is individually,
+     physically released — each helper drops its own mask entry the
+     instant the underlying input reads not-held, so one release re-arms
+     permanently rather than leaving anything stuck masked. `GameRuntime.
+     applyMenuNavigationGates()` calls `rearmGameplayInputs()` +
+     `clearPendingEdges()` on every `areControlsActive()` false→true
+     transition (resume from pause today; countdown GO after menus once
+     R12/R13 land more menu-navigable states).
+- **Ordering bug found and fixed during implementation, not by inspection
+  — caught by the "no jump on resume" Playwright gate**: the gating/re-arm
+  call was originally placed *after* `FixedStepCoordinator.advance()` in
+  `GameRuntime.frame()`. Since the RESUME click itself happens inside that
+  same call (via the composable's `runtime:menu-navigation` listener,
+  triggered synchronously from `emitMenuNavigationFrame` — itself called
+  after `advance()`), the match-state flip to `PLAYING` only becomes
+  visible to `applyMenuNavigationGates()` on the *next* rendered frame.
+  With gating placed after `advance()`, that next frame would run its
+  fixed-tick(s) — and therefore its first post-resume gameplay input
+  sample — *before* the re-arm mask was captured, so a still-held South
+  jumped the car exactly once on resume before ever getting masked.
+  Fixed by moving `applyMenuNavigationGates()` to the *start* of `frame()`
+  (before `updateBrowserFrame`/`advance()`), so the re-arm from a
+  transition that completed by the end of frame N always runs before
+  frame N+1's fixed-tick advance ever samples gameplay input in the new
+  state — see the ordering comment at the `frame()` call site.
+- `MENU_NAVIGABLE_STATES` (`MatchFlowTypes.ts`) is a small, explicitly
+  named list (`MAIN_MENU`/`MATCH_SETUP`/`SETTINGS`/`PAUSED`/
+  `MATCH_RESULTS`) rather than `!areControlsActive()` — several states
+  (`COUNTDOWN_*`, `GOAL_CELEBRATION`, `OVERTIME_INTRO`, etc.) are also
+  controls-inactive but have no `[data-menu-root]` visible, so gamepad
+  input there should be neither a gameplay edge nor a menu edge. R12/R13
+  extend this same list (`CAR_CUSTOMISE`, `TOURNAMENT_BRACKET`,
+  `TOURNAMENT_VICTORY`) rather than each screen inventing its own.
+
 ## Post-launch polish pass — WS1 (plan/POLISH_OVERHAUL_PLAN.md)
 
 - **Confirmed and fixed the real "controller does not work at all" bug**:
