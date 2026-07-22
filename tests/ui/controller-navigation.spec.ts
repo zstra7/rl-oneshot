@@ -115,8 +115,10 @@ test("main menu: dpad down/up moves focus, south opens MATCH_SETUP", async ({ pa
 
   const index = await connectPad(page);
 
+  // R12/R13 inserted CUSTOMISE CAR and TOURNAMENT between PLAY and
+  // SETTINGS, so one dpad-down from PLAY now lands on CUSTOMISE CAR.
   await pulse(page, index, DPAD_DOWN);
-  expect(await activeElementText(page)).toBe("SETTINGS");
+  expect(await activeElementText(page)).toBe("CUSTOMISE CAR");
 
   await pulse(page, index, DPAD_UP);
   expect(await activeElementText(page)).toBe("PLAY");
@@ -196,7 +198,7 @@ test("settings: dpad reaches a camera slider, dpad-right x3 increases its value"
 test("mouse still works after gamepad use", async ({ page }) => {
   const index = await connectPad(page);
   await pulse(page, index, DPAD_DOWN);
-  expect(await activeElementText(page)).toBe("SETTINGS");
+  expect(await activeElementText(page)).toBe("CUSTOMISE CAR");
 
   await page.getByRole("button", { name: "PLAY" }).click();
   await expect.poll(() => matchState(page)).toBe("MATCH_SETUP");
@@ -327,7 +329,7 @@ test("anti-double-trigger: left-stick hysteresis (0.45 no-op, 0.6 engages, 0.4 h
 
   // Above 0.5: engages and fires an immediate move.
   await setPadState(page, index, { axes: [0, 0.6, 0, 0] });
-  await expect.poll(() => activeElementText(page)).toBe("SETTINGS");
+  await expect.poll(() => activeElementText(page)).toBe("CUSTOMISE CAR");
 
   // Between release (0.35) and engage (0.5): stays held (hysteresis) —
   // not released and re-engaged as a fresh press — so the only further
