@@ -9,10 +9,10 @@ test.beforeEach(async ({ page }) => {
     .toBe(true);
 });
 
-test("defaults to the balanced preset (426x240)", async ({ page }) => {
+test("defaults to the clean preset (960x540)", async ({ page }) => {
   const diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVisualDiagnostics());
-  expect(diagnostics?.preset).toBe("balanced");
-  expect(diagnostics?.internalResolution).toEqual({ width: 426, height: 240 });
+  expect(diagnostics?.preset).toBe("clean");
+  expect(diagnostics?.internalResolution).toEqual({ width: 960, height: 540 });
 });
 
 test("setVisualPreset switches the internal resolution and settings live, with no console errors", async ({
@@ -25,7 +25,7 @@ test("setVisualPreset switches the internal resolution and settings live, with n
   await page.waitForTimeout(200);
   let diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVisualDiagnostics());
   expect(diagnostics?.preset).toBe("authentic");
-  expect(diagnostics?.internalResolution).toEqual({ width: 320, height: 180 });
+  expect(diagnostics?.internalResolution).toEqual({ width: 480, height: 270 });
   // WS8.A: jitter disabled product-wide (z-fighting) — all three presets
   // now report false; infrastructure/toggle wiring stays intact.
   expect(diagnostics?.settings.jitterEnabled).toBe(false);
@@ -34,7 +34,7 @@ test("setVisualPreset switches the internal resolution and settings live, with n
   await page.waitForTimeout(200);
   diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVisualDiagnostics());
   expect(diagnostics?.preset).toBe("clean");
-  expect(diagnostics?.internalResolution).toEqual({ width: 640, height: 360 });
+  expect(diagnostics?.internalResolution).toEqual({ width: 960, height: 540 });
   expect(diagnostics?.settings.jitterEnabled).toBe(false);
 
   expect(pageErrors).toEqual([]);

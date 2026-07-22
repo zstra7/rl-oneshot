@@ -33,10 +33,10 @@ export class PlaceholderSceneRenderer
   private scene: THREE.Scene | null = null;
   private camera: THREE.PerspectiveCamera | null = null;
   private psxPipeline: PsxRenderPipeline | null = null;
-  private visualPreset: VisualPreset = "balanced";
+  private visualPreset: VisualPreset = "clean";
   private reducedJitter = false;
   private ditheringDisabled = false;
-  private effectiveSettings: PsxRenderSettings = PSX_RENDER_PRESETS["balanced"];
+  private effectiveSettings: PsxRenderSettings = PSX_RENDER_PRESETS["clean"];
 
   public constructor(private readonly canvas: HTMLCanvasElement) {}
 

@@ -97,7 +97,7 @@ export class AssetPipeline implements GameModule {
       geometryRegistry: this.geometryRegistry,
       materialRegistry: this.materialRegistry,
       random: new SeededRandom(DEFAULT_PROCEDURAL_SEEDS.menuScene),
-      visualPreset: "balanced",
+      visualPreset: "clean",
       stadiumDimensions: DEFAULT_STADIUM_DIMENSIONS,
       physicsMetadata: PLACEHOLDER_PHYSICS_METADATA,
       stadiumTextures: this.stadiumTextures
@@ -301,7 +301,7 @@ export class AssetPipeline implements GameModule {
       geometryRegistry: previewGeometryRegistry,
       materialRegistry: previewMaterialRegistry,
       random: new SeededRandom(seed),
-      visualPreset: "balanced",
+      visualPreset: "clean",
       stadiumDimensions: DEFAULT_STADIUM_DIMENSIONS,
       physicsMetadata: PLACEHOLDER_PHYSICS_METADATA
     };

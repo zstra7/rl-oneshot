@@ -280,3 +280,26 @@ are now implemented.
   is misleadingly high once gamma-converted to linear, so the threshold
   is tuned well below that but still comfortably above the old
   near-black colour's much smaller linear sum.
+
+## Post-launch polish pass — R4 (graphics defaults/resolutions, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+- **Internal resolutions raised across all three PSX presets**
+  (`PsxRenderSettings.ts`): authentic 320×180 → 480×270, balanced
+  426×240 → 640×360, clean 640×360 → 960×540. `jitterGrid` values are
+  left unchanged (jitter itself stays disabled product-wide per the
+  WS8.A z-fighting deviation above; the grid constants only matter if
+  it's re-enabled via the accessibility toggle path).
+- **Default preset changed `"balanced"` → `"clean"`** everywhere a
+  default is read: `settingsStore.DEFAULT_SETTINGS.graphics.preset`,
+  `PlaceholderSceneRenderer`'s `visualPreset`/`effectiveSettings` field
+  initialisers, `AssetPipeline.initialise`'s procedural context (both
+  the main pipeline context and the car-preview context), and
+  `GameRuntime.getVisualPreset()`/`getVisualDiagnostics()`'s fallback
+  values used before the real scene renderer exists. Fresh installs (no
+  `localStorage` settings yet) now render at the higher-fidelity 960×540
+  clean preset by default instead of balanced.
+- **Density defaults raised to "max settings" defaults**:
+  `DEFAULT_SETTINGS.graphics.particleDensity`/`starDensity`: `"normal"` →
+  `"high"` (`glowEnabled` was already `true`, `fullscreen` stays `false`
+  — a fullscreen default would be surprising/disruptive on load, unlike
+  a visual-fidelity knob).

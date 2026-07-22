@@ -24,7 +24,7 @@ export interface PsxRenderSettings {
 export const PSX_RENDER_PRESETS: Record<VisualPreset, PsxRenderSettings> = {
   authentic: {
     presetId: "authentic",
-    internalResolution: { width: 320, height: 180 },
+    internalResolution: { width: 480, height: 270 },
     jitterGrid: { width: 240, height: 135 },
     ditherStrength: 0.045,
     colourLevels: 20,
@@ -37,7 +37,7 @@ export const PSX_RENDER_PRESETS: Record<VisualPreset, PsxRenderSettings> = {
   },
   balanced: {
     presetId: "balanced",
-    internalResolution: { width: 426, height: 240 },
+    internalResolution: { width: 640, height: 360 },
     jitterGrid: { width: 240, height: 135 },
     ditherStrength: 0.03,
     colourLevels: 32,
@@ -47,7 +47,7 @@ export const PSX_RENDER_PRESETS: Record<VisualPreset, PsxRenderSettings> = {
   },
   clean: {
     presetId: "clean",
-    internalResolution: { width: 640, height: 360 },
+    internalResolution: { width: 960, height: 540 },
     jitterGrid: { width: 240, height: 135 },
     ditherStrength: 0.015,
     colourLevels: 56,

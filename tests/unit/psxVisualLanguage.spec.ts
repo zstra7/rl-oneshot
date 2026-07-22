@@ -15,10 +15,10 @@ describe("VISUAL_PALETTE (PSX visual spec section 6)", () => {
 });
 
 describe("PSX_RENDER_PRESETS (spec sections 7 and 9)", () => {
-  it("authentic is 320x180, balanced 426x240, clean 640x360", () => {
-    expect(PSX_RENDER_PRESETS.authentic.internalResolution).toEqual({ width: 320, height: 180 });
-    expect(PSX_RENDER_PRESETS.balanced.internalResolution).toEqual({ width: 426, height: 240 });
-    expect(PSX_RENDER_PRESETS.clean.internalResolution).toEqual({ width: 640, height: 360 });
+  it("authentic is 480x270, balanced 640x360, clean 960x540", () => {
+    expect(PSX_RENDER_PRESETS.authentic.internalResolution).toEqual({ width: 480, height: 270 });
+    expect(PSX_RENDER_PRESETS.balanced.internalResolution).toEqual({ width: 640, height: 360 });
+    expect(PSX_RENDER_PRESETS.clean.internalResolution).toEqual({ width: 960, height: 540 });
   });
 
   it("dither strength decreases and colour levels increase from authentic to clean", () => {
@@ -136,14 +136,14 @@ describe("applyVertexJitter (spec section 8)", () => {
 describe("PsxRenderPipeline (spec section 7)", () => {
   it("constructs a render target sized to the preset's internal resolution with nearest filtering", () => {
     const pipeline = new PsxRenderPipeline(PSX_RENDER_PRESETS.authentic);
-    expect(pipeline.getInternalResolution()).toEqual({ width: 320, height: 180 });
+    expect(pipeline.getInternalResolution()).toEqual({ width: 480, height: 270 });
     pipeline.dispose();
   });
 
   it("applySettings resizes the internal resolution when switching preset", () => {
     const pipeline = new PsxRenderPipeline(PSX_RENDER_PRESETS.authentic);
     pipeline.applySettings(PSX_RENDER_PRESETS.clean);
-    expect(pipeline.getInternalResolution()).toEqual({ width: 640, height: 360 });
+    expect(pipeline.getInternalResolution()).toEqual({ width: 960, height: 540 });
     pipeline.dispose();
   });
 });

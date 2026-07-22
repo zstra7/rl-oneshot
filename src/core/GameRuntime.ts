@@ -699,7 +699,7 @@ export class GameRuntime implements GameRuntimeFacade {
   }
 
   public getVisualPreset(): VisualPreset {
-    return this.sceneRenderer?.getVisualPreset() ?? "balanced";
+    return this.sceneRenderer?.getVisualPreset() ?? "clean";
   }
 
   public getVfxActiveParticleCount(): number {
@@ -765,9 +765,9 @@ export class GameRuntime implements GameRuntimeFacade {
   public getVisualDiagnostics(): VisualDiagnostics {
     return (
       this.sceneRenderer?.getVisualDiagnostics() ?? {
-        preset: "balanced",
-        internalResolution: PSX_RENDER_PRESETS["balanced"].internalResolution,
-        settings: PSX_RENDER_PRESETS["balanced"]
+        preset: "clean",
+        internalResolution: PSX_RENDER_PRESETS["clean"].internalResolution,
+        settings: PSX_RENDER_PRESETS["clean"]
       }
     );
   }

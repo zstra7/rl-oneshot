@@ -26,7 +26,7 @@ test("selecting a graphics preset takes effect on the live renderer immediately"
   await page.getByTestId("graphics-preset-authentic").click();
   let diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVisualDiagnostics());
   expect(diagnostics?.preset).toBe("authentic");
-  expect(diagnostics?.internalResolution).toEqual({ width: 320, height: 180 });
+  expect(diagnostics?.internalResolution).toEqual({ width: 480, height: 270 });
 
   await page.getByTestId("graphics-preset-clean").click();
   diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVisualDiagnostics());
@@ -76,7 +76,7 @@ test("a corrupted settings value in localStorage falls back to defaults without 
     .toBe(true);
 
   const diagnostics = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVisualDiagnostics());
-  expect(diagnostics?.preset).toBe("balanced");
+  expect(diagnostics?.preset).toBe("clean");
   expect(pageErrors).toEqual([]);
 });
 

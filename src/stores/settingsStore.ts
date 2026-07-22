@@ -69,9 +69,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     shakeIntensity: 1
   },
   graphics: {
-    preset: "balanced",
-    particleDensity: "normal",
-    starDensity: "normal",
+    preset: "clean",
+    particleDensity: "high",
+    starDensity: "high",
     glowEnabled: true,
     fullscreen: false
   },
