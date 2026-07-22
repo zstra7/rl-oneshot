@@ -614,3 +614,38 @@ result into a loss or overtime. Existing `match-flow.spec.ts` (11 tests)
 and `release-gate`/`smoke` suites were re-run against both
 `chromium-dev` and a fresh `chromium-preview` build and stay green,
 unmodified.
+
+## Post-launch polish pass — R14 (final integration, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+Ran the whole R1-R13 surface together rather than trusting each
+workstream's isolated verification: full typecheck, full unit suite
+(296 tests), `npm run validate`, and the complete Playwright suite on
+both browser projects, plus `npm run test:release`. This caught one
+real cross-workstream regression that no single workstream's own tests
+could have seen: R11's `controller-navigation.spec.ts` hardcoded the
+main menu as PLAY→SETTINGS two items apart, but R12 and R13 each later
+inserted a menu item between them (CUSTOMISE CAR, then TOURNAMENT) —
+a single dpad-down from PLAY now reaches CUSTOMISE CAR, not SETTINGS.
+Fixed the two affected assertions; this is exactly the kind of
+integration-only bug the final pass exists to catch. A handful of other
+failures on the first full-suite run turned out to be non-regressive
+once re-run in isolation: two AI Playwright tests and one audio test
+timed out only under full-parallel resource contention (clean when run
+alone), and `release-gate.spec.ts`'s "no debug hooks exposed" check
+fails against a `PLAYWRIGHT_TEST=1` test-mode build by design (that
+flag is what installs `window.__GAME_TEST__` in the first place) — the
+release gate itself always runs against a plain build, which passes.
+
+Did a screenshot QA sweep (throwaway Playwright spec, not committed)
+across the scenes called out in the plan: main menu (single ball, four
+menu items), match setup (LEGEND chip visible), the customise screen
+mid-live-preview, a car mid-climb at an arena corner (confirmed the R1
+corner-wall panel geometry actually renders, not just passes its unit
+tests), a goal moment with the R6 blast and R7 "WHAT A SAVE!" quick
+chat both visible at once, and all three tournament-bracket phases plus
+the CHAMPION victory screen. Everything matched the plan's intent with
+no further fixes needed. Treated the "manual feel checklist" (drive
+every wall/corner, flip with a steady camera, get auto-flipped from a
+stuck pose, rebind a key, navigate every menu with a virtual pad) as
+already covered by the existing real-input Playwright suites for each
+of those features rather than writing a redundant standalone script.

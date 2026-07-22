@@ -214,13 +214,45 @@ Workstreams R1-R13 are implemented, committed, and pushed to
   build; existing `match-flow.spec.ts` (11 tests) and the full
   `npm run test:release` gate stay green, unmodified.
 
-R14 (final integration pass across the whole ramps/features plan) is the
-next and last workstream in this plan.
+- **R14** — Final integration pass. Ran the full check across R1-R13
+  together rather than per-workstream in isolation: `npx vue-tsc --noEmit`
+  (clean), `npx vitest run` (296/296), `npm run validate` (contracts/
+  three.js-skills/assets/architecture, all pass), the complete Playwright
+  suite on both `chromium-dev` and a fresh `chromium-preview` build, and
+  `npm run test:release`. Found and fixed one real cross-workstream
+  regression: `tests/ui/controller-navigation.spec.ts` (written during
+  R11) hardcoded a 2-item main menu (PLAY → one dpad-down → SETTINGS);
+  R12 and R13 each inserted a menu item (CUSTOMISE CAR, TOURNAMENT)
+  between them, so one dpad-down from PLAY now lands on CUSTOMISE CAR —
+  updated the two affected assertions. Everything else that failed on
+  the first full-suite run (two `tests/ai/*.spec.ts` timeouts, one
+  `tests/ui/audio.spec.ts` timeout, `release-gate.spec.ts`'s "no debug
+  hooks" check) was confirmed non-regressive by re-running each in
+  isolation: the first three are resource-contention flakiness under
+  full-parallel load (all pass cleanly alone), and the release-gate one
+  is the known, pre-existing test-mode-build-vs-plain-build distinction
+  documented in `docs/build-decisions.md`'s Phase 1 section (the
+  `PLAYWRIGHT_TEST=1` build used for `tests/integration/**`-dependent
+  suites installs `window.__GAME_TEST__`; the plain build the release
+  gate itself requires does not). Did a screenshot QA sweep (throwaway
+  spec, not committed) across main menu, match setup (LEGEND chip),
+  customise screen (live colour change), a corner mid-climb (confirmed
+  the R1 corner-wall geometry actually renders), a goal moment (blast +
+  "WHAT A SAVE!" quick chat both visible together), and all three
+  tournament-bracket phases plus the CHAMPION victory screen — all
+  matched the plan's intent, no further fixes needed. The "manual feel
+  checklist" (ramp/corner driving, camera steadiness through dodges,
+  auto-flip, rebinding, full virtual-pad menu navigation) is covered by
+  existing green suites (`arena-ramps.spec.ts`, `tests/camera/*`,
+  `autoFlip.spec.ts`, `rebinding.spec.ts`, `controller-navigation.spec.ts`)
+  rather than a separate new scripted pass, since those already exercise
+  real inputs end-to-end.
+
+The ramps/features plan (`plan/RAMPS_AND_FEATURES_PLAN.md`, R1-R14) is
+now complete.
 
 ## Next exact task
-- R14: final integration pass for plan/RAMPS_AND_FEATURES_PLAN.md
-  (full verification across R1-R13 together, screenshot QA, docs
-  consolidation). Once that lands, future work would go back to picking
+- No open task from this plan. Future work would go back to picking
   up items from the various `docs/*-deviations.md` "Deferred" lists
   (procedural music, car-car impact/powerslide audio detection, live
   camera/most-accessibility settings wiring, custom keyboard/gamepad
