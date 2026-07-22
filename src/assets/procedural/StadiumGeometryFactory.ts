@@ -45,14 +45,22 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   // opaque concrete wall texture — the floor stays opaque (WS8
   // retextures it) and the structural ribs stay opaque too, reading as
   // the frame holding the glass up.
-  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v1", () => {
+  // R2 (plan/RAMPS_AND_FEATURES_PLAN.md): the hex pattern was too dark to
+  // read — added `emissive`/`emissiveMap` (same texture, so the
+  // transparent-black background between hex lines stays dark and only
+  // the lines themselves glow) and raised opacity slightly. Still clearly
+  // see-through, now visibly faint rather than invisible.
+  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v2", () => {
     const hexTexture = createHexShellTexture();
     hexTexture.repeat.set(10, 10);
     return new THREE.MeshStandardMaterial({
       color: 0x9fd8ff,
       map: hexTexture,
+      emissive: new THREE.Color(0x66d4ff),
+      emissiveMap: hexTexture,
+      emissiveIntensity: 0.85,
       transparent: true,
-      opacity: 0.16,
+      opacity: 0.28,
       roughness: 0.15,
       metalness: 0.6,
       side: THREE.DoubleSide,
@@ -350,9 +358,12 @@ function createFloorMarkings(context: ProceduralAssetContext): THREE.Group {
   return group;
 }
 
-const RIB_SPACING = 4;
-const RIB_WIDTH = 0.4;
-const RIB_DEPTH = 0.5;
+// R2 (plan/RAMPS_AND_FEATURES_PLAN.md): skinnier, more spaced out, and
+// visibly lit (was near-black and read as solid/heavy) — spacing 4->6,
+// width 0.4->0.22, depth 0.5->0.4, plus an emissive tint.
+const RIB_SPACING = 6;
+const RIB_WIDTH = 0.22;
+const RIB_DEPTH = 0.4;
 
 /**
  * PSX visual spec section 13: evenly-spaced vertical structural ribs
@@ -367,13 +378,20 @@ function createStructuralRibs(context: ProceduralAssetContext): THREE.Group {
   group.name = "StructuralRibs";
 
   const ribMaterial = context.materialRegistry.getOrCreate(
-    "stadium-rib-v1",
-    () => new THREE.MeshStandardMaterial({ color: 0x0c0e15, roughness: 0.6, metalness: 0.4 })
+    "stadium-rib-v2",
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: 0x39414f,
+        emissive: new THREE.Color(0x18222e),
+        emissiveIntensity: 0.6,
+        roughness: 0.6,
+        metalness: 0.4
+      })
   );
   applyVertexJitter(ribMaterial, "arenaMetal");
 
   const ribGeometry = context.geometryRegistry.getOrCreate(
-    "stadium-rib-v1",
+    "stadium-rib-v2",
     () => new THREE.BoxGeometry(RIB_WIDTH, interiorHeight, RIB_DEPTH)
   );
 

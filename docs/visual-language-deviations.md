@@ -256,3 +256,27 @@ are now implemented.
   local Z axis — its normal, wherever it currently points in world
   space — which is exactly "spin the tile" regardless of the prior
   flattening rotation.
+
+## Post-launch polish pass — R2 (hex shell emissive + rib tuning, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+- **Glass shell readability.** The hex-pattern glass material
+  (`stadium-glass-shell-v1` → `v2`) was too dark to read against the PSX
+  background. Added `emissive` + `emissiveMap` using the *same* hex
+  texture as the diffuse `map` — since the texture's background is
+  transparent black, only the hex line pixels contribute any emissive
+  glow, so the shell stays "faint and transparent" everywhere except the
+  lines themselves, which now clearly read. Opacity nudged 0.16 → 0.28
+  (still clearly see-through). Covered by
+  `tests/unit/stadiumVisuals.spec.ts`, which asserts `emissiveMap ===
+  map` (proving the "same texture" design) and an opacity band.
+- **Rib readability + spacing.** `stadium-rib-v1` → `v2`: width 0.4 →
+  0.22 (skinnier), depth 0.5 → 0.4, spacing 4 → 6 (more spaced out,
+  `ribCount` drops from 12 to 8 per side within R1's corner-clamped run
+  length of 48m), colour lightened from near-black `0x0c0e15` to
+  `0x39414f` with an `emissive`/`emissiveIntensity` tint. The unit test's
+  "not near-black" assertion accounts for three.js storing
+  `MeshStandardMaterial.color` in **linear** space when colour management
+  is enabled — the naive sRGB-space sum of a mid-grey hex like `0x39414f`
+  is misleadingly high once gamma-converted to linear, so the threshold
+  is tuned well below that but still comfortably above the old
+  near-black colour's much smaller linear sum.
