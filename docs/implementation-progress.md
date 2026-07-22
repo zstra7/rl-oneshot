@@ -174,9 +174,53 @@ test-mode build, which pass 3/3 when re-run against a genuine plain
 `vite build`); `npm run test:release` (real build + smoke/release suite)
 7/7 green.
 
+## Ramps & Features plan (plan/RAMPS_AND_FEATURES_PLAN.md) — in progress
+
+Workstreams R1-R13 are implemented, committed, and pushed to
+`claude/master-build-brief-u8agzk`:
+
+- **R1** — Arena ramps & corners overhaul (shared physics/visual
+  generator).
+- **R2** — Hex shell emissive + rib tuning.
+- **R3** — Auto-flip v2: contact-based stranded detection, works while
+  drifting.
+- **R4** — Raised PSX internal resolutions, clean preset + high density
+  default.
+- **R5** — Hold camera yaw through dodges instead of tracking the
+  tumble.
+- **R6** — Goal-scored blast force throws nearby cars away from the goal
+  mouth.
+- **R7** — "WHAT A SAVE!" quick-chat overlay on AI goals.
+- **R8** — Removed the duplicate menu ghost ball.
+- **R9** — Legend AI difficulty as a real 4th tier.
+- **R10** — Rebindable controls + air-roll sensitivity.
+- **R11** — Controller menu navigation with anti-double-trigger
+  safeguards.
+- **R12** — Customise Car menu: live body/boost colour override +
+  preview.
+- **R13** — Tournament mode: a 4-round easy->medium->hard->legend
+  ladder. `TournamentController` (`src/game-flow/TournamentController.ts`)
+  is a pure, engine-independent state machine; `GameRuntime` wires it
+  into real matches (AI difficulty/duration per round, match-end
+  detection, an abandonment safety net that resets the tournament and
+  restores pre-tournament settings no matter which "return to menu" path
+  triggered it). Two new menu screens (`TournamentBracket.vue`,
+  `TournamentVictory.vue`), a `ResultsScreen.vue` CONTINUE/LEAVE
+  TOURNAMENT variant, and a `tournamentStore.ts` Pinia mirror. Session-only
+  — no persistence, a refresh abandons an in-progress tournament (see
+  `docs/build-decisions.md`). `tests/unit/tournament.spec.ts` (9 tests)
+  and `tests/game-flow/tournament.spec.ts` (7 scripted end-to-end
+  scenarios) both green on `chromium-dev` and a fresh `chromium-preview`
+  build; existing `match-flow.spec.ts` (11 tests) and the full
+  `npm run test:release` gate stay green, unmodified.
+
+R14 (final integration pass across the whole ramps/features plan) is the
+next and last workstream in this plan.
+
 ## Next exact task
-- None — both the Master Brief's 18 phases and the post-launch polish
-  overhaul's 10 workstreams are complete. Future work would be picking
+- R14: final integration pass for plan/RAMPS_AND_FEATURES_PLAN.md
+  (full verification across R1-R13 together, screenshot QA, docs
+  consolidation). Once that lands, future work would go back to picking
   up items from the various `docs/*-deviations.md` "Deferred" lists
   (procedural music, car-car impact/powerslide audio detection, live
   camera/most-accessibility settings wiring, custom keyboard/gamepad

@@ -511,3 +511,106 @@ the override only ever touches `team === "player"`) and
 `tests/release/release-gate.spec.ts` (the new "CUSTOMISE CAR" menu item
 doesn't collide with `getByText("PLAY")`'s uniqueness assumption) still
 pass unmodified.
+
+## R13 (Tournament mode, plan/RAMPS_AND_FEATURES_PLAN.md)
+
+**Pure state machine, kept deliberately dumb.** `TournamentController`
+(`src/game-flow/TournamentController.ts`) has zero engine dependencies —
+no `PhysicsFacade`, no `MatchFlowController` — so `tests/unit/
+tournament.spec.ts` exercises the entire ladder (full win walkthrough,
+elimination, idempotence, null-winner-as-loss, duration propagation,
+`leave()` reset) without booting any engine module at all. All of the
+actual engine wiring (starting real matches, applying AI difficulty,
+detecting match-end) lives in `GameRuntime`, which is the only thing that
+knows about both the tournament controller and `MatchFlowController`.
+
+**Two new match states, no dedicated camera.** `TOURNAMENT_BRACKET` and
+`TOURNAMENT_VICTORY` were added everywhere `CAR_CUSTOMISE` (R12) was
+added — `MatchFlowController`'s `MENU_STATES`, `GameRuntime`'s
+`MENU_MATCH_STATES`, `App.vue`'s `showGameplayHud` exclusion list, and
+`MENU_NAVIGABLE_STATES` — *except* `ChaseCameraController`'s dedicated
+per-screen camera branch: unlike `CAR_CUSTOMISE`'s close orbit around the
+live car, both tournament screens use the plain generic menu-orbit
+camera, so they were simply added to `ChaseCameraController`'s own
+`MENU_MATCH_STATES` list (the one `CAR_CUSTOMISE` is deliberately absent
+from — see the R12 section above) rather than getting a new branch.
+
+`MatchFlowController.startMatch()`'s legal-states guard also gained
+`TOURNAMENT_BRACKET`, since the bracket's PLAY NEXT GAME button starts a
+match directly from that screen (the same way `MATCH_SETUP`/`MAIN_MENU`
+already could) — this was the one non-obvious extra call site the plan's
+state-list enumeration didn't spell out but the flow requires.
+
+**Match-end and abandonment both funnel through one place:
+`emitSessionStateChanged()`.** The plan calls for match-end detection
+("phase in-match -> MATCH_RESULTS transition") and an abandonment safety
+net ("any transition to MAIN_MENU while a tournament is active") to both
+live in "GameRuntime's existing per-tick session sync". Rather than
+hooking only `onFixedTick`, both edge-detectors were placed in a small
+`syncTournamentFromMatchFlow(matchState)` helper called from the *start*
+of `emitSessionStateChanged()` — which both `onFixedTick` (once per fixed
+tick) and every state-mutating facade method (`pauseMatch`,
+`returnToMenu`, `leaveTournament`, etc.) already call. This means a
+direct, outside-the-tick-loop transition — like the pause menu's own
+RETURN TO MENU, which calls `gameFlow.returnToMenu()` and then
+`emitSessionStateChanged()` synchronously — is caught immediately rather
+than lagging a tick behind a call that only checked in `onFixedTick`. The
+net effect is the same "one code path" the plan asks for; the trigger
+point is just slightly broader than literally "per-tick" so it also
+covers same-frame facade calls.
+
+**Save/restore point: `beginTournament()`, not `enter()`.** The plan says
+"save the pre-tournament AI difficulty and duration the first time a
+tournament begins". `enter()` (opening the TOURNAMENT setup screen) can
+be visited and back out of via BACK without ever playing a game, so the
+save happens in `beginTournament()` (BEGIN TOURNAMENT, which locks in the
+duration and opens the bracket) guarded by `tournamentSavedDifficulty ===
+null`, restored (and nulled back out) by a shared
+`restoreSavedTournamentSettings()` helper called from both
+`leaveTournament()` and the abandonment safety net.
+
+**`ResultsScreen.vue` conditions on `active`, not `phase === "in-match"`.**
+By the time the results screen actually renders, `recordMatchResult` has
+already fired (same transition into `MATCH_RESULTS` that revealed the
+screen), so `phase` has already moved on to `"bracket"`/`"eliminated"`/
+`"champion"`. `active` is what stays true for the whole tournament,
+including this screen, so it's the only condition that needs checking to
+swap REPLAY/RETURN TO MENU for CONTINUE/LEAVE TOURNAMENT — non-tournament
+rendering is completely untouched (verified by re-running
+`match-flow.spec.ts`'s "results screen" test unmodified).
+
+**Tournament victory VFX: CSS-only, no engine coupling added.** The plan
+explicitly allows triggering the existing goal-celebration VFX on mount
+"if trivially available" but says not to add new engine coupling just for
+this. There is no existing hook to fire that VFX outside of a live match
+(it's driven off real goal-scored physics events via `VfxModule`'s
+`detectGoalCelebration`), so `TournamentVictory.vue` uses a pure-CSS
+shimmer/sparkle (radial-gradient "sparkle" layer, slow drift animation)
+instead, respecting `settingsStore.settings.accessibility.reducedFlashes`
+the same way `QuickChatOverlay.vue` (R7) does.
+
+**Session-only, no persistence — an explicit decision.** Nothing about
+tournament state is written to `localStorage`; a page refresh mid-ladder
+simply abandons it (back to a fresh, inactive tournament at boot). This
+mirrors how the rest of match-flow session state already works (a
+mid-match refresh also just restarts at the main menu) and avoids a whole
+extra persistence-and-migration surface for a feature that's inherently
+a single play session.
+
+Playwright coverage in `tests/game-flow/tournament.spec.ts` covers all 7
+scripted scenarios from the plan: bracket setup and BEGIN; round-0
+PLAY NEXT GAME applying "easy" difficulty + the chosen duration; a single
+win showing CONTINUE/LEAVE TOURNAMENT (not REPLAY) and advancing the
+bracket to "medium"; a full 4-win run to the champion screen with AI
+difficulty restored on RETURN TO MENU; an elimination path; LEAVE
+TOURNAMENT mid-bracket followed by a clean normal match; and the
+abandonment safety net via the pause menu's own RETURN TO MENU. Per the
+plan's explicit warning, the win-scenario helper re-parks the opponent
+car to `(40, 1, 40)` *inside* every one-second slice of the fast-forward
+loop (not just once beforehand) — hard/legend-tier AI (rounds 2/3) is
+competent enough to drive back and score for real during a 60-second
+fast-forward otherwise, which would flip a scripted "player always wins"
+result into a loss or overtime. Existing `match-flow.spec.ts` (11 tests)
+and `release-gate`/`smoke` suites were re-run against both
+`chromium-dev` and a fresh `chromium-preview` build and stay green,
+unmodified.
