@@ -481,19 +481,39 @@ const strandedNonUpright =
   translation.y < AUTO_FLIP_MAX_HEIGHT &&
   V.length(linvel) < AUTO_FLIP_SPEED_THRESHOLD &&
   V.length(angvel) < AUTO_FLIP_ANGULAR_SPEED_THRESHOLD &&
-  // Actively wall-driving exemption: a car gripping a wall/fillet with throttle
-  // held is exactly the "supportNormal horizontal + grounded" pose — never flip it.
-  !(car.runtime.grounded &&
-    car.runtime.supportNormal.y < 0.7 &&
-    Math.abs(car.currentInput.throttle) > 0.05);
+  // Surface-contact exemption: wheels resting/driving on any upward-facing
+  // surface (floor, ramp, fillet segment) means the car is recoverable by its
+  // own controls — never auto-flip it, throttle held or not. Deliberately NOT
+  // input-gated: a genuinely stuck-on-side player will be mashing throttle and
+  // must still get flipped; the discriminator is wheel contact, not input.
+  !(car.runtime.grounded && car.runtime.supportNormal.y > 0.05);
 ```
+
+**Why this cannot misfire on ramps/fillets/walls** (each claim is test-gated below):
+
+- *Driving or coasting up a ramp, throttle held or released*: the suspension probes
+  contact the fillet segment, whose surface normal always has `normal.y ≥ cos(81°)
+  ≈ 0.156` even on the steepest segment (R1's generator invariant test #2 pins
+  normals) → `grounded && supportNormal.y > 0.05` → exempt. An earlier draft used a
+  throttle-held gate here; that left a false-flip window for a car that *coasts* up
+  the ramp, releases throttle and rests tilted near the base (the grip model holds
+  idle cars on slopes) — the contact-based exemption closes it.
+- *Driving on the truly vertical wall section* (`supportNormal.y ≈ 0`, not exempt by
+  the normal test): the vertical wall only begins at the fillet top, `y = 2.0` —
+  above the `AUTO_FLIP_MAX_HEIGHT = 1.2` gate. Unreachable combination.
+- *Upside down on the roof*: the WS7 empirical quirk reports `grounded: true` but
+  with a **downward-pointing** support normal (`normal.y < 0`) → not exempt → flips,
+  as today.
+- *On its side / nose-stand / tail-stand*: probes point sideways/along the body →
+  not grounded (or grounded on a wall with `normal.y ≈ 0` when wedged against one)
+  → not exempt → flips, including while drifting up to 6 m/s.
+- *Mid-dodge*: dodge spin exceeds the 4 rad/s angular gate; *aerials*: fail the
+  height gate; brief tumbling touch-downs: reset by the 0.75 s sustain requirement.
 
 Righting action stays as-is (preserve yaw via flattened forward, +0.5 y pop, zero
 angvel) — **do not zero linear velocity** (a drifting car keeps its slide, upright).
-Note in the doc comment: `dodgeState === "active"` never survives the angular gate
-(dodges spin > 4 rad/s), and aerials never pass the height gate; the throttle-gated
-wall exemption covers low-wall crawling. Applies to every car in the registry —
-player and AI both (already true; state it in the comment).
+Applies to every car in the registry — player and AI both (already true; state it in
+the comment).
 
 ### Gates (rewrite `tests/unit/autoFlip.spec.ts`)
 
@@ -513,11 +533,22 @@ player and AI both (already true; state it in the comment).
    single-tick +0.5 jump paired with up.y snapping to 1; simplest robust assertion —
    `car.runtime` isn't exposed, so assert `upY` never jumps from < 0.7 to > 0.99
    between consecutive ticks).
-6. **New** upright-brake regression: upright car decelerating 5 → 0 over 300 ticks
+6. **New** ramp-coast regression (the false-flip window the contact exemption
+   exists to close): drive the car up a side-wall fillet with throttle+boost until
+   `upY < 0.55`, then release all input and step 300 ticks (≈ 2.5 s, well past the
+   0.75 s timer): the car must never be teleport-righted while it remains in contact
+   (same `upY` continuity assertion as #5) — it may naturally roll back down and
+   settle upright, which is fine; the forbidden signature is the discontinuous snap.
+7. **New** ramp-park regression: use `setCarState` to place the car resting on a
+   mid-fillet segment (position/orientation matching a generator segment at
+   θ ≈ 60°, zero velocity), no input, step 300 ticks: never teleport-righted.
+8. **New** upright-brake regression: upright car decelerating 5 → 0 over 300 ticks
    never gets the +0.5 y pop (`position.y` stays < 0.6).
-7. Existing WS7 kickoff/physics suites all green (`npx vitest run`).
+9. Existing WS7 kickoff/physics suites all green (`npx vitest run`).
 
-Docs: `physics-deviations.md` — v2 thresholds, why the wall exemption is throttle-gated.
+Docs: `physics-deviations.md` — v2 thresholds, why the exemption is contact-based
+(`grounded && supportNormal.y > 0.05`) rather than input-based, and the ramp-coast
+false-positive it prevents.
 
 **Commit point R3.**
 
@@ -955,7 +986,7 @@ Vue-side navigator move focus.
 
 ```ts
 export interface MenuNavigationFrame {
-  up: boolean; down: boolean; left: boolean; right: boolean;   // HELD states (dpad OR left stick past 0.5)
+  up: boolean; down: boolean; left: boolean; right: boolean;   // HELD states (dpad OR left stick, with hysteresis)
   confirmPressed: boolean; backPressed: boolean;               // edges (south/east), consume-once
 }
 ```
@@ -964,12 +995,44 @@ export interface MenuNavigationFrame {
    *separate* from gameplay JUMP edges; while a menu is open `areControlsActive()` is
    false so no double-consumption conflict — but do NOT reuse the "JUMP" edge queue;
    track menu edges independently in `pollGamepad`).
+
+   **Anti-double-trigger rules** (each is a test gate below — polling-based gamepad
+   input has three classic double-action leaks, all closed here):
+
+   - *Single consumption point*: `pollGamepad` runs exactly once per browser frame
+     (existing `updateBrowserFrame` path — never additionally from the fixed tick),
+     and `sampleMenuNavigation()` clears its edge flags on read. One physical press
+     produces exactly one `confirmPressed`, no matter how many frames it is held —
+     the previous-buttons array means a *new* edge requires a full release first.
+   - *Stick hysteresis*: the left-stick direction "held" states engage at |axis| >
+     0.5 and release only below 0.35 — a stick hovering at the threshold cannot
+     oscillate held/released across frames and machine-gun the focus.
+   - *Edge quarantine across context switches*: while `matchState` is
+     menu-navigable, gamepad presses must NOT enqueue gameplay edges (`JUMP` etc.) —
+     otherwise pressing South to click RESUME leaves a queued JUMP that fires the
+     instant play resumes. `pollGamepad` checks a `gameplayEdgesEnabled` flag (set
+     by GameRuntime from `areControlsActive()`) before pushing gameplay edges; menu
+     edges are likewise not collected while gameplay is active.
+   - *Require-release re-arm on resume*: even with clean edge queues, **held**
+     buttons leak: clicking RESUME with South held means the next gameplay tick
+     samples `jumpHeld === true` and the physics jump edge-detector (per-car
+     `previousInput`, frozen at `jump: false` across the pause) sees a rising edge —
+     the car jumps because you closed the pause menu. New
+     `InputControlsModule.rearmGameplayInputs()`: snapshots every currently-held
+     gamepad button, keyboard code and mouse button, and **masks them from gameplay
+     sampling until each is first released** (capture the mask at the moment of
+     transition; drop entries as releases arrive). `GameRuntime` calls it on every
+     transition into a controls-active state (resume from pause, countdown GO after
+     menus). This is the standard console-game "swallow held buttons on scene
+     change" pattern.
 2. `GameRuntime` — in the render-frame path (where `input.updateBrowserFrame` is
    called): if `matchState` ∈ MENU-family ∪ {PAUSED, MATCH_RESULTS, CAR_CUSTOMISE,
    TOURNAMENT_BRACKET, TOURNAMENT_VICTORY} (define one shared
    `MENU_NAVIGABLE_STATES` const in `MatchFlowTypes.ts` — R12/R13 extend it), emit a
    new typed event `runtime:menu-navigation` with the sampled frame
-   (`EventTypes.ts` += `MenuNavigationEvent`).
+   (`EventTypes.ts` += `MenuNavigationEvent`). Track the previous state and call
+   `input.rearmGameplayInputs()` + `input.clearPendingEdges()` whenever
+   `areControlsActive()` transitions false → true.
 3. New `src/ui/useMenuGamepadNavigation.ts` composable, used once in `App.vue`:
    - Subscribes to `runtime:menu-navigation`.
    - Focus targets: visible elements matching
@@ -1008,9 +1071,35 @@ virtual gamepad via `__INPUT_TEST__`):
    increased (assert via `getCameraSettings()`).
 5. Mouse still works everywhere (click PLAY with pointer after pad use — existing
    suites cover this implicitly; assert once).
-- Existing `tests/input/foundation.spec.ts` gamepad tests unmodified & green
-  (menu-nav edges must not consume gameplay JUMP edges — regression-guarded by the
-  "Right mouse button produces a jump press edge exactly once" and virtual-pad tests).
+
+**Anti-double-trigger regression tests (same file — these gate the polling rules):**
+
+6. *One press, one action*: at the main menu, set dpad-down pressed and leave it
+   held for ~300 ms (several polled frames) before clearing → focus moved exactly
+   **one** item (repeat delay is 380 ms, so no second move); a single quick south
+   press+release on PLAY opens MATCH_SETUP and does **not** also activate the
+   newly-focused element on the new screen (assert `matchState` is MATCH_SETUP and
+   `selectedDurationMinutes` unchanged — nothing on the new screen got clicked).
+7. *No jump on resume (require-release re-arm)*: start a match, pause, focus RESUME,
+   set virtual pad south **pressed and keep it held**; wait for resume; step/observe
+   ~30 ticks with south still held → player car never leaves the ground
+   (`getCarState("car-player").grounded` stays true, `linearVelocity.y < 1`); then
+   release and press south again → car jumps (proves the mask cleared on release,
+   not stuck).
+8. *No queued-edge leak*: while paused, tap south twice navigating the menu, resume
+   via RESUME, `advanceGameTicks(5)` → input diagnostics show zero pending JUMP
+   edges consumed (car stays grounded as in #7).
+9. *Stick hysteresis*: set left-stick Y to 0.45 → no navigation; 0.6 → navigates;
+   drop to 0.4 (between release 0.35 and engage 0.5) → held state persists but only
+   repeat-timed moves occur (no per-frame oscillation — assert at most 1 extra move
+   in 200 ms).
+
+- Existing `tests/input/foundation.spec.ts` gamepad tests unmodified & green —
+  **note**: the require-release re-arm must not break its "virtual gamepad
+  connect/disconnect drives CarInput" flows; those tests start from controls-active
+  states with buttons initially unpressed, so the mask starts empty. If any
+  foundation test presses a button *before* GO, fix the test-independent way:
+  re-arm only masks buttons held at the transition instant.
 
 **Commit point R11.**
 
