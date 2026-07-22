@@ -31,7 +31,14 @@ const CONTROLS_ACTIVE_STATES: readonly MatchState[] = [
   "OVERTIME_PLAYING"
 ];
 
-const MENU_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS", "CAR_CUSTOMISE"];
+const MENU_STATES: readonly MatchState[] = [
+  "MAIN_MENU",
+  "MATCH_SETUP",
+  "SETTINGS",
+  "CAR_CUSTOMISE",
+  "TOURNAMENT_BRACKET",
+  "TOURNAMENT_VICTORY"
+];
 
 // R6 (plan/RAMPS_AND_FEATURES_PLAN.md): goal-scored blast radius/strength.
 const GOAL_BLAST_RADIUS = 16;
@@ -157,12 +164,33 @@ export class MatchFlowController {
     }
   }
 
+  /** R13: legal from the main menu (fresh TOURNAMENT entry) or from a tournament match's results screen (CONTINUE routing back to the ladder). */
+  public openTournamentBracket(): void {
+    if (this.matchState === "MAIN_MENU" || this.matchState === "MATCH_RESULTS") {
+      this.setMatchState("TOURNAMENT_BRACKET");
+    }
+  }
+
+  /** R13: only reachable from a tournament match's results screen, once the ladder has reached "champion". */
+  public openTournamentVictory(): void {
+    if (this.matchState === "MATCH_RESULTS") {
+      this.setMatchState("TOURNAMENT_VICTORY");
+    }
+  }
+
   public selectMatchDuration(minutes: MatchDurationMinutes): void {
     this.selectedDurationMinutes = minutes;
   }
 
   public startMatch(config?: Partial<MatchConfig>): void {
-    if (this.matchState !== "MATCH_SETUP" && this.matchState !== "MAIN_MENU") {
+    // R13: TOURNAMENT_BRACKET's PLAY NEXT GAME starts a match directly
+    // from the bracket screen, mirroring MATCH_SETUP/MAIN_MENU's existing
+    // legal start states.
+    if (
+      this.matchState !== "MATCH_SETUP" &&
+      this.matchState !== "MAIN_MENU" &&
+      this.matchState !== "TOURNAMENT_BRACKET"
+    ) {
       return;
     }
 

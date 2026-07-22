@@ -1,5 +1,6 @@
 import type { AppState } from "@/core/ApplicationState";
 import type { GameSessionState } from "@/game-flow/MatchFlowTypes";
+import type { TournamentPublicState } from "@/game-flow/TournamentController";
 import type { MenuNavigationFrame } from "@/input/InputControlsModule";
 
 export interface RuntimeErrorRecord {
@@ -36,6 +37,8 @@ export interface SessionStateChangedEvent {
   readonly playerBoostAmount: number;
   /** WS9.C: HUD supersonic feedback on the boost ring. */
   readonly playerSupersonic: boolean;
+  /** R13: always present; inactive default when no tournament is running. */
+  readonly tournament: TournamentPublicState;
 }
 
 /**

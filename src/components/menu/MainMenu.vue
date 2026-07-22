@@ -17,6 +17,11 @@ function openCarCustomise(): void {
   runtime.playUiSound("confirm");
   runtime.openCarCustomise();
 }
+
+function openTournament(): void {
+  runtime.playUiSound("confirm");
+  runtime.enterTournament();
+}
 </script>
 
 <template>
@@ -44,7 +49,16 @@ function openCarCustomise(): void {
       >
         CUSTOMISE CAR
       </button>
-      <button type="button" class="menu-item wo-item" data-index="03" @click="openSettings">
+      <button
+        type="button"
+        class="menu-item wo-item"
+        data-index="03"
+        data-testid="open-tournament"
+        @click="openTournament"
+      >
+        TOURNAMENT
+      </button>
+      <button type="button" class="menu-item wo-item" data-index="04" @click="openSettings">
         SETTINGS
       </button>
     </nav>

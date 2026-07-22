@@ -23,14 +23,16 @@ export type MatchState =
   | "OVERTIME_PLAYING"
   | "MATCH_ENDING"
   | "MATCH_RESULTS"
-  | "PAUSED";
+  | "PAUSED"
+  | "TOURNAMENT_BRACKET"
+  | "TOURNAMENT_VICTORY";
 
 /**
  * R11: match states where a `[data-menu-root]` DOM menu is visible and
  * gamepad d-pad/stick + south/east should drive focus navigation instead
- * of gameplay. R13 extends this list further (TOURNAMENT_BRACKET,
- * TOURNAMENT_VICTORY) as those screens land — keep this the single shared
- * source GameRuntime/the navigation composable both read from.
+ * of gameplay. R13 extends this list with TOURNAMENT_BRACKET/
+ * TOURNAMENT_VICTORY — keep this the single shared source GameRuntime/the
+ * navigation composable both read from.
  */
 export const MENU_NAVIGABLE_STATES: readonly MatchState[] = [
   "MAIN_MENU",
@@ -38,7 +40,9 @@ export const MENU_NAVIGABLE_STATES: readonly MatchState[] = [
   "SETTINGS",
   "CAR_CUSTOMISE",
   "PAUSED",
-  "MATCH_RESULTS"
+  "MATCH_RESULTS",
+  "TOURNAMENT_BRACKET",
+  "TOURNAMENT_VICTORY"
 ];
 
 export type MatchDurationMinutes = 1 | 3 | 10;

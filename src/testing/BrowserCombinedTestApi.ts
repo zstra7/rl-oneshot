@@ -5,6 +5,8 @@ import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
 import type { CameraSettings } from "@/camera/CameraSettings";
 import type { AppState } from "@/core/ApplicationState";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
+import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
+import type { TournamentPublicState } from "@/game-flow/TournamentController";
 import type { BrowserGameFlowTestApi } from "@/game-flow/testing/BrowserGameFlowTestApi";
 import type { ControlBindings } from "@/input/bindings/BindingsConfig";
 import type { CapturedBinding } from "@/input/InputControlsModule";
@@ -48,6 +50,13 @@ export interface BrowserRuntimeTestApi {
   getPlayerCarColors(): { bodyColor: string; boostColor: string };
   getPlayerCarPrimaryColorHex(): string | null;
   setBoostPreviewEnabled(enabled: boolean): void;
+  /** R13: tournament mode facade, for Playwright driving/assertions. */
+  enterTournament(): void;
+  beginTournament(minutes: MatchDurationMinutes): void;
+  playNextTournamentMatch(): void;
+  continueTournament(): void;
+  leaveTournament(): void;
+  getTournamentState(): TournamentPublicState;
 }
 
 /**

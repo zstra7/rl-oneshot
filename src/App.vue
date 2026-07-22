@@ -13,13 +13,17 @@ import CarCustomise from "@/components/menu/CarCustomise.vue";
 import MainMenu from "@/components/menu/MainMenu.vue";
 import MatchSetup from "@/components/menu/MatchSetup.vue";
 import SettingsPanel from "@/components/menu/SettingsPanel.vue";
+import TournamentBracket from "@/components/menu/TournamentBracket.vue";
+import TournamentVictory from "@/components/menu/TournamentVictory.vue";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import { useApplicationStore } from "@/stores/applicationStore";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
+import { useTournamentStore } from "@/stores/tournamentStore";
 import { useMenuGamepadNavigation } from "@/ui/useMenuGamepadNavigation";
 
 const applicationStore = useApplicationStore();
 const matchFlowStore = useMatchFlowStore();
+const tournamentStore = useTournamentStore();
 const runtime = useGameRuntime();
 
 // R11: console-convention gamepad menu navigation, instantiated once for
@@ -41,6 +45,7 @@ const unsubscribeSession = runtime.onEvent("runtime:session-state-changed", (eve
   matchFlowStore.setSession(event.session);
   matchFlowStore.setPlayerBoostAmount(event.playerBoostAmount);
   matchFlowStore.setPlayerSupersonic(event.playerSupersonic);
+  tournamentStore.setState(event.tournament);
 });
 
 onBeforeUnmount(() => {
@@ -60,7 +65,9 @@ const showGameplayHud = computed(
       "CAR_CUSTOMISE",
       "MATCH_LOADING",
       "KICKOFF_SETUP",
-      "MATCH_RESULTS"
+      "MATCH_RESULTS",
+      "TOURNAMENT_BRACKET",
+      "TOURNAMENT_VICTORY"
     ].includes(matchState.value)
 );
 </script>
@@ -77,6 +84,8 @@ const showGameplayHud = computed(
     <MatchSetup v-else-if="matchState === 'MATCH_SETUP'" />
     <SettingsPanel v-else-if="matchState === 'SETTINGS'" />
     <CarCustomise v-else-if="matchState === 'CAR_CUSTOMISE'" />
+    <TournamentBracket v-else-if="matchState === 'TOURNAMENT_BRACKET'" />
+    <TournamentVictory v-else-if="matchState === 'TOURNAMENT_VICTORY'" />
 
     <GameplayHud v-if="showGameplayHud" />
     <CountdownOverlay

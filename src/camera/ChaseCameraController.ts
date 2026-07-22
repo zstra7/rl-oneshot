@@ -11,7 +11,15 @@ import type { PhysicsFacade } from "@/physics/PhysicsFacade";
 import type { CarId } from "@/physics/PhysicsTypes";
 import * as V from "@/physics/Vec3Math";
 
-const MENU_MATCH_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS"];
+const MENU_MATCH_STATES: readonly MatchState[] = [
+  "MAIN_MENU",
+  "MATCH_SETUP",
+  "SETTINGS",
+  // R13: plain orbit camera is fine for the tournament screens — no
+  // dedicated framing needed, unlike CAR_CUSTOMISE below.
+  "TOURNAMENT_BRACKET",
+  "TOURNAMENT_VICTORY"
+];
 
 /** R12.3: same "far-back" kickoff pose GameRuntime spawns the menu-presentation player car at (GameRuntime.initialise). */
 const CUSTOMISE_CAR_SPAWN_POSITION = { x: 0, y: 0.35, z: -24 };

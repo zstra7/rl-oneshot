@@ -38,7 +38,13 @@ export function installTestApis(runtime: GameRuntimeFacade): void {
       setPlayerCarColors: (colors) => runtime.setPlayerCarColors(colors),
       getPlayerCarColors: () => runtime.getPlayerCarColors(),
       getPlayerCarPrimaryColorHex: () => runtime.getPlayerCarPrimaryColorHex(),
-      setBoostPreviewEnabled: (enabled) => runtime.setBoostPreviewEnabled(enabled)
+      setBoostPreviewEnabled: (enabled) => runtime.setBoostPreviewEnabled(enabled),
+      enterTournament: () => runtime.enterTournament(),
+      beginTournament: (minutes) => runtime.beginTournament(minutes),
+      playNextTournamentMatch: () => runtime.playNextTournamentMatch(),
+      continueTournament: () => runtime.continueTournament(),
+      leaveTournament: () => runtime.leaveTournament(),
+      getTournamentState: () => runtime.getTournamentState()
     },
     gameFlow: runtime.getGameFlowTestApi()
   };

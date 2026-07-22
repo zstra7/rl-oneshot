@@ -29,6 +29,7 @@ import {
   type MatchState
 } from "@/game-flow/MatchFlowTypes";
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
+import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
 import { DEFAULT_CAMERA_SETTINGS, type CameraSettings } from "@/camera/CameraSettings";
@@ -50,7 +51,14 @@ export type UiRequestedAction = { readonly kind: "noop" };
 /** R12.2: matches settingsStore's `car.bodyColor`/`car.boostColor` default (`#4ff0ff`, the built-in player cyan). */
 const DEFAULT_PLAYER_CAR_COLOR = "#4ff0ff";
 
-const MENU_MATCH_STATES: readonly MatchState[] = ["MAIN_MENU", "MATCH_SETUP", "SETTINGS", "CAR_CUSTOMISE"];
+const MENU_MATCH_STATES: readonly MatchState[] = [
+  "MAIN_MENU",
+  "MATCH_SETUP",
+  "SETTINGS",
+  "CAR_CUSTOMISE",
+  "TOURNAMENT_BRACKET",
+  "TOURNAMENT_VICTORY"
+];
 
 /**
  * game-flow spec section 35 defines a 3-value `AppState` ("BOOT"|"MENU"|
@@ -120,6 +128,20 @@ export interface GameRuntimeFacade {
 
   selectMatchDuration(minutes: MatchDurationMinutes): void;
   startMatch(config?: Partial<MatchConfig>): void;
+
+  // -- R13: Tournament mode --
+
+  /** MAIN_MENU/MATCH_RESULTS -> TOURNAMENT_BRACKET (setup phase). */
+  enterTournament(): void;
+  /** Setup screen's BEGIN TOURNAMENT: locks in duration, opens the bracket at round 0. */
+  beginTournament(minutes: MatchDurationMinutes): void;
+  /** Bracket's PLAY NEXT GAME: applies the round's AI difficulty + saved duration, starts the match. */
+  playNextTournamentMatch(): void;
+  /** Results screen's CONTINUE: routes to TOURNAMENT_VICTORY (champion) or back to the bracket. */
+  continueTournament(): void;
+  /** Any tournament LEAVE/RETURN button: full tournament reset, restores pre-tournament AI difficulty/duration, returns to the main menu. */
+  leaveTournament(): void;
+  getTournamentState(): TournamentPublicState;
 
   pauseMatch(): void;
   resumeMatch(): void;
@@ -207,6 +229,13 @@ export class GameRuntime implements GameRuntimeFacade {
     bodyColor: DEFAULT_PLAYER_CAR_COLOR,
     boostColor: DEFAULT_PLAYER_CAR_COLOR
   };
+  /** R13: pure state machine, no engine deps — see TournamentController.ts. */
+  private readonly tournament = new TournamentController();
+  /** R13: pre-tournament AI difficulty/duration, saved once on beginTournament() and restored on leave/abandonment. Null when no tournament has begun (or its settings have already been restored). */
+  private tournamentSavedDifficulty: AiDifficulty | null = null;
+  private tournamentSavedDuration: MatchDurationMinutes | null = null;
+  /** R13: last matchState the tournament match-end/abandonment edge-detector ran for. */
+  private previousMatchStateForTournament: MatchState | null = null;
 
   private readonly clock = new RuntimeClock();
   private readonly fixedStepCoordinator = new FixedStepCoordinator(
@@ -571,11 +600,67 @@ export class GameRuntime implements GameRuntimeFacade {
     if (!this.modules) {
       return;
     }
+    // R13: edge-detect tournament match-end/abandonment off the *current*
+    // matchState before emitting, so both real per-tick transitions and
+    // direct facade calls (e.g. the pause menu's own returnToMenu(),
+    // outside the tick loop) converge on this one path — see
+    // syncTournamentFromMatchFlow's own comment for why this location was
+    // chosen over gating it to onFixedTick alone.
+    this.syncTournamentFromMatchFlow(this.modules.gameFlow.getMatchState());
+
     this.dispatcher.emit("runtime:session-state-changed", {
       session: this.modules.gameFlow.getSessionState(),
       playerBoostAmount: this.getPlayerBoostAmount(),
-      playerSupersonic: this.getPlayerSupersonic()
+      playerSupersonic: this.getPlayerSupersonic(),
+      tournament: this.tournament.getPublicState()
     });
+  }
+
+  /**
+   * R13: the single code path every tournament match-end and every
+   * tournament-abandonment (leave buttons, pause menu RETURN TO MENU, or
+   * any future path that ends up calling `gameFlow.returnToMenu()`)
+   * converges on. Running this from `emitSessionStateChanged()` — which
+   * both `onFixedTick` and every state-mutating facade method already
+   * call — rather than only from the fixed-tick loop means a direct,
+   * outside-the-tick-loop transition (e.g. PauseMenu's RETURN TO MENU)
+   * is picked up immediately rather than lagging a tick behind.
+   */
+  private syncTournamentFromMatchFlow(matchState: MatchState): void {
+    const previous = this.previousMatchStateForTournament;
+    this.previousMatchStateForTournament = matchState;
+    if (previous === matchState) {
+      return;
+    }
+
+    const state = this.tournament.getPublicState();
+
+    if (state.phase === "in-match" && matchState === "MATCH_RESULTS") {
+      const winner = this.modules!.gameFlow.getSessionState().winner;
+      this.tournament.recordMatchResult(winner);
+      return;
+    }
+
+    // Abandonment safety net: any path that lands back at MAIN_MENU while
+    // a tournament is still active (not just the tournament's own LEAVE
+    // buttons, which already call tournament.leave() themselves before
+    // this ever sees the transition) resets the tournament and restores
+    // the saved pre-tournament AI difficulty/duration.
+    if (state.active && matchState === "MAIN_MENU") {
+      this.tournament.leave();
+      this.restoreSavedTournamentSettings();
+    }
+  }
+
+  private restoreSavedTournamentSettings(): void {
+    if (this.tournamentSavedDifficulty !== null) {
+      this.selectAiDifficulty(this.tournamentSavedDifficulty);
+      this.tournamentSavedDifficulty = null;
+    }
+    if (this.tournamentSavedDuration !== null) {
+      this.modules?.gameFlow.selectMatchDuration(this.tournamentSavedDuration);
+      this.tournamentSavedDuration = null;
+    }
   }
 
   private setAppState(next: AppState): void {
@@ -762,6 +847,63 @@ export class GameRuntime implements GameRuntimeFacade {
   public startMatch(config?: Partial<MatchConfig>): void {
     this.requireModules().gameFlow.startMatch(config);
     this.emitSessionStateChanged();
+  }
+
+  // -- R13: Tournament mode --
+
+  public enterTournament(): void {
+    const modules = this.requireModules();
+    this.tournament.enter();
+    modules.gameFlow.openTournamentBracket();
+    this.emitSessionStateChanged();
+  }
+
+  public beginTournament(minutes: MatchDurationMinutes): void {
+    // Save the pre-tournament AI difficulty/duration exactly once, the
+    // first time a tournament actually begins (not on enter(), which can
+    // be visited then backed out of via BACK without ever playing a game).
+    if (this.tournamentSavedDifficulty === null) {
+      this.tournamentSavedDifficulty = this.getAiDifficulty();
+      this.tournamentSavedDuration = this.requireModules().gameFlow.getSessionState().selectedDurationMinutes;
+    }
+    this.tournament.begin(minutes);
+    this.emitSessionStateChanged();
+  }
+
+  public playNextTournamentMatch(): void {
+    const modules = this.requireModules();
+    const state = this.tournament.getPublicState();
+    if (!state.active || state.phase !== "bracket") {
+      return;
+    }
+    const round = this.tournament.startNextMatch();
+    this.selectAiDifficulty(round.difficulty);
+    modules.gameFlow.selectMatchDuration(state.durationMinutes);
+    modules.gameFlow.startMatch();
+    this.emitSessionStateChanged();
+  }
+
+  public continueTournament(): void {
+    const modules = this.requireModules();
+    const state = this.tournament.getPublicState();
+    if (state.phase === "champion") {
+      modules.gameFlow.openTournamentVictory();
+    } else {
+      modules.gameFlow.openTournamentBracket();
+    }
+    this.emitSessionStateChanged();
+  }
+
+  public leaveTournament(): void {
+    const modules = this.requireModules();
+    this.tournament.leave();
+    this.restoreSavedTournamentSettings();
+    modules.gameFlow.returnToMenu();
+    this.emitSessionStateChanged();
+  }
+
+  public getTournamentState(): TournamentPublicState {
+    return this.tournament.getPublicState();
   }
 
   public pauseMatch(): void {
