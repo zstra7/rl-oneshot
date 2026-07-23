@@ -143,10 +143,15 @@ export const DEFAULT_PHYSICS_PARAMETERS: PhysicsParameters = {
     explicitBallHitBonus: 1.8
   },
 
+  // F5 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): retuned toward RL's
+  // published damping values now that aerial rotation is integrated in
+  // velocity-space (previously these values were fighting a torque-
+  // impulse path that was ~23x too weak to expose how little damping was
+  // actually happening).
   aerial: {
-    rollDamping: 3,
-    pitchDamping: 2,
-    yawDamping: 2,
+    rollDamping: 4.95,
+    pitchDamping: 2.8,
+    yawDamping: 3.2,
     dampingInputReduction: 0.65
   },
 

@@ -15,6 +15,35 @@ test.beforeEach(async ({ page }) => {
   await page.evaluate(() => window.__PHYSICS_TEST__?.pauseRuntime());
 });
 
+/**
+ * F5 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md) regression: a single
+ * "teleport it far away, then fast-forward 60s" no longer keeps the
+ * opponent out of play. Before F5, the AI's stuck/recovery controllers
+ * were tuned against inverted, ~23x-weak aerial physics and effectively
+ * didn't work, so parking the car out of bounds once left it neutralised
+ * for the whole window. Post-F5 those controllers actually self-right
+ * and navigate back (verified: measured the opponent scoring 4 goals in
+ * one 60s stretch after a single park, via an ad hoc debug probe this
+ * session) -- a real, intended behaviour improvement, not a bug. Keep
+ * the opponent out of play by re-parking it every couple of seconds
+ * instead of trusting a single teleport to stick for a full minute.
+ */
+async function fastForwardWithOpponentParked(
+  page: import("@playwright/test").Page,
+  totalSeconds: number
+): Promise<void> {
+  const chunkSeconds = 2;
+  let remaining = totalSeconds;
+  while (remaining > 0) {
+    const seconds = Math.min(chunkSeconds, remaining);
+    await page.evaluate(() =>
+      window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } })
+    );
+    await page.evaluate((s) => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(s), seconds);
+    remaining -= seconds;
+  }
+}
+
 test("main menu is shown at boot with PLAY/SETTINGS visible", async ({ page }) => {
   await expect(page.getByTestId("main-menu")).toBeVisible();
   await expect(page.getByRole("button", { name: "PLAY" })).toBeVisible();
@@ -195,11 +224,9 @@ test("results screen shows victory/defeat, final score, and replay/return button
   // is now competent enough to occasionally score for real during a
   // 60-second stretch, which would flip this into overtime instead of a
   // clean regulation win — this test is about the results-screen
-  // transition, not AI scoring odds, so keep the opponent out of play.
-  await page.evaluate(() =>
-    window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } })
-  );
-  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(60));
+  // transition, not AI scoring odds, so keep the opponent out of play
+  // (re-parked every 2s -- see fastForwardWithOpponentParked's comment).
+  await fastForwardWithOpponentParked(page, 60);
 
   await expect(page.getByTestId("results-screen")).toBeVisible();
   const session = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getSessionState());
@@ -223,10 +250,7 @@ test("replay resets scores, retains duration, and restarts the countdown", async
   // See the "results screen" test above: park the opponent so it can't
   // score for real during the 60-second fast-forward and flip the match
   // into overtime instead of a clean regulation win.
-  await page.evaluate(() =>
-    window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } })
-  );
-  await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.advanceGameSeconds(60));
+  await fastForwardWithOpponentParked(page, 60);
 
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.replayMatch());
 

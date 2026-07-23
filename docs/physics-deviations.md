@@ -912,3 +912,147 @@ delta assertion unchanged. Full-flow parked-at-goal assertions raised
 "idempotence" tests); the idempotence test's own decay-only assertion is
 unaffected by the constant change. `tests/game-flow/match-flow.spec.ts`'s
 R6 Playwright test raised its threshold `>6 → >12` to match.
+
+## Post-launch polish pass — F5 (aerial rotation rewrite, `AerialController.ts` / `GroundManeuverController.ts` / `OpponentAiController.ts`)
+
+**Root causes (both verified empirically via a probe test before any fix
+was written)**: holding `pitch = 1` for 1.0s on an airborne car measured
+only **0.537 rad/s** of angular velocity, with the nose tilting **UP**
+(`forward.y = +0.27`) instead of down.
+
+1. **~23× too weak**: `applyAerialRotation` computed a desired angular
+   *acceleration* from input and called
+   `car.body.applyTorqueImpulse(accel * dt)`. Rapier divides a torque
+   impulse by the body's moment of inertia (large for a 180kg car box) to
+   get the actual `Δω`, so the RL-accurate constants already in
+   `PhysicsConstants.ts` (`maxPitchAngularAcceleration: 12.46`, capped at
+   `carMaxAngularSpeed: 5.5`) were being silently divided by roughly 23×
+   before ever reaching the body.
+2. **Backwards**: `pitch = +1` ("pitchNoseDown", W in the air) pitched the
+   nose **up**, disagreeing with `DodgeController`, which flips the nose
+   **forward** (down) about local `-X` for the same trigger input — the
+   two systems used opposite sign conventions for the same physical
+   input, unnoticed because aerial control was too weak to matter.
+
+**Fix**: `applyAerialRotation` now integrates angular velocity directly
+in velocity-space — reads `car.body.angvel()`, adds
+`computeAxisAcceleration(...) * dt` per axis in the car's local frame,
+and writes the result back with `car.body.setAngvel(...)` — the same
+approach `DodgeController` already used, and how Rocket League itself
+behaves (angular response independent of the body's mass/inertia).
+`computeAxisAcceleration` (the input-accel + damping shape) and
+`clampAngularSpeed` are unchanged; only the integration target moved from
+an impulse to a direct rate update. Every raw input axis (pitch, yaw,
+roll) is now negated before being fed into `computeAxisAcceleration` —
+verified empirically per-axis (not derived on paper, per the plan's
+explicit instruction) via `tests/unit/aerialControl.spec.ts`'s direction
+tests: `pitch=+1` now measures `forward.y < -0.1` within 30 ticks (nose
+down), `yaw=+1` swings the nose toward the car's initial right, `roll=+1`
+leans the car's top toward its initial right.
+
+`PhysicsParameters.aerial` damping retuned toward RL's published values
+now that damping actually has real velocity-space authority to act
+against: `pitchDamping` 2 → 2.8, `yawDamping` 2 → 3.2, `rollDamping` 3 →
+4.95 (`dampingInputReduction: 0.65` unchanged). No other file in the
+codebase overrides these three values (grepped for
+`pitchDamping|yawDamping|rollDamping` outside `AerialController.ts`/
+`PhysicsParameters.ts` — no hits).
+
+**Measured post-fix**: `pitch=1` from rest reaches ≥4.5 rad/s local pitch
+rate and `forward.y < -0.7` (nose past ~45°) within 60 ticks (0.5s) —
+`tests/unit/aerialControl.spec.ts`'s responsiveness gate, which fails
+badly on the pre-fix code (measured ~0.27 rad/s at 0.5s, consistent with
+the plan's 1.0s/0.537 rad/s probe). A decay test confirms damping now
+actually arrests rotation in velocity-space (releasing pitch input after
+30 ticks drops `|local pitch rate|` below 0.5 rad/s within a further 120
+ticks). A consistency test confirms the aerial pitch-down axis and a real
+forward dodge's flip axis now agree in sign (read directly off
+`getCarState().angularVelocity` during the dodge's active phase, since
+`CarRuntimeState.dodgeAxis` isn't otherwise serialised for tests — during
+the active phase `angvel = dodgeAxis * effectiveRate` with a positive
+rate, so its direction *is* the dodge axis).
+
+### Mandatory AI re-audit (Appendix C addendum)
+
+Both AI controllers that produce aerial pitch/roll input were tuned
+against the old, inverted, ~23×-weak physics and were re-verified
+empirically rather than assumed correct:
+
+- **`OpponentAiController.computeAerialPursuitInput`**: needed **no sign
+  change**. Its existing `yaw = clamp(toBallLocal.x * 2, -1, 1)` /
+  `pitch = clamp(-toBallLocal.y * 2, -1, 1)` formulas already happened to
+  point the wrong way under the *old* physics too (a second, independent
+  bug nobody noticed because aerial pursuit was gated behind the same
+  ~23×-weak control authority) — and now correctly aim the nose under the
+  new, correctly-signed `AerialController`. Verified via a new
+  `tests/unit/aiDifficulty.spec.ts` test that drives real physics for 30
+  ticks with an elevated, off-axis ball and asserts the forward/to-ball
+  angle strictly decreases (measured ~45.8° → ~39.4°, non-monotonic
+  tick-to-tick since it's a plain proportional aim with no damping term,
+  but a clear net close). The pre-existing "hard-only limited aerial"
+  test's finite-input check is kept alongside it — finiteness alone can't
+  catch a sign error, which is exactly why this stronger test was added.
+- **`GroundManeuverController.computeRecoveryInput`**: needed **both
+  signs flipped** on both the roll and pitch channels — the proportional
+  term (`localUpTarget.x`/`.z`) *and* the damping term
+  (`localAngularVelocity.z`/`.x`). Verified via two ad hoc probes this
+  session: replaying the pre-F5 formula unmodified against the new
+  physics drove `localUpTarget` *away* from upright (holding
+  `roll = -localUpTarget.x * gain` constant made `localUpTarget.x` grow,
+  not shrink); flipping only the proportional term converged but
+  overshot wildly, oscillating past upright each time; flipping **both**
+  terms converged cleanly with no overshoot. The original
+  `recoveryGain`/`recoveryDamping` magnitudes (3.0 / 0.35) needed no
+  retune — they were tuned for a P-D loop shape that's still correct, just
+  pointed the wrong way. New `tests/unit/aiRecovery.spec.ts` drops a car
+  on its side and, separately, exactly upside-down (the P-controller's
+  degenerate 180° equilibrium, handled by the existing symmetry-breaking
+  `roll = 1` kick) at `y=3` with zero velocity, feeds
+  `computeRecoveryInput`'s own output back every tick for up to 240
+  ticks, and asserts it lands upright (`up.y > 0.85`), grounded, with
+  angular speed settled below 1.0 rad/s in the final 30 ticks. The plan's
+  sketch used `y=8`; probed and rejected — an 8m free-fall produces a
+  violently bouncy landing (Rapier's suspension/contact resolution spikes
+  angular speed past 12 rad/s on touchdown, since `carMaxAngularSpeed` is
+  only clamped during airborne `applyAerialRotation`, not on ground
+  contact) with *every* gain/damping combination tried, an orthogonal
+  suspension characteristic rather than a recovery-controller defect;
+  `y=3` keeps the drop unambiguously airborne while landing and settling
+  cleanly within the plan's 240-tick budget.
+
+### Regression sweep fallout
+
+- `tests/unit/dodgeFlip.spec.ts`: re-measured the flip-cancel test's
+  cumulative-rotation bound directly (probe) — settles at **~27°**, far
+  under the existing `< 220°` threshold, so no change was needed despite
+  the ~23× stronger pitch authority during the cancel window.
+- `tests/unit/airRollSensitivity.spec.ts`: the 0.6/1.8 sensitivity ratio
+  logic is unchanged (still a multiplier on
+  `maxRollAngularAcceleration`), but the old 30-tick sample point now
+  saturates both cars against `carMaxAngularSpeed` (measured: low=4.69
+  rad/s, high=5.50 rad/s capped), compressing the ratio and failing the
+  1.5× threshold. Resampled at **10 ticks** (measured exactly 3.00× —
+  the full, uncompressed 1.8/0.6 ratio — at 10 ticks and below); threshold
+  raised `1.5× → 2.5×` to match with margin.
+- `tests/unit/autoFlip.spec.ts`: unaffected, confirmed green unmodified
+  (no aerial pitch/yaw/roll input in those scenarios).
+- `tests/unit/aiUnstuck.spec.ts`: failed transiently on the pre-recovery-
+  fix code (a 3-second stuck-detection window measured only 0.44m of
+  movement, just under the 0.5m gate) — the AI's now-functional recovery
+  controller changes the chaotic long-horizon wall-escape trajectory
+  enough to matter. Passes unmodified once `computeRecoveryInput`'s signs
+  were fixed; no threshold change needed.
+- `tests/unit/opponentAi.spec.ts`'s upside-down recovery test and the
+  full AI suites (`aiDifficulty.spec.ts`, `aiScoring.spec.ts`) all pass
+  unmodified once the recovery/pursuit signs were fixed.
+- `tests/game-flow/match-flow.spec.ts` (Playwright): two full-match tests
+  ("results screen…", "replay resets…") parked the opponent car once at
+  an out-of-bounds position before fast-forwarding 60s of live
+  simulation, relying on it staying stuck there for the whole window.
+  Post-fix the AI's stuck/recovery controllers actually work, so it
+  navigated back and scored (measured via an ad hoc debug probe: 4 goals
+  in one 60s stretch after a single park), flipping the match into
+  overtime instead of ending 1-0 as the tests expected — a real, intended
+  behaviour improvement, not a bug. Fixed by re-parking the opponent every
+  2 simulated seconds instead of trusting a single teleport to stick for
+  a full minute (`fastForwardWithOpponentParked` helper).

@@ -6,6 +6,7 @@ import type { AiUpdateContext } from "@/ai/AiTypes";
 import type { MatchState } from "@/game-flow/MatchFlowTypes";
 import { NEUTRAL_CAR_INPUT } from "@/physics/PhysicsTypes";
 import { PhysicsFacade } from "@/physics/PhysicsFacade";
+import * as V from "@/physics/Vec3Math";
 
 function buildContext(
   physics: PhysicsFacade,
@@ -251,6 +252,79 @@ describe("AI difficulty and tactics (Phase 10)", () => {
     expect(ai.getDebugState().mode).toBe("attack");
     expect(Number.isFinite(airborneInput.pitch)).toBe(true);
     expect(Number.isFinite(airborneInput.yaw)).toBe(true);
+
+    physics.dispose();
+  });
+
+  /**
+   * F5 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md) mandatory re-audit:
+   * "finite input" alone (the test above) can't catch a sign error --
+   * `computeAerialPursuitInput` produces finite pitch/yaw even when
+   * aiming the nose away from the ball. This drives real physics
+   * (`ai.update()` -> `setCarInput` -> `stepTicks`, the project's
+   * established "physics drives real behaviour" pattern) for 30 ticks
+   * with the ball placed above and to the side, and asserts the
+   * forward/to-ball angle is smaller at the end than at the start.
+   * Verified empirically (per the plan's instruction not to trust a
+   * paper sign derivation) that `computeAerialPursuitInput`'s existing
+   * yaw/pitch formulas need NO sign change post-F5 -- they already
+   * happened to point the wrong way under the OLD physics (a second,
+   * separate bug nobody noticed because aerial pursuit was gated behind
+   * the same ~23x-weak control authority), and now correctly close the
+   * angle under the new, correctly-signed AerialController.
+   */
+  it("hard-only limited aerial: the nose measurably converges toward an elevated, off-axis ball over 30 ticks", async () => {
+    const physics = new PhysicsFacade();
+    await physics.initialise();
+    physics.spawnCar({ id: "car-opponent", transform: { x: 0, y: 1, z: 3 } });
+    physics.spawnCar({ id: "car-player", transform: { x: 30, y: 1, z: 30 } });
+    physics.stepTicks(90);
+    physics.setBallState({ position: { x: 0, y: 2.5, z: 0 }, linearVelocity: { x: 0, y: 0, z: 0 } });
+
+    const ai = new OpponentAiController();
+    ai.setDifficulty("hard");
+    // Grounded call, close + tall enough ball to trigger maybeJump's
+    // aerialPursuitTicksRemaining budget (aerialPursuitTicksRemaining can
+    // only be armed from the grounded branch -- arming it requires this
+    // call to happen while the car is still genuinely grounded).
+    ai.update(buildContext(physics, 90));
+
+    physics.setCarState("car-opponent", {
+      position: { x: 0, y: 4, z: 6 },
+      linearVelocity: { x: 0, y: 0, z: 0 },
+      angularVelocity: { x: 0, y: 0, z: 0 }
+    });
+    // Let `grounded` register truthfully (false) before the loop reads
+    // it -- immediately after `setCarState` teleports the body, the
+    // cached grounded flag is stale until the next physics step.
+    physics.stepTicks(1);
+    // Ball above and to the side: a real angle to close, not already
+    // dead ahead.
+    physics.setBallState({ position: { x: 3, y: 9, z: 0 }, linearVelocity: { x: 0, y: 0, z: 0 } });
+
+    function angleToBall(): number {
+      const state = physics.getCarState("car-opponent");
+      const forward = V.applyQuaternion(V.LOCAL_FORWARD, state.rotation);
+      const ball = physics.getBallState();
+      const toBall = V.normalize(V.sub(ball.position, state.position));
+      return Math.acos(V.clamp(V.dot(forward, toBall), -1, 1));
+    }
+
+    const angleStart = angleToBall();
+
+    for (let i = 0; i < 30; i += 1) {
+      const input = ai.update(buildContext(physics, 91 + i));
+      expect(ai.getDebugState().mode).toBe("attack");
+      physics.setCarInput("car-opponent", input);
+      physics.stepTicks(1);
+    }
+
+    const angleEnd = angleToBall();
+    // Measured empirically: ~45.8deg -> ~39.4deg over these 30 ticks
+    // (not monotonic tick-to-tick -- the pursuit controller is a plain
+    // proportional aim, so it briefly overshoots before net-converging --
+    // but a clear, repeatable improvement well above noise).
+    expect(angleEnd).toBeLessThan(angleStart - 0.05);
 
     physics.dispose();
   });

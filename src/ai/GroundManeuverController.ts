@@ -107,13 +107,27 @@ export function computeRecoveryInput(car: CarSerializableState): CarInput {
   // way to landing on its side instead of settling).
   const localAngularVelocity = V.applyQuaternion(car.angularVelocity, inverseRotation);
 
+  // F5 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): both terms' signs were
+  // flipped from the pre-F5 formula. AerialController now negates every
+  // raw input axis before applying it (see its doc comment), which
+  // flipped the physical meaning of a given roll/pitch *value* on both
+  // ends of this P-D loop — the proportional term (was tuned to *fight*
+  // the old physics's inverted response) and the damping term (a given
+  // roll/pitch value now cancels local angular rate in the opposite
+  // sense too). Verified empirically (not derived on paper, per the plan):
+  // the pre-F5 signs, replayed against the new physics, drove
+  // localUpTarget AWAY from upright (see the ad hoc probe in this
+  // session); flipping both terms converges cleanly and matches
+  // `aiRecovery.spec.ts`. recoveryGain/recoveryDamping magnitudes are
+  // unchanged (3.0/0.35 still produce a clean, non-oscillating recovery
+  // under the new velocity-space integration).
   let roll = V.clamp(
-    -localUpTarget.x * AI_CONSTANTS.recoveryGain - localAngularVelocity.z * AI_CONSTANTS.recoveryDamping,
+    localUpTarget.x * AI_CONSTANTS.recoveryGain + localAngularVelocity.z * AI_CONSTANTS.recoveryDamping,
     -1,
     1
   );
   let pitch = V.clamp(
-    localUpTarget.z * AI_CONSTANTS.recoveryGain - localAngularVelocity.x * AI_CONSTANTS.recoveryDamping,
+    -localUpTarget.z * AI_CONSTANTS.recoveryGain + localAngularVelocity.x * AI_CONSTANTS.recoveryDamping,
     -1,
     1
   );
