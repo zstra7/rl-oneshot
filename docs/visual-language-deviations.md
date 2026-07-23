@@ -391,3 +391,38 @@ are now implemented.
   expecting the mesh at the spec's raw `translation`), preserving the
   test's actual guarantee — visual surface exactly matches physics
   surface — instead of weakening it.
+
+## F7 — Symmetrical floor texture pattern (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+`createPaneledFloor` picked each panel's texture and quarter-turn via
+`context.random`, so the floor's alternating look was pure noise with
+no symmetry. Replaced both random draws with a deterministic function
+of `(mc, mr)` — each panel's distance to the *nearer* edge on its own
+axis (`mc = min(column, COLUMNS-1-column)`, `mr = min(row, ROWS-1-row)`)
+— so a panel and its mirror image across either field axis always
+share the same `(mc, mr)` pair and therefore the same material
+(`(mc*2+mr) % panelMaterials.length`) and rotation
+(`(π/2) * ((mc+mr) % 4)`). The existing goal-line accent overrides
+(painted player/opponent panels near each goal) are untouched and
+already column-symmetric by construction (they depend only on `z`);
+they're intentionally *not* row-symmetric, since the two ends are
+different teams' colours by design.
+
+Removing the two `context.random` draws per panel shifts the seeded
+random stream consumed by steps that run after `createPaneledFloor` —
+checked for fallout across the full `vitest run` suite (324/324 green)
+and the seeded preview-determinism Playwright test (still compares two
+identically-seeded runs against each other, so it's insensitive to
+where in the stream they diverge).
+
+**What the tests prove** (`tests/unit/floorPanels.spec.ts`, new): every
+panel's material and rotation matches its mirror across the column
+axis; the same across the row axis for panels outside the goal-line
+accent zones; and two independent builds fed the same input textures
+(simulating two separate game sessions) produce identical material/
+rotation choices per grid position — confirming the pattern is a pure
+function of position, not session-to-session noise. Confirmed via
+git-stash that 2 of the 3 tests fail on the pre-fix random code. The
+existing `tests/visual-language/arena-shell.spec.ts` "paneled floor"
+Playwright gate stays green (panel count/opacity unaffected by which
+material each panel picks).

@@ -347,7 +347,16 @@ function createPaneledFloor(context: ProceduralAssetContext): THREE.Group {
       const distanceToPlayerGoal = z - -fieldLength / 2;
       const distanceToOpponentGoal = fieldLength / 2 - z;
 
-      let material = panelMaterials[context.random.integer(0, panelMaterials.length)]!;
+      // F13 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): deterministic,
+      // mirrored across both field axes instead of `context.random`
+      // draws, so the alternating look is symmetrical rather than pure
+      // noise. `(mc, mr)` are the distances to the nearer edge on each
+      // axis, so opposite panels (which mirror each other) always land
+      // on the same `(mc, mr)` pair and therefore the same material/
+      // rotation.
+      const mc = Math.min(column, FLOOR_PANEL_COLUMNS - 1 - column);
+      const mr = Math.min(row, FLOOR_PANEL_ROWS - 1 - row);
+      let material = panelMaterials[(mc * 2 + mr) % panelMaterials.length]!;
       if (accentPlayerMaterial && distanceToPlayerGoal < FLOOR_ACCENT_DISTANCE) {
         material = accentPlayerMaterial;
       } else if (accentOpponentMaterial && distanceToOpponentGoal < FLOOR_ACCENT_DISTANCE) {
@@ -363,7 +372,7 @@ function createPaneledFloor(context: ProceduralAssetContext): THREE.Group {
       // latter would compose with the flattening X-rotation above in
       // world space instead of spinning in the panel's own surface
       // plane) instead of cloning/rotating the texture.
-      panel.rotateZ((Math.PI / 2) * context.random.integer(0, 4));
+      panel.rotateZ((Math.PI / 2) * ((mc + mr) % 4));
       panel.position.set(x, FLOOR_PANEL_HEIGHT_OFFSET, z);
       group.add(panel);
     }
