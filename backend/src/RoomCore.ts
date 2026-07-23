@@ -53,6 +53,13 @@ export class RoomCore {
   }
 
   public addPeer(id: string, isCreator: boolean): RoomEffect[] {
+    // Idempotent per peer id — a peer already seated never takes a second
+    // slot (defence-in-depth against an adapter reconstructing membership
+    // and re-adding the same socket).
+    if (this.slots.some((slot) => slot?.id === id)) {
+      return [];
+    }
+
     const freeSlot = this.slots.findIndex((slot) => slot === null);
     if (freeSlot === -1) {
       return [{ to: id, message: { type: "error", reason: "room-full" } }];

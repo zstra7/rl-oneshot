@@ -29,6 +29,20 @@ describe("N4 RoomCore", () => {
     expect(room.isFull()).toBe(true);
   });
 
+  it("is idempotent per peer id — the same peer never takes two slots (the room-full regression)", () => {
+    const room = new RoomCore("ABCDE", seedGen());
+    room.addPeer("p1", true);
+    // A duplicate add of the same peer (e.g. an adapter re-adding a
+    // reconstructed socket) must NOT fill the second slot.
+    expect(room.addPeer("p1", true)).toEqual([]);
+    expect(room.peerCount).toBe(1);
+    expect(room.isFull()).toBe(false);
+    // The real second peer still gets in.
+    const second = room.addPeer("p2", false);
+    expect(second).toContainEqual({ to: "p2", message: { type: "peer-joined", peerId: "p1", role: "answerer" } });
+    expect(room.isFull()).toBe(true);
+  });
+
   it("refuses a third peer with a room-full error", () => {
     const room = new RoomCore("ABCDE", seedGen());
     room.addPeer("p1", true);

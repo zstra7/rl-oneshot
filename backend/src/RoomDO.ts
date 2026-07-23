@@ -41,16 +41,22 @@ export class RoomDO {
     this.code = url.searchParams.get("code") ?? this.code;
     const isCreator = url.searchParams.get("create") === "1";
 
+    // Reconstruct the room from the peers ALREADY connected, BEFORE accepting
+    // the new socket — otherwise `getRoom()` would rebuild membership from
+    // `getWebSockets()` including the socket we just accepted, and the
+    // `addPeer` below would add that peer a second time (filling both slots
+    // with one player and rejecting the real second player as "room-full").
+    const room = this.getRoom();
+    const order = this.state.getWebSockets().length;
+
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
 
     const peerId = crypto.randomUUID();
-    const order = this.state.getWebSockets().length;
     server.serializeAttachment({ peerId, isCreator, order } satisfies SocketAttachment);
     this.state.acceptWebSocket(server);
 
-    const room = this.getRoom();
     this.dispatch(room.addPeer(peerId, isCreator));
 
     return new Response(null, { status: 101, webSocket: client });
