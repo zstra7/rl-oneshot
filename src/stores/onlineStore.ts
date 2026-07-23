@@ -42,9 +42,38 @@ function controlUrl(): string {
 
 let session: MultiplayerSession | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
+let cachedIceServers: RTCIceServer[] | null = null;
 
 /** If the control server never answers the initial connection, surface an error rather than hang. */
 const CONNECT_TIMEOUT_MS = 8000;
+
+const FALLBACK_ICE: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
+
+/**
+ * Fetch the ICE servers (STUN always, TURN when the Worker has credentials)
+ * from the control plane's `/turn-cred` endpoint. Without these, WebRTC has
+ * only host candidates and can't traverse NATs — i.e. can't connect across
+ * the internet. Cached for the session; falls back to public Cloudflare
+ * STUN if the endpoint is unreachable.
+ */
+async function fetchIceServers(): Promise<RTCIceServer[]> {
+  if (cachedIceServers) {
+    return cachedIceServers;
+  }
+  try {
+    const httpUrl = controlUrl().replace(/^ws/, "http"); // wss->https, ws->http
+    const response = await fetch(`${httpUrl}/turn-cred`);
+    if (response.ok) {
+      const data = (await response.json()) as { iceServers?: RTCIceServer[] };
+      cachedIceServers = data.iceServers && data.iceServers.length > 0 ? data.iceServers : FALLBACK_ICE;
+      return cachedIceServers;
+    }
+  } catch {
+    // fall through to STUN fallback
+  }
+  cachedIceServers = FALLBACK_ICE;
+  return cachedIceServers;
+}
 
 export const useOnlineStore = defineStore("online", {
   state: (): OnlineStoreState => ({
@@ -80,32 +109,32 @@ export const useOnlineStore = defineStore("online", {
       this.joinCodeInput = "";
     },
 
-    createRoom(): void {
-      this.startSession();
+    async createRoom(): Promise<void> {
       this.isHost = true;
       this.screen = "connecting";
-      session!.createRoom();
+      await this.startSession();
+      session?.createRoom();
     },
 
-    joinRoom(code: string): void {
+    async joinRoom(code: string): Promise<void> {
       const normalized = code.trim().toUpperCase();
       if (normalized.length !== 5) {
         this.errorMessage = "Enter a 5-character room code.";
         this.screen = "error";
         return;
       }
-      this.startSession();
       this.isHost = false;
       this.screen = "connecting";
-      session!.joinRoom(normalized);
+      await this.startSession();
+      session?.joinRoom(normalized);
     },
 
-    quickMatch(): void {
-      this.startSession();
+    async quickMatch(): Promise<void> {
       this.isHost = false;
       this.screen = "queued";
       this.queuePosition = 0;
-      session!.quickMatch();
+      await this.startSession();
+      session?.quickMatch();
     },
 
     cancel(): void {
@@ -113,12 +142,14 @@ export const useOnlineStore = defineStore("online", {
       this.openHome();
     },
 
-    startSession(): void {
+    async startSession(): Promise<void> {
       session?.close();
+      const iceServers = await fetchIceServers();
       session = new MultiplayerSession({
         controlUrl: controlUrl(),
         buildHash: MP_BUILD_HASH,
         handshakePayload: {},
+        iceServers,
         onEvent: (event) => this.handleEvent(event)
       });
       // Guard against a control server that never answers (unreachable /
