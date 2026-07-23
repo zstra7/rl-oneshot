@@ -2,154 +2,161 @@ import { describe, expect, it } from "vitest";
 
 import { MatchFlowController } from "@/game-flow/MatchFlowController";
 import { OPPONENT_CAR_ID, PLAYER_CAR_ID } from "@/game-flow/MatchFlowConstants";
-import { DEFAULT_LOCKSTEP_CONFIG, LockstepSession } from "@/netcode/LockstepSession";
-import { fnv1a32 } from "@/netcode/protocol";
+import { DEFAULT_STATE_SYNC_CONFIG, StateSyncSession } from "@/netcode/StateSyncSession";
 import { createFakeNetwork } from "@/netcode/testing/FakeLink";
 import { PhysicsFacade } from "@/physics/PhysicsFacade";
-import type { CarInput } from "@/physics/PhysicsTypes";
-
-import { makeInputScript } from "../netspike/inputScript";
+import { NEUTRAL_CAR_INPUT, type CarInput } from "@/physics/PhysicsTypes";
 
 /**
- * N5 (plan/ONLINE_MULTIPLAYER_PLAN.md): the whole online match flow — not
- * just raw physics — must stay in lockstep. Two independent
- * MatchFlowControllers + PhysicsFacades, each fronted by a LockstepSession
- * over an impaired FakeLink, run a full online match through the
- * countdown, a scored goal, the celebration, and the next kickoff. The
- * gate is bit-identical world state on EVERY tick: if goal detection,
- * celebration timing, or the kickoff reset diverged between the two peers,
- * a hash would split.
+ * S6 (online state-sync): the whole match flow — host-authoritative, over an
+ * impaired network — must stay CONVERGED and AGREE on the score, with no
+ * stall and no forfeit. This is the property the old lockstep could not give
+ * cross-machine: here the host streams snapshots and the guest converges, so
+ * floating-point drift is corrected instead of ending the match.
+ *
+ * The test runs a host and a guest, each with its own PhysicsFacade +
+ * MatchFlowController + StateSyncSession, across a FakeLink with real latency,
+ * jitter, and packet loss. A goal is injected identically at a known tick; the
+ * gate is that the guest tracks the host's world within a small tolerance the
+ * whole time and ends up with the identical score.
  */
-
 const COUNTDOWN_TOTAL_TICKS = 120 + 120 + 120 + 90;
-const KICKOFF_SEED = 3;
+const cfg = DEFAULT_STATE_SYNC_CONFIG;
 
-function worldHash(physics: PhysicsFacade): string {
-  const w = physics.getWorldState();
-  return String(fnv1a32(JSON.stringify({ cars: w.cars, ball: w.ball, boostPads: w.boostPads, tick: w.tick })));
+function drive(tick: number): CarInput {
+  return { ...NEUTRAL_CAR_INPUT, throttle: 1, steer: tick % 50 < 25 ? 0.6 : -0.6, boost: true };
 }
 
 interface Peer {
   physics: PhysicsFacade;
-  gameFlow: MatchFlowController;
-  session: LockstepSession;
+  flow: MatchFlowController;
+  session: StateSyncSession;
   localCar: string;
   remoteCar: string;
-  localScript: CarInput[];
+  nextSubmit: number;
 }
 
 async function bootPeer(
+  isHost: boolean,
   localCar: string,
   remoteCar: string,
-  link: ReturnType<typeof createFakeNetwork>["endpointA"],
-  localScript: CarInput[]
+  link: ReturnType<typeof createFakeNetwork>["endpointA"]
 ): Promise<Peer> {
   const physics = new PhysicsFacade();
   await physics.initialise();
-  const gameFlow = new MatchFlowController();
-  gameFlow.initialise({ physics });
-  gameFlow.openMatchSetup();
-  const session = new LockstepSession({
-    localCarId: localCar,
-    remoteCarId: remoteCar,
-    link,
-    inputDelayTicks: DEFAULT_LOCKSTEP_CONFIG.inputDelayTicks,
-    redundancyWindow: DEFAULT_LOCKSTEP_CONFIG.redundancyWindow,
-    hashIntervalTicks: DEFAULT_LOCKSTEP_CONFIG.hashIntervalTicks
-  });
-  return { physics, gameFlow, session, localCar, remoteCar, localScript };
+  const flow = new MatchFlowController();
+  flow.initialise({ physics });
+  flow.openMatchSetup();
+  flow.setOnlineGuest(!isHost);
+  flow.startOnlineMatch({ durationMinutes: 3, kickoffSeed: 4 });
+  const session = new StateSyncSession({ localCarId: localCar, remoteCarId: remoteCar, link, isHost, ...cfg });
+  return { physics, flow, session, localCar, remoteCar, nextSubmit: 0 };
 }
 
-describe("N5 online match flow stays in lockstep", () => {
-  it("two peers run through a goal, celebration, and kickoff bit-identically every tick", async () => {
-    const ticks = COUNTDOWN_TOTAL_TICKS + 900; // countdown + play + goal + celebration + next kickoff
-    const delay = DEFAULT_LOCKSTEP_CONFIG.inputDelayTicks;
-    const playerScript = makeInputScript(0xc0ffee, ticks + delay + 8);
-    const opponentScript = makeInputScript(0xbeef01, ticks + delay + 8);
-    const goalTick = COUNTDOWN_TOTAL_TICKS + 300;
+function localInput(peer: Peer, tick: number): CarInput {
+  // The host drives car-player, the guest drives car-opponent; give them
+  // distinct-but-deterministic inputs.
+  return peer.localCar === PLAYER_CAR_ID ? drive(tick) : drive(tick + 21);
+}
 
-    const net = createFakeNetwork({ latencyTicks: 5, jitterTicks: 2 }, 0x51);
+describe("S6 online state-sync stays converged (no stall, no forfeit)", () => {
+  it("keeps the guest tracking the host through a goal over a lossy, jittery link", async () => {
+    const ticks = COUNTDOWN_TOTAL_TICKS + 500;
+    const goalTick = COUNTDOWN_TOTAL_TICKS + 200;
+    const net = createFakeNetwork({ latencyTicks: 4, jitterTicks: 3, lossProb: 0.1 }, 0x1234);
 
-    const peerA = await bootPeer(PLAYER_CAR_ID, OPPONENT_CAR_ID, net.endpointA, playerScript);
-    const peerB = await bootPeer(OPPONENT_CAR_ID, PLAYER_CAR_ID, net.endpointB, opponentScript);
+    const host = await bootPeer(true, PLAYER_CAR_ID, OPPONENT_CAR_ID, net.endpointA);
+    const guest = await bootPeer(false, OPPONENT_CAR_ID, PLAYER_CAR_ID, net.endpointB);
 
-    // Both peers start the online match with the SAME kickoff seed.
-    peerA.gameFlow.startOnlineMatch({ durationMinutes: 3, kickoffSeed: KICKOFF_SEED });
-    peerB.gameFlow.startOnlineMatch({ durationMinutes: 3, kickoffSeed: KICKOFF_SEED });
+    const stepPeer = (peer: Peer, tick: number, injectGoal: boolean): void => {
+      // Submit local input a couple ticks ahead (state-sync never blocks on it).
+      while (peer.nextSubmit <= tick + peer.session.inputDelayTicks) {
+        peer.session.submitLocalInput(peer.nextSubmit, localInput(peer, peer.nextSubmit));
+        peer.nextSubmit += 1;
+      }
+      peer.session.pump();
 
-    // One lockstep-driven tick on one peer, mirroring GameRuntime.onFixedTick.
-    const stepPeer = (peer: Peer, simTick: number, injectGoal: boolean): void => {
-      peer.gameFlow.update();
-      if (peer.gameFlow.areControlsActive()) {
-        peer.physics.setCarInput(peer.localCar, peer.session.localInputForTick(simTick));
-        peer.physics.setCarInput(peer.remoteCar, peer.session.remoteInputForTick(simTick));
+      // Guest converges onto the host's newest snapshot before simulating.
+      if (!peer.session.isHost) {
+        const snap = peer.session.consumeSnapshot();
+        if (snap) {
+          peer.physics.applyWorldSnapshot(snap.world, { predictedLocalCarId: peer.localCar, hardCorrectionDistance: 2 });
+          peer.flow.applyAuthorityState(snap.flow);
+        }
+      }
+
+      peer.flow.update();
+      if (peer.flow.areControlsActive()) {
+        const remote = peer.session.remoteSource.sampleForTick({
+          tick,
+          matchState: peer.flow.getMatchState(),
+          physics: peer.physics,
+          localFrame: null as never
+        }).input;
+        peer.physics.setCarInput(peer.localCar, peer.session.localInputForTick(tick));
+        peer.physics.setCarInput(peer.remoteCar, remote);
       } else {
         peer.physics.clearAllInputs();
       }
-      // A goal, injected identically on both peers at the same tick (stands
-      // in for the ball being scripted into the net) — both must react to
-      // it identically.
-      if (injectGoal) {
+
+      // Host-only: a goal is injected identically at goalTick (stands in for a
+      // real shot into the net), then the host detects+scores it.
+      if (injectGoal && peer.session.isHost) {
         const goalCentre = peer.physics.getGoalSensorCentre("opponent")!;
         peer.physics.setBallState({ position: goalCentre, linearVelocity: { x: 0, y: 0, z: 0 } });
       }
+
       peer.physics.step();
-      peer.gameFlow.applyPhysicsResults();
-      peer.session.recordSimulated(simTick, worldHash(peer.physics));
-    };
+      peer.flow.applyPhysicsResults();
 
-    // Per-tick hashes, so we compare same-tick states even though the two
-    // peers reach a given tick at different wall moments (latency lag).
-    const hashesA: string[] = [];
-    const hashesB: string[] = [];
-
-    let simA = 0;
-    let simB = 0;
-    let sampleA = 0;
-    let sampleB = 0;
-    const lastTick = ticks - 1;
-    let wall = 0;
-    const maxWall = ticks * 12 + 3000;
-
-    const advance = (peer: Peer, sim: number, hashes: string[]): number => {
-      let t = sim;
-      while (t <= lastTick && peer.session.canSimulate(t)) {
-        stepPeer(peer, t, t === goalTick);
-        hashes[t] = worldHash(peer.physics);
-        t += 1;
+      if (peer.session.isHost && peer.session.shouldSnapshot(tick)) {
+        peer.session.sendSnapshot({ tick, world: peer.physics.getWorldSnapshot(), flow: peer.flow.captureAuthorityState() });
       }
-      return t;
+      peer.session.prune(tick);
     };
 
-    while ((simA <= lastTick || simB <= lastTick) && wall < maxWall) {
-      while (sampleA <= simA + delay && sampleA <= lastTick) peerA.session.submitLocalInput(sampleA, playerScript[sampleA]!), (sampleA += 1);
-      while (sampleB <= simB + delay && sampleB <= lastTick) peerB.session.submitLocalInput(sampleB, opponentScript[sampleB]!), (sampleB += 1);
+    let worstOpponentError = 0;
+    for (let tick = 0; tick < ticks; tick += 1) {
+      // Host runs slightly ahead in wall time; advance the shared clock once
+      // per tick so in-flight packets progress.
+      stepPeer(host, tick, tick === goalTick);
       net.advanceClock(1);
-      wall += 1;
-      peerA.session.pump();
-      peerB.session.pump();
-      simA = advance(peerA, simA, hashesA);
-      simB = advance(peerB, simB, hashesB);
+      stepPeer(guest, tick, false);
+      net.advanceClock(1);
+
+      // The guest's view of the HOST's car (car-player) must track the host's
+      // authoritative car-player closely — that is the opponent on the guest's
+      // screen and is fully authoritative.
+      // Measure steady-state tracking only while BOTH are in live PLAY. The
+      // kickoff-reset teleport after a goal is a deliberate discontinuity the
+      // guest reflects a snapshot or two late — not a tracking failure.
+      if (
+        tick > COUNTDOWN_TOTAL_TICKS + 20 &&
+        tick % cfg.snapshotIntervalTicks === 0 &&
+        host.flow.getMatchState() === "PLAYING" &&
+        guest.flow.getMatchState() === "PLAYING"
+      ) {
+        const hostP = host.physics.getCarState(PLAYER_CAR_ID).position;
+        const guestP = guest.physics.getCarState(PLAYER_CAR_ID).position;
+        worstOpponentError = Math.max(
+          worstOpponentError,
+          Math.hypot(hostP.x - guestP.x, hostP.y - guestP.y, hostP.z - guestP.z)
+        );
+      }
     }
 
-    expect(simA).toBe(ticks);
-    expect(simB).toBe(ticks);
-    expect(peerA.session.getStatus()).toBe("running");
-    expect(peerB.session.getStatus()).toBe("running");
+    // Never stalled, never forfeited: both ran the full match.
+    // The host scored; the guest reflects the identical score from authority.
+    const hostState = host.flow.getSessionState();
+    const guestState = guest.flow.getSessionState();
+    expect(hostState.playerScore + hostState.opponentScore).toBeGreaterThan(0);
+    expect(guestState.playerScore).toBe(hostState.playerScore);
+    expect(guestState.opponentScore).toBe(hostState.opponentScore);
 
-    // Bit-identical on EVERY tick — any divergence in goal detection,
-    // celebration timing, or the kickoff reset would split a hash here.
-    for (let t = 0; t < ticks; t += 1) {
-      expect(hashesA[t], `tick ${t} A vs B`).toBe(hashesB[t]);
-    }
+    // The authoritative opponent stayed tightly tracked despite 10% loss+jitter.
+    expect(worstOpponentError).toBeLessThan(1.5);
 
-    // The match actually progressed through a goal and back into play, and
-    // both peers agree on the whole session state.
-    const finalState = peerA.gameFlow.getSessionState();
-    expect(finalState.playerScore + finalState.opponentScore).toBeGreaterThan(0);
-    expect(finalState).toEqual(peerB.gameFlow.getSessionState());
-
-    peerA.physics.dispose();
-    peerB.physics.dispose();
+    host.physics.dispose();
+    guest.physics.dispose();
   }, 60_000);
 });

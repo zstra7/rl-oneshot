@@ -51,6 +51,27 @@ export interface MatchConfig {
   readonly durationMinutes: MatchDurationMinutes;
 }
 
+/**
+ * S4 (online state-sync): the match-flow decisions the HOST is authoritative
+ * over and streams to the guest inside each snapshot — score, clock, phase,
+ * and the timers/counters the guest needs to render the same countdown,
+ * celebration, and kickoff sequence. The guest never decides these itself
+ * (no local goal detection), so the two screens can never disagree.
+ */
+export interface MatchAuthorityState {
+  readonly matchState: MatchState;
+  readonly playerScore: number;
+  readonly opponentScore: number;
+  readonly regulationTimeRemaining: number;
+  readonly overtimeElapsed: number;
+  readonly countdownTicksRemaining: number;
+  readonly celebrationTicksRemaining: number;
+  readonly overtimeIntroTicksRemaining: number;
+  readonly kickoffCounter: number;
+  readonly goalLatch: boolean;
+  readonly winner: TeamId | null;
+}
+
 /** game-flow spec section 35. */
 export interface GameSessionState {
   readonly matchState: MatchState;

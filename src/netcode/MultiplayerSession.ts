@@ -1,24 +1,24 @@
 import { LobbyClient, type LobbyEvent } from "@/netcode/LobbyClient";
-import { LockstepSession } from "@/netcode/LockstepSession";
+import { StateSyncSession, DEFAULT_STATE_SYNC_CONFIG } from "@/netcode/StateSyncSession";
 import { PeerLink, type PeerLinkState } from "@/netcode/PeerLink";
-import { DEFAULT_LOCKSTEP_CONFIG } from "@/netcode/LockstepSession";
 import { LOBBY_PROTOCOL_VERSION, type HandshakeInfo, type MatchPeerInfo, type PeerRole } from "@/netcode/lobbyProtocol";
 import type { SignalingChannel } from "@/netcode/Signaling";
 import { OPPONENT_CAR_ID, PLAYER_CAR_ID } from "@/game-flow/MatchFlowConstants";
 
 /**
- * N5 (plan/ONLINE_MULTIPLAYER_PLAN.md): the orchestrator that turns a
- * lobby connection into a running lockstep match. It sequences
- * LobbyClient (N4 control plane) → PeerLink (N3 WebRTC) → LockstepSession
- * (N2), and emits high-level events the game runtime and lobby UI (N6)
- * react to. Every collaborator is created through an injectable factory so
- * the whole sequence is unit-testable without a real network.
+ * N5 / S5 (online state-sync netcode): the orchestrator that turns a lobby
+ * connection into a running online match. It sequences LobbyClient (N4
+ * control plane) → PeerLink (N3 WebRTC) → StateSyncSession (S3), and emits
+ * high-level events the game runtime and lobby UI (N6) react to. Every
+ * collaborator is created through an injectable factory so the whole
+ * sequence is unit-testable without a real network.
  *
  * Flow: connect to a room (create/join/quick-match) → both peers present →
  * open a PeerLink with the assigned role over the lobby's signaling → on
  * DataChannel connect, send the build-hash handshake → on `match-start`,
- * spin up the LockstepSession and hand the runtime everything it needs to
- * begin a synchronized online match.
+ * spin up the StateSyncSession and hand the runtime everything it needs to
+ * begin the match. The OFFERER is the authoritative HOST (it streams world
+ * snapshots); the answerer is the guest that converges to them.
  */
 export type MultiplayerEvent =
   | { readonly type: "queued"; readonly position: number }
@@ -30,10 +30,12 @@ export type MultiplayerEvent =
   | { readonly type: "error"; readonly reason: string };
 
 export interface OnlineMatchContext {
-  readonly session: LockstepSession;
+  readonly session: StateSyncSession;
   readonly kickoffSeed: number;
   readonly localCarId: string;
   readonly remoteCarId: string;
+  /** True on the authoritative host (the offerer): it streams snapshots; the guest converges. */
+  readonly isHost: boolean;
   /** The two peers' handshake payloads (profile + cosmetics), for applying to the correct cars. */
   readonly peers: readonly MatchPeerInfo[];
 }
@@ -170,25 +172,26 @@ export class MultiplayerSession {
       return;
     }
     this.matchStarted = true;
-    // Both peers simulate the identical canonical world: the offerer always
-    // drives PLAYER_CAR_ID and the answerer always drives OPPONENT_CAR_ID.
-    // Each client's *local* car is whichever one matches its own role, so the
-    // two ends stay in lockstep instead of both driving car-player (which
-    // would desync every frame and collapse the match back to CPU).
+    // The offerer always drives PLAYER_CAR_ID and is the authoritative HOST;
+    // the answerer drives OPPONENT_CAR_ID and is the guest. Each client's
+    // *local* car matches its own role, and the host streams world snapshots
+    // the guest converges to — so a floating-point drift is corrected, never
+    // fatal, and a lost input is predicted, never a stall.
     const isOfferer = this.role !== "answerer";
     const localCarId = isOfferer ? PLAYER_CAR_ID : OPPONENT_CAR_ID;
     const remoteCarId = isOfferer ? OPPONENT_CAR_ID : PLAYER_CAR_ID;
-    const session = new LockstepSession({
+    const session = new StateSyncSession({
       localCarId,
       remoteCarId,
       link: this.peer,
-      inputDelayTicks: DEFAULT_LOCKSTEP_CONFIG.inputDelayTicks,
-      redundancyWindow: DEFAULT_LOCKSTEP_CONFIG.redundancyWindow,
-      hashIntervalTicks: DEFAULT_LOCKSTEP_CONFIG.hashIntervalTicks
+      isHost: isOfferer,
+      inputDelayTicks: DEFAULT_STATE_SYNC_CONFIG.inputDelayTicks,
+      redundancyWindow: DEFAULT_STATE_SYNC_CONFIG.redundancyWindow,
+      snapshotIntervalTicks: DEFAULT_STATE_SYNC_CONFIG.snapshotIntervalTicks
     });
     this.config.onEvent({
       type: "match-ready",
-      context: { session, kickoffSeed, localCarId, remoteCarId, peers }
+      context: { session, kickoffSeed, localCarId, remoteCarId, isHost: isOfferer, peers }
     });
   }
 }

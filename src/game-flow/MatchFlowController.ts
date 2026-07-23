@@ -15,6 +15,7 @@ import {
 } from "@/game-flow/MatchFlowConstants";
 import type {
   GameSessionState,
+  MatchAuthorityState,
   MatchConfig,
   MatchDurationMinutes,
   MatchFlowEvent,
@@ -110,6 +111,14 @@ export class MatchFlowController {
   private opponentIsAi = true;
   /** N5: true while an online 1v1 session is active (disables SP-only behaviours like pause-freeze). */
   private onlineMode = false;
+  /**
+   * S4 (online state-sync): true on the GUEST peer. The host is authoritative
+   * for all match-flow decisions (score, clock, phase, goals) and streams them
+   * in every snapshot; the guest applies those verbatim and runs NO local
+   * countdown, clock, or goal detection of its own — that is what guarantees
+   * the two screens can never disagree about a goal or the time left.
+   */
+  private guestMode = false;
 
   private readonly events: MatchFlowEvent[] = [];
 
@@ -260,6 +269,11 @@ export class MatchFlowController {
     if (this.isPaused()) {
       return;
     }
+    // S4: the guest's flow state comes entirely from host snapshots — it must
+    // not advance its own countdown/clock or it would fight the authority.
+    if (this.guestMode) {
+      return;
+    }
 
     switch (this.matchState) {
       case "COUNTDOWN_3":
@@ -288,6 +302,12 @@ export class MatchFlowController {
   /** Called once per fixed tick, after `physics.step()` (spec section 34). */
   public applyPhysicsResults(): void {
     if (this.isPaused()) {
+      return;
+    }
+    // S4: only the host decides goals. The guest reflects the host's score
+    // from snapshots, so it never runs goal detection (which, on a predicted
+    // world, could otherwise fire a phantom goal the host never saw).
+    if (this.guestMode) {
       return;
     }
 
@@ -565,6 +585,64 @@ export class MatchFlowController {
     this.setMatchState("MATCH_LOADING");
     this.setMatchState("KICKOFF_SETUP");
     this.beginKickoffReset("PLAYING");
+  }
+
+  /**
+   * S4: mark this controller as the online GUEST (or clear it). The guest
+   * follows host authority via `applyAuthorityState`; the host leaves this
+   * false and runs the match normally, capturing its state each snapshot.
+   */
+  public setOnlineGuest(isGuest: boolean): void {
+    this.guestMode = isGuest;
+  }
+
+  /** S4: the host captures its authoritative flow state to put in a snapshot. */
+  public captureAuthorityState(): MatchAuthorityState {
+    return {
+      matchState: this.matchState,
+      playerScore: this.playerScore,
+      opponentScore: this.opponentScore,
+      regulationTimeRemaining: this.regulationTimeRemaining,
+      overtimeElapsed: this.overtimeElapsed,
+      countdownTicksRemaining: this.countdownTicksRemaining,
+      celebrationTicksRemaining: this.celebrationTicksRemaining,
+      overtimeIntroTicksRemaining: this.overtimeIntroTicksRemaining,
+      kickoffCounter: this.kickoffCounter,
+      goalLatch: this.goalLatch,
+      winner: this.winner
+    };
+  }
+
+  /**
+   * S4: the guest overwrites its flow state with the host's authoritative one
+   * from a snapshot. Emits the state-change edges the UI/audio layers listen
+   * for (goal fanfare, countdown beeps, results screen) so the guest's
+   * presentation still reacts even though it never ran the logic itself.
+   */
+  public applyAuthorityState(state: MatchAuthorityState): void {
+    const previousState = this.matchState;
+    const scoredBefore = this.playerScore + this.opponentScore;
+    const playerScoredMore = state.playerScore > this.playerScore;
+
+    this.playerScore = state.playerScore;
+    this.opponentScore = state.opponentScore;
+    this.regulationTimeRemaining = state.regulationTimeRemaining;
+    this.overtimeElapsed = state.overtimeElapsed;
+    this.countdownTicksRemaining = state.countdownTicksRemaining;
+    this.celebrationTicksRemaining = state.celebrationTicksRemaining;
+    this.overtimeIntroTicksRemaining = state.overtimeIntroTicksRemaining;
+    this.kickoffCounter = state.kickoffCounter;
+    this.goalLatch = state.goalLatch;
+    this.winner = state.winner;
+
+    if (state.playerScore + state.opponentScore > scoredBefore) {
+      // Reflect the host's goal so the guest's audio/VFX fire. The scoring
+      // team is inferred from which side's tally went up.
+      this.pushEvent({ type: "goal-awarded", team: playerScoredMore ? "player" : "opponent" });
+    }
+    if (state.matchState !== previousState) {
+      this.setMatchState(state.matchState);
+    }
   }
 
   /**

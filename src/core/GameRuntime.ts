@@ -38,7 +38,6 @@ import {
   type CarInputSource
 } from "@/netcode/CarInputSource";
 import type { OnlineMatchContext } from "@/netcode/MultiplayerSession";
-import { fnv1a32 } from "@/netcode/protocol";
 import type { CarId } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
@@ -62,6 +61,14 @@ export type UiRequestedAction = { readonly kind: "noop" };
 
 /** R12.2: matches settingsStore's `car.bodyColor`/`car.boostColor` default (`#4ff0ff`, the built-in player cyan). */
 const DEFAULT_PLAYER_CAR_COLOR = "#4ff0ff";
+
+/**
+ * S5: metres the guest's locally-predicted own car may drift from the host's
+ * authoritative position before it is hard-snapped instead of smoothly
+ * trusted. Generous enough that normal prediction error (a few cm) never
+ * snaps — only a genuinely mispredicted collision does.
+ */
+const ONLINE_HARD_CORRECTION_DISTANCE = 2.0;
 
 const MENU_MATCH_STATES: readonly MatchState[] = [
   "MAIN_MENU",
@@ -592,34 +599,21 @@ export class GameRuntime implements GameRuntimeFacade {
   public startOnlineSession(context: OnlineMatchContext, durationMinutes: MatchDurationMinutes): void {
     const modules = this.requireModules();
     this.onlineSession = context;
-    // Restart the fixed-step tick counter at 0 for the match. The two peers
-    // begin the online session at DIFFERENT local coordinator ticks (the
-    // `match-start` signal arrives after each has spent its own amount of
-    // menu time), but the lockstep session numbers inputs and desync-hash
-    // checkpoints from 0 (`onlineNextSubmitTick = 0` below) and compares
-    // hashes at equal absolute ticks. Without this reset the peers' match
-    // timelines would be offset by their menu-time difference, so the
-    // countdown/kickoff would land on different ticks and the state hashes
-    // would diverge the instant play began — the desync that dropped live
-    // matches back to a CPU game. Resetting here makes tick 0 == match start
-    // on both peers; the lockstep gate keeps them aligned from there.
+    // Restart the fixed-step tick counter at 0 so the input stream numbers
+    // from match start on both peers. State-sync never STALLS (a missing
+    // remote input is predicted) and never FORFEITS on drift (the host's
+    // snapshots correct it), so the sim just runs free — no advance gate.
     this.fixedStepCoordinator.reset();
     this.onlineNextSubmitTick = 0;
     this.lastOnlineFrame = null;
-    // Follow this client's actual car (the answerer drives car-opponent) so the
+    // Follow this client's actual car (the guest drives car-opponent) so the
     // camera, HUD boost/supersonic/ball-cam readouts track the local player.
     this.localPlayerCarId = context.localCarId;
     this.cameraController?.setTargetCar(context.localCarId);
 
-    // Install both cars' sources, but in a CANONICAL car order (car-player
-    // first, car-opponent second) — never in role order. The fixed-tick loop
-    // applies inputs in `carInputSources` iteration (= insertion) order, and
-    // the deterministic-sim gate is pinned to exactly that order (see
-    // tests/netspike/inputScript.ts). If the answerer (whose local car is
-    // car-opponent) inserted its local car first, it would apply the two
-    // cars' inputs in the reverse order from the offerer and the two peers'
-    // simulations would diverge the moment controls go live — the desync that
-    // silently dropped online matches back to CPU.
+    // Install both cars' sources in a CANONICAL car order (car-player first)
+    // so both peers apply inputs in the same order — cheap insurance that
+    // keeps the host and guest sims as close as possible between snapshots.
     const sourcesByCar = new Map<CarId, CarInputSource>([
       [context.localCarId, new BufferedLocalSource(context.localCarId, context.session)],
       [context.remoteCarId, context.session.remoteSource]
@@ -632,7 +626,9 @@ export class GameRuntime implements GameRuntimeFacade {
       }
     }
 
-    this.fixedStepCoordinator.setAdvanceGate({ canAdvance: (tick) => context.session.canSimulate(tick) });
+    this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
+    // The guest follows the host's authoritative match flow; the host runs it.
+    modules.gameFlow.setOnlineGuest(!context.isHost);
     modules.gameFlow.startOnlineMatch({ durationMinutes, kickoffSeed: context.kickoffSeed });
   }
 
@@ -642,6 +638,7 @@ export class GameRuntime implements GameRuntimeFacade {
     this.localPlayerCarId = PLAYER_CAR_ID;
     this.cameraController?.setTargetCar(PLAYER_CAR_ID);
     this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
+    this.requireModules().gameFlow.setOnlineGuest(false);
     this.configureSinglePlayerInputSources();
   }
 
@@ -650,14 +647,12 @@ export class GameRuntime implements GameRuntimeFacade {
   }
 
   /**
-   * N6: online submit-ahead. Each rendered frame, sample the local input
-   * for every tick up to `currentTick + inputDelay` that hasn't been sent
-   * yet, hand it to the lockstep session (which quantizes, buffers, and
-   * transmits it), and pump incoming packets. This runs BEFORE the gated
-   * fixed-step advance so the gate has the local inputs it needs to let
-   * ticks through. Camera/pause edges are consumed here (the online
-   * fixed-tick path does not re-sample). Runs at most a bounded number of
-   * submits per frame to avoid unbounded catch-up bursts.
+   * S5: online submit-ahead + convergence. Each rendered frame, sample the
+   * local input for every tick up to `currentTick + inputDelay` not yet sent,
+   * hand it to the state-sync session (which quantizes, buffers, transmits),
+   * and pump incoming packets. On the GUEST, apply the newest authoritative
+   * host snapshot so the world converges before the next simulated tick.
+   * Nothing here can stall or forfeit the match.
    */
   private driveOnlineSubmit(): void {
     const context = this.onlineSession;
@@ -666,19 +661,22 @@ export class GameRuntime implements GameRuntimeFacade {
       return;
     }
 
+    // Sample only a small delay ahead so the local player's OWN car stays
+    // near-instant (inputDelayTicks ≈ a couple of ticks of latency). A hitchy
+    // frame can still advance several ticks past this in one go; those few
+    // ticks fall back to hold-last prediction (StateSyncSession.localInputForTick)
+    // rather than stalling or crashing — invisible for a brief catch-up burst.
     const targetTick = this.fixedStepCoordinator.tick + context.session.inputDelayTicks;
     const grounded = modules.physics.getCarIds().includes(context.localCarId)
       ? modules.physics.getCarState(context.localCarId).grounded
       : true;
 
     let submits = 0;
-    const maxSubmitsPerFrame = 16;
+    const maxSubmitsPerFrame = 32;
     while (this.onlineNextSubmitTick <= targetTick && submits < maxSubmitsPerFrame) {
       const frame = modules.input.sampleGameplayInputForTick(this.onlineNextSubmitTick, { grounded });
       this.lastOnlineFrame = frame;
       this.cameraController?.consumeCameraInput(frame.camera);
-      // A pause press opens the non-freezing online overlay via the UI; the
-      // simulation never freezes (that would desync the peers).
       context.session.submitLocalInput(this.onlineNextSubmitTick, frame.car);
       this.onlineNextSubmitTick += 1;
       submits += 1;
@@ -686,12 +684,33 @@ export class GameRuntime implements GameRuntimeFacade {
 
     context.session.pump();
 
-    if (context.session.getStatus() === "desynced") {
-      // A determinism break was detected — end the match rather than let
-      // the two peers silently diverge.
-      modules.gameFlow.endOnlineMatchByForfeit("player");
-      this.endOnlineSession();
+    if (!context.isHost) {
+      this.applyHostSnapshot();
     }
+  }
+
+  /**
+   * S5 (guest only): converge onto the newest authoritative snapshot the host
+   * has sent. The opponent car, ball, boost pads and match-flow state are
+   * taken verbatim (the host is the single source of truth); the guest's OWN
+   * car keeps its local prediction for lag-free feel unless it has drifted
+   * implausibly far, so a mispredicted collision snaps rather than lingers.
+   */
+  private applyHostSnapshot(): void {
+    const context = this.onlineSession;
+    const modules = this.modules;
+    if (!context || !modules) {
+      return;
+    }
+    const snapshot = context.session.consumeSnapshot();
+    if (!snapshot) {
+      return;
+    }
+    modules.physics.applyWorldSnapshot(snapshot.world, {
+      predictedLocalCarId: context.localCarId,
+      hardCorrectionDistance: ONLINE_HARD_CORRECTION_DISTANCE
+    });
+    modules.gameFlow.applyAuthorityState(snapshot.flow);
   }
 
   private onFixedTick(tick: number): void {
@@ -776,12 +795,18 @@ export class GameRuntime implements GameRuntimeFacade {
 
     modules.gameFlow.applyPhysicsResults();
 
+    if (online && online.isHost && online.session.shouldSnapshot(tick)) {
+      // S5 (host only): stream the just-simulated authoritative frame — world
+      // + match-flow decisions — so the guest converges. No hashing, no
+      // desync check: drift is corrected by these snapshots, never fatal.
+      online.session.sendSnapshot({
+        tick,
+        world: modules.physics.getWorldSnapshot(),
+        flow: modules.gameFlow.captureAuthorityState()
+      });
+    }
     if (online) {
-      // N6: feed the just-simulated world state to the lockstep session
-      // for the periodic desync-hash exchange.
-      const world = modules.physics.getWorldState();
-      const stateJson = JSON.stringify({ cars: world.cars, ball: world.ball, boostPads: world.boostPads, tick: world.tick });
-      online.session.recordSimulated(tick, String(fnv1a32(stateJson)));
+      online.session.prune(tick);
     }
 
     this.dispatcher.emit("runtime:fixed-tick", {

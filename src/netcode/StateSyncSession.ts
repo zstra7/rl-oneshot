@@ -1,0 +1,190 @@
+import { RemoteCarInputSource } from "@/netcode/CarInputSource";
+import { quantizeCarInput } from "@/netcode/InputQuantize";
+import {
+  PacketType,
+  decodePacket,
+  encodeInputPacket,
+  encodePongPacket,
+  encodeSnapshotPacket,
+  type InputFrame,
+  type NetLink
+} from "@/netcode/protocol";
+import type { StateSyncSnapshot } from "@/netcode/stateSync";
+import { NEUTRAL_CAR_INPUT, type CarId, type CarInput } from "@/physics/PhysicsTypes";
+
+/**
+ * S3 (online state-sync netcode): the transport core that REPLACES lockstep.
+ *
+ * It keeps lockstep's one genuinely good idea — exchange only quantised
+ * inputs, tick-aligned — but drops the two properties that made real matches
+ * fragile: the hard STALL when a remote input hadn't arrived (froze the game
+ * under any loss), and the DESYNC FORFEIT when two floating-point sims drifted
+ * a hair apart (ended the match cross-machine). In their place:
+ *
+ *  - Prediction, never stalling. A missing remote input holds the last one
+ *    (`RemoteCarInputSource`), so the sim always advances smoothly.
+ *  - Host authority, never forfeiting. The room creator ("host") streams a
+ *    full world+flow snapshot every few ticks; the "guest" applies it and
+ *    converges. Determinism stops being load-bearing — a little drift is
+ *    simply corrected, not fatal.
+ *
+ * This class is transport-only and physics-agnostic (like LockstepSession
+ * was): the runtime feeds it local inputs and, on the host, the just-captured
+ * snapshot; it hands back the remote car's predicted input and, on the guest,
+ * the latest authoritative snapshot to apply.
+ */
+export interface StateSyncConfig {
+  readonly localCarId: CarId;
+  readonly remoteCarId: CarId;
+  readonly link: NetLink;
+  readonly isHost: boolean;
+  /** How many ticks ahead of the sim local input is sampled/sent. */
+  readonly inputDelayTicks: number;
+  /** Each input packet re-sends this many recent frames so one lost packet self-heals. */
+  readonly redundancyWindow: number;
+  /** Host emits a snapshot every this many simulated ticks. */
+  readonly snapshotIntervalTicks: number;
+}
+
+export const DEFAULT_STATE_SYNC_CONFIG = {
+  inputDelayTicks: 2,
+  redundancyWindow: 12,
+  snapshotIntervalTicks: 4
+} as const;
+
+export class StateSyncSession {
+  public readonly remoteSource: RemoteCarInputSource;
+
+  private readonly localBuffer = new Map<number, CarInput>();
+  private lastLocalInput: CarInput = { ...NEUTRAL_CAR_INPUT };
+  private highestLocalTick = -1;
+  private highestRemoteTick = -1;
+  /** Guest only: the newest authoritative snapshot the runtime hasn't applied yet. */
+  private pendingSnapshot: StateSyncSnapshot | null = null;
+  private latestSnapshotTick = -1;
+
+  public constructor(private readonly config: StateSyncConfig) {
+    this.remoteSource = new RemoteCarInputSource(config.remoteCarId);
+  }
+
+  public get inputDelayTicks(): number {
+    return this.config.inputDelayTicks;
+  }
+
+  public get isHost(): boolean {
+    return this.config.isHost;
+  }
+
+  public get snapshotIntervalTicks(): number {
+    return this.config.snapshotIntervalTicks;
+  }
+
+  public get highestRemoteInputTick(): number {
+    return this.highestRemoteTick;
+  }
+
+  /**
+   * Schedule the local car's input for a future tick and transmit it with the
+   * redundancy window (same as lockstep). Unlike lockstep, nothing downstream
+   * blocks on the peer having received it.
+   */
+  public submitLocalInput(tick: number, input: CarInput): void {
+    const quantized = quantizeCarInput(input);
+    this.localBuffer.set(tick, quantized);
+    if (tick > this.highestLocalTick) {
+      this.highestLocalTick = tick;
+      this.lastLocalInput = quantized;
+    }
+
+    const frames: InputFrame[] = [];
+    const windowStart = Math.max(0, tick - this.config.redundancyWindow + 1);
+    for (let t = windowStart; t <= tick; t += 1) {
+      const buffered = this.localBuffer.get(t);
+      if (buffered) {
+        frames.push({ tick: t, input: buffered });
+      }
+    }
+    this.config.link.send(encodeInputPacket(this.highestRemoteTick, frames));
+  }
+
+  /**
+   * The local car's input for a tick. If the sim outran the submit-ahead (a
+   * catch-up burst after a long frame), predict with the last submitted input
+   * rather than throwing — a hitch must never crash the match. The runtime
+   * submits generously ahead so this fallback is rare.
+   */
+  public localInputForTick(tick: number): CarInput {
+    return this.localBuffer.get(tick) ?? this.lastLocalInput;
+  }
+
+  /** Drain the link and route arrivals. Malformed packets are dropped. */
+  public pump(): void {
+    for (const bytes of this.config.link.receive()) {
+      const packet = decodePacket(bytes);
+      if (!packet) {
+        continue;
+      }
+      switch (packet.type) {
+        case PacketType.Input:
+          for (const frame of packet.frames) {
+            this.remoteSource.provideInputForTick(frame.tick, frame.input);
+            if (frame.tick > this.highestRemoteTick) {
+              this.highestRemoteTick = frame.tick;
+            }
+          }
+          break;
+        case PacketType.Snapshot:
+          // Only the guest consumes snapshots; the host is authoritative and
+          // ignores any it somehow receives. Keep only the newest.
+          if (!this.config.isHost && packet.snapshot.tick > this.latestSnapshotTick) {
+            this.pendingSnapshot = packet.snapshot;
+            this.latestSnapshotTick = packet.snapshot.tick;
+          }
+          break;
+        case PacketType.Ping:
+          this.config.link.send(encodePongPacket(packet.nonce));
+          break;
+        case PacketType.Pong:
+          break;
+      }
+    }
+  }
+
+  /** Host: transmit an authoritative snapshot to the guest. No-op on the guest. */
+  public sendSnapshot(snapshot: StateSyncSnapshot): void {
+    if (!this.config.isHost) {
+      return;
+    }
+    this.config.link.send(encodeSnapshotPacket(snapshot));
+  }
+
+  /** Whether `tick` is a host snapshot boundary. */
+  public shouldSnapshot(tick: number): boolean {
+    return this.config.isHost && tick % this.config.snapshotIntervalTicks === 0;
+  }
+
+  /**
+   * Guest: take the newest authoritative snapshot the host has sent since the
+   * last call (or null). The runtime applies it to converge, then clears it by
+   * virtue of this consume.
+   */
+  public consumeSnapshot(): StateSyncSnapshot | null {
+    const snapshot = this.pendingSnapshot;
+    this.pendingSnapshot = null;
+    return snapshot;
+  }
+
+  /** Drop local inputs well behind the frontier so the buffer can't grow unbounded. */
+  public prune(tick: number): void {
+    const pruneBefore = tick - this.config.redundancyWindow * 4;
+    if (pruneBefore <= 0) {
+      return;
+    }
+    for (const t of this.localBuffer.keys()) {
+      if (t < pruneBefore) {
+        this.localBuffer.delete(t);
+      }
+    }
+    this.remoteSource.discardBefore(pruneBefore);
+  }
+}

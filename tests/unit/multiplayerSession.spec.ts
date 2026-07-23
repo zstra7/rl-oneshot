@@ -105,14 +105,15 @@ describe("N5 MultiplayerSession orchestration", () => {
     if (matchReady?.type !== "match-ready") throw new Error("no match-ready");
     expect(matchReady.context.kickoffSeed).toBe(7);
     // This client was assigned the answerer role, so it drives car-opponent —
-    // the offerer drives car-player. Both peers therefore simulate the same
-    // canonical world and stay in lockstep instead of desyncing to CPU.
+    // the offerer drives car-player. The answerer is the GUEST (converges to
+    // the host's snapshots); the offerer is the authoritative host.
     expect(matchReady.context.localCarId).toBe("car-opponent");
     expect(matchReady.context.remoteCarId).toBe("car-player");
-    expect(matchReady.context.session.getStatus()).toBe("running");
+    expect(matchReady.context.isHost).toBe(false);
+    expect(matchReady.context.session.isHost).toBe(false);
   });
 
-  it("assigns the offerer to car-player (mirror of the answerer)", () => {
+  it("assigns the offerer to car-player and makes it the authoritative host", () => {
     const h = makeSession();
     h.session.createRoom();
     h.getSocket()._server({ type: "room-created", code: "ABCDE", selfId: "p1" });
@@ -133,6 +134,8 @@ describe("N5 MultiplayerSession orchestration", () => {
     if (matchReady?.type !== "match-ready") throw new Error("no match-ready");
     expect(matchReady.context.localCarId).toBe("car-player");
     expect(matchReady.context.remoteCarId).toBe("car-opponent");
+    expect(matchReady.context.isHost).toBe(true);
+    expect(matchReady.context.session.isHost).toBe(true);
   });
 
   it("surfaces a handshake rejection (incompatible builds)", () => {

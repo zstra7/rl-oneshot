@@ -87,7 +87,7 @@ describe("N1 CarInputSource seam", () => {
     physics.dispose();
   });
 
-  it("RemoteCarInputSource replays the exact input buffered for a tick, neutral if absent", () => {
+  it("RemoteCarInputSource replays the exact input for a tick and PREDICTS (holds last) across a gap", () => {
     const source = new RemoteCarInputSource(OPPONENT_CAR_ID);
     const drivingInput = { ...NEUTRAL_CAR_INPUT, throttle: 1, steer: 0.5, boost: true };
     source.provideInputForTick(42, drivingInput);
@@ -99,9 +99,10 @@ describe("N1 CarInputSource seam", () => {
       ({ tick, matchState: "PLAYING", physics: null as never, localFrame: null as never });
 
     expect(source.sampleForTick(ctx(42)).input).toEqual(drivingInput);
-    // A tick with no buffered input yields neutral (the gate, not a wrong
-    // value, is what prevents advancing past a gap).
-    expect(source.sampleForTick(ctx(43)).input).toEqual(NEUTRAL_CAR_INPUT);
+    // S3 state-sync: a tick with no buffered input HOLDS the last known input
+    // (the car keeps doing what it was last seen doing) rather than snapping to
+    // neutral or stalling — the host's snapshot corrects any mispredicted drift.
+    expect(source.sampleForTick(ctx(43)).input).toEqual(drivingInput);
   });
 
   it("RemoteCarInputSource.discardBefore prunes old ticks only", () => {

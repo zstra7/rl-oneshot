@@ -1,5 +1,6 @@
 import { axisToInt8, int8ToAxis } from "@/netcode/InputQuantize";
 import type { CarInput } from "@/physics/PhysicsTypes";
+import { isStateSyncSnapshot, type StateSyncSnapshot } from "@/netcode/stateSync";
 
 /**
  * N2 (plan/ONLINE_MULTIPLAYER_PLAN.md, §4.3): the wire format for
@@ -15,7 +16,8 @@ export const enum PacketType {
   Input = 1,
   Hash = 2,
   Ping = 3,
-  Pong = 4
+  Pong = 4,
+  Snapshot = 5
 }
 
 /** Minimal transport contract shared by FakeLink (N2 tests) and PeerLink (N3, real WebRTC). */
@@ -34,7 +36,8 @@ export type DecodedPacket =
   | { readonly type: PacketType.Input; readonly ackTick: number; readonly frames: InputFrame[] }
   | { readonly type: PacketType.Hash; readonly tick: number; readonly hash: number }
   | { readonly type: PacketType.Ping; readonly nonce: number }
-  | { readonly type: PacketType.Pong; readonly nonce: number };
+  | { readonly type: PacketType.Pong; readonly nonce: number }
+  | { readonly type: PacketType.Snapshot; readonly snapshot: StateSyncSnapshot };
 
 const BUTTON_JUMP = 1 << 0;
 const BUTTON_BOOST = 1 << 1;
@@ -116,6 +119,23 @@ export function encodePongPacket(nonce: number): Uint8Array {
   return bytes;
 }
 
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+/**
+ * Encode a host-authoritative snapshot: type byte + UTF-8 JSON. JSON (not a
+ * packed binary layout) because a snapshot carries ~30 heterogeneous fields
+ * per car and the whole point of state-sync is robustness, not squeezing
+ * bytes — at 20-30Hz the size is trivial for a DataChannel.
+ */
+export function encodeSnapshotPacket(snapshot: StateSyncSnapshot): Uint8Array {
+  const json = textEncoder.encode(JSON.stringify(snapshot));
+  const bytes = new Uint8Array(1 + json.length);
+  bytes[0] = PacketType.Snapshot;
+  bytes.set(json, 1);
+  return bytes;
+}
+
 /**
  * Decode any packet, or return null for a malformed/truncated/unknown one
  * — a hostile or corrupt peer must never crash the decoder or be able to
@@ -163,6 +183,18 @@ export function decodePacket(bytes: Uint8Array): DecodedPacket | null {
         return null;
       }
       return { type: PacketType.Pong, nonce: view.getUint32(1, true) };
+    }
+    case PacketType.Snapshot: {
+      try {
+        const json = textDecoder.decode(bytes.subarray(1));
+        const parsed = JSON.parse(json) as unknown;
+        if (!isStateSyncSnapshot(parsed)) {
+          return null;
+        }
+        return { type: PacketType.Snapshot, snapshot: parsed };
+      } catch {
+        return null;
+      }
     }
     default:
       return null;

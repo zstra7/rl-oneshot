@@ -128,11 +128,18 @@ export class BufferedLocalSource implements CarInputSource {
  */
 export class RemoteCarInputSource implements CarInputSource {
   private readonly buffer = new Map<number, CarInput>();
+  /** The most recent input actually received, used to PREDICT missing ticks. */
+  private lastKnownInput: CarInput = { ...NEUTRAL_CAR_INPUT };
+  private highestKnownTick = -1;
 
   public constructor(public readonly carId: CarId) {}
 
   public provideInputForTick(tick: number, input: CarInput): void {
     this.buffer.set(tick, input);
+    if (tick > this.highestKnownTick) {
+      this.highestKnownTick = tick;
+      this.lastKnownInput = input;
+    }
   }
 
   public hasInputForTick(tick: number): boolean {
@@ -144,9 +151,19 @@ export class RemoteCarInputSource implements CarInputSource {
     return this.buffer.get(tick);
   }
 
+  /**
+   * State-sync prediction (S3): never stall. Use the exact input if we have
+   * it; otherwise hold the last input we received (a car keeps doing what it
+   * was last seen doing). The host's authoritative snapshot corrects any
+   * mispredicted drift a few ticks later, so a late/lost packet costs a
+   * little opponent-motion inaccuracy instead of freezing the whole match.
+   */
   public sampleForTick(context: CarInputContext): CarInputSample {
-    const input = this.buffer.get(context.tick);
-    return { input: input ?? { ...NEUTRAL_CAR_INPUT } };
+    const exact = this.buffer.get(context.tick);
+    if (exact) {
+      return { input: exact };
+    }
+    return { input: this.lastKnownInput };
   }
 
   /** Drop confirmed-and-simulated inputs so the buffer can't grow without bound. */

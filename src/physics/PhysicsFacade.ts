@@ -36,6 +36,15 @@ import type {
   BoostPadObservation,
   BoostPadRuntimeState
 } from "@/physics/boost/BoostPadTypes";
+import type { WorldNetSnapshot } from "@/physics/WorldSnapshot";
+
+/** S5: how the guest reconciles its locally-predicted own car with an authoritative snapshot. */
+export interface ApplyWorldSnapshotOptions {
+  /** The guest's own car — keep its predicted body unless it drifts past `hardCorrectionDistance`. */
+  readonly predictedLocalCarId?: CarId;
+  /** Metres of positional error beyond which even the predicted car is hard-snapped. */
+  readonly hardCorrectionDistance?: number;
+}
 
 export const PHYSICS_MODULE_CONTRACT_VERSION = "2.1";
 
@@ -656,6 +665,131 @@ export class PhysicsFacade implements GameModule {
 
   public getBoostPadStates(): BoostPadObservation[] {
     return this.boostPadSystem.getObservations();
+  }
+
+  /**
+   * S1 (online state-sync): capture the COMPLETE mutable simulation state so
+   * a peer can restore it verbatim. This is the host's authoritative frame;
+   * everything `step()` reads is included (bodies, per-car controller
+   * runtime, previous input, ball-contact + goal-sensor bookkeeping, pad
+   * timers), so a guest that applies it and replays inputs stays converged.
+   */
+  public getWorldSnapshot(): WorldNetSnapshot {
+    const vec = (v: RAPIER.Vector): V.Vec3Like => ({ x: v.x, y: v.y, z: v.z });
+    const quat = (q: RAPIER.Rotation): QuatLike => ({ x: q.x, y: q.y, z: q.z, w: q.w });
+
+    const cars = this.carRegistry.getAllStable().map((car) => ({
+      id: car.id,
+      position: vec(car.body.translation()),
+      rotation: quat(car.body.rotation()),
+      linearVelocity: vec(car.body.linvel()),
+      angularVelocity: vec(car.body.angvel()),
+      runtime: structuredCloneOf(car.runtime),
+      previousInput: { ...car.previousInput },
+      touchingBall: this.wasTouchingBallLastTick.get(car.id) ?? false
+    }));
+
+    if (!this.ballBody) {
+      throw new Error("Ball has not been spawned.");
+    }
+    const ballBody = this.ballBody;
+    const goalOverlap = {} as Record<TeamId, boolean>;
+    for (const [team, overlapping] of this.goalSensorOverlapping) {
+      goalOverlap[team] = overlapping;
+    }
+
+    return {
+      tick: this.tick,
+      simulationTime: this.simulationTime,
+      cars,
+      ball: {
+        position: vec(ballBody.translation()),
+        rotation: quat(ballBody.rotation()),
+        linearVelocity: vec(ballBody.linvel()),
+        angularVelocity: vec(ballBody.angvel())
+      },
+      pads: this.boostPadSystem.registry.getAllStable().map((pad) => ({
+        active: pad.active,
+        collectedAtTick: pad.collectedAtTick,
+        respawnAtTick: pad.respawnAtTick,
+        respawnTicksRemaining: pad.respawnTicksRemaining,
+        lastCollectedByCarId: pad.lastCollectedByCarId
+      })),
+      goalOverlap
+    };
+  }
+
+  /**
+   * S1: overwrite this world with an authoritative snapshot. The guest calls
+   * this to converge onto the host's state, then replays its own buffered
+   * inputs forward from `snapshot.tick`. Pads are matched by stable order.
+   * Missing cars/pads are tolerated (a guest that hasn't spawned everything
+   * yet just skips them). Render smoothing is re-primed so the correction
+   * does not produce a one-frame interpolation streak.
+   */
+  public applyWorldSnapshot(snapshot: WorldNetSnapshot, options?: ApplyWorldSnapshotOptions): void {
+    this.tick = snapshot.tick;
+    this.simulationTime = snapshot.simulationTime;
+
+    const predictedCarId = options?.predictedLocalCarId;
+    const hardDistanceSq = (options?.hardCorrectionDistance ?? 0) ** 2;
+
+    for (const carSnap of snapshot.cars) {
+      const car = this.carRegistry.tryGet(carSnap.id);
+      if (!car) {
+        continue;
+      }
+
+      // The guest's OWN car is locally predicted for lag-free feel: keep its
+      // predicted body unless it has drifted implausibly far from the host's
+      // authority (a genuinely mispredicted collision), in which case snap it.
+      // Its gameplay runtime (boost, jump/dodge) is always taken from the host
+      // so boost pickups and dodges stay authoritative.
+      let keepPredictedBody = false;
+      if (carSnap.id === predictedCarId) {
+        const pos = car.body.translation();
+        const dx = pos.x - carSnap.position.x;
+        const dy = pos.y - carSnap.position.y;
+        const dz = pos.z - carSnap.position.z;
+        keepPredictedBody = dx * dx + dy * dy + dz * dz <= hardDistanceSq;
+      }
+
+      if (!keepPredictedBody) {
+        car.body.setTranslation(carSnap.position, true);
+        car.body.setRotation(carSnap.rotation, true);
+        car.body.setLinvel(carSnap.linearVelocity, true);
+        car.body.setAngvel(carSnap.angularVelocity, true);
+        const sample = cloneTransform(car.body.translation(), car.body.rotation());
+        this.previousSnapshot.set(carSnap.id, sample);
+        this.currentSnapshot.set(carSnap.id, sample);
+      }
+
+      Object.assign(car.runtime, structuredCloneOf(carSnap.runtime));
+      car.previousInput = { ...carSnap.previousInput };
+      this.wasTouchingBallLastTick.set(carSnap.id, carSnap.touchingBall);
+    }
+
+    if (this.ballBody) {
+      this.ballBody.setTranslation(snapshot.ball.position, true);
+      this.ballBody.setRotation(snapshot.ball.rotation, true);
+      this.ballBody.setLinvel(snapshot.ball.linearVelocity, true);
+      this.ballBody.setAngvel(snapshot.ball.angularVelocity, true);
+      const ballSample = cloneTransform(this.ballBody.translation(), this.ballBody.rotation());
+      this.previousBall = ballSample;
+      this.currentBall = ballSample;
+    }
+
+    const pads = this.boostPadSystem.registry.getAllStable();
+    snapshot.pads.forEach((padSnap, index) => {
+      const pad = pads[index];
+      if (pad) {
+        Object.assign(pad, padSnap);
+      }
+    });
+
+    for (const [team, overlapping] of Object.entries(snapshot.goalOverlap) as [TeamId, boolean][]) {
+      this.goalSensorOverlapping.set(team, overlapping);
+    }
   }
 
   /** Test-only: force a pad's runtime state (e.g. simulate a mid-cooldown pad). */
