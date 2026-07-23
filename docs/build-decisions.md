@@ -1145,3 +1145,38 @@ DataChannel path stays covered by `tests/netspike/webrtc-lockstep.spec.ts`
 browser E2E of PeerLink+LockstepSession is deferred to N5's online-match
 Playwright test, where the runtime wiring that installs them exists —
 building a bundled test page for it in isolation would duplicate that.
+
+## Online multiplayer — N4 (control plane, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+The serverless control plane (`backend/`, a Cloudflare Workers + Durable
+Objects project). Control-only — no game state is ever simulated here;
+gameplay stays peer-to-peer (N2/N3). Same "pure core + thin adapter"
+split as the netcode:
+
+- **`src/netcode/lobbyProtocol.ts`** (shared, dependency-free — imported by
+  BOTH client and Worker) — the JSON control-plane message shapes, room-code
+  alphabet/generation, and the handshake compatibility rule (protocol
+  version + deterministic-build hash must match, else the match is refused
+  because mismatched builds would desync).
+- **`backend/src/RoomCore.ts`** — pure per-room state machine: two fixed
+  slots (offerer/answerer), signaling relay routing, ready/handshake, and
+  match-start with a shared kickoff seed. **`MatchmakingCore.ts`** — pure
+  FIFO queue pairing the two longest-waiting players. **`turn.ts`** — Cloudflare
+  Realtime TURN credential minting with a STUN-only fallback.
+- **`RoomDO` / `MatchmakingDO` / `worker.ts`** — thin Durable Object
+  adapters + a stateless router (`/room`, `/matchmaking`, `/turn-cred`).
+  WebSocket **hibernation** (`acceptWebSocket`) keeps idle rooms/queue at
+  $0; membership is rebuilt from live sockets' attachments after a wake.
+
+**Gates**: all room/queue/handshake/TURN LOGIC is unit-tested in the main
+vitest suite (`tests/unit/{lobbyProtocol,roomCore,matchmakingCore,turnCred}.spec.ts`,
+22 tests) — role assignment, signaling-relay-to-the-other-peer, match
+start on compatible handshakes, **build-hash-mismatch rejection**, room-full,
+peer-left + rejoin, FIFO pairing, dead-socket queue eviction, and the
+STUN-only / TURN-configured / TURN-error credential paths. The Durable
+Object adapters typecheck against `@cloudflare/workers-types`
+(`backend/tsconfig.json`, `cd backend && npx tsc --noEmit` clean). A full
+miniflare/`wrangler dev` integration pass (real WS upgrade + DO routing)
+and deploy need the Cloudflare toolchain/account and are the documented
+local runbook in `backend/README.md` (which also carries the $0 free-tier
+arithmetic). Full main suite 390/390.

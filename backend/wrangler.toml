@@ -1,0 +1,26 @@
+name = "space-carball-mp"
+main = "src/worker.ts"
+compatibility_date = "2026-07-01"
+
+# N4 (plan/ONLINE_MULTIPLAYER_PLAN.md): the control plane. Two Durable
+# Object classes — one Room per code, one global Matchmaking queue. Both
+# use WebSocket hibernation so idle rooms/queues cost nothing. SQLite-backed
+# classes are the free-plan-eligible DO variant.
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "RoomDO"
+
+[[durable_objects.bindings]]
+name = "MATCHMAKING"
+class_name = "MatchmakingDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO", "MatchmakingDO"]
+
+# TURN credentials are provided as secrets, not committed:
+#   wrangler secret put TURN_KEY_ID
+#   wrangler secret put TURN_API_TOKEN
+# Without them the /turn-cred endpoint serves STUN-only (still fully
+# playable for the ~80-90% of pairings that don't need a relay).
