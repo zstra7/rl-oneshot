@@ -4,12 +4,17 @@ import type { AssetPipeline } from "@/assets/AssetPipeline";
 import type { CarTeamId } from "@/assets/cars/CarModelTypes";
 import type { RenderFrameContext, RenderFrameModule } from "@/core/GameModule";
 import { OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
+import { decayOffset, shouldSmoothCorrection } from "@/integration/CorrectionOffset";
 import type { PhysicsFacade } from "@/physics/PhysicsFacade";
-import type { CarId } from "@/physics/PhysicsTypes";
+import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
+import * as V from "@/physics/Vec3Math";
 
 function teamForCarId(carId: CarId): CarTeamId {
   return carId === OPPONENT_CAR_ID ? "opponent" : "player";
 }
+
+/** P1.2: identifies which visual a correction offset applies to — a car, or the ball. */
+export type CorrectionTargetId = CarId | "ball";
 
 /**
  * Binds physics render snapshots to real gameplay visuals every frame: one
@@ -25,6 +30,11 @@ export class PhysicsRenderBinding implements RenderFrameModule {
   private readonly root = new THREE.Group();
   private readonly ballVisual: THREE.Group;
   private readonly carVisuals = new Map<CarId, THREE.Group>();
+
+  /** P1.2: decaying render-only position offsets from online reconciliation corrections. */
+  private readonly correctionOffsets = new Map<CorrectionTargetId, Vec3Like>();
+  /** P1.2: while true (countdown/kickoff), offsets are suppressed — a real teleport must snap, not glide. */
+  private kickoffPhaseActive = false;
 
   public constructor(
     private readonly physics: PhysicsFacade,
@@ -42,14 +52,42 @@ export class PhysicsRenderBinding implements RenderFrameModule {
     return this.root;
   }
 
-  public updateRenderFrame(_context: RenderFrameContext): void {
-    const snapshot = this.physics.getRenderSnapshot(this.getAlpha());
+  /**
+   * P1.2: register a visual correction — `delta` is "where it used to appear
+   * minus where it now actually is" (world-space). The renderer will draw the
+   * target `delta` away from its true position, decaying that offset toward
+   * zero over `CORRECTION_HALF_LIFE_SECONDS`. A delta larger than
+   * `CORRECTION_MAX_ACCEPTED_DISTANCE` (a real teleport, e.g. a kickoff
+   * reset) is rejected — those must snap instantly, not glide. Simulation
+   * state is never touched by this; only what gets drawn.
+   */
+  public addCorrectionOffset(target: CorrectionTargetId, delta: Vec3Like): void {
+    if (this.kickoffPhaseActive || !shouldSmoothCorrection(delta)) {
+      return;
+    }
+    const existing = this.correctionOffsets.get(target) ?? { x: 0, y: 0, z: 0 };
+    this.correctionOffsets.set(target, V.add(existing, delta));
+  }
 
-    this.ballVisual.position.set(
-      snapshot.ball.position.x,
-      snapshot.ball.position.y,
-      snapshot.ball.position.z
-    );
+  /**
+   * P1.2: suppress (and, on the leading edge, clear) correction smoothing
+   * during countdown/kickoff states, where a real teleport — the kickoff
+   * reset — must never be softened into a glide.
+   */
+  public setKickoffPhaseActive(active: boolean): void {
+    this.kickoffPhaseActive = active;
+    if (active) {
+      this.correctionOffsets.clear();
+    }
+  }
+
+  public updateRenderFrame(context: RenderFrameContext): void {
+    const snapshot = this.physics.getRenderSnapshot(this.getAlpha());
+    this.decayCorrectionOffsets(context.frameDeltaSeconds);
+
+    const ballOffset = this.correctionOffsets.get("ball");
+    const ballPosition = ballOffset ? V.add(snapshot.ball.position, ballOffset) : snapshot.ball.position;
+    this.ballVisual.position.set(ballPosition.x, ballPosition.y, ballPosition.z);
     this.ballVisual.quaternion.set(
       snapshot.ball.rotation.x,
       snapshot.ball.rotation.y,
@@ -70,7 +108,9 @@ export class PhysicsRenderBinding implements RenderFrameModule {
         this.carVisuals.set(carId, visual);
       }
 
-      visual.position.set(transform.position.x, transform.position.y, transform.position.z);
+      const carOffset = this.correctionOffsets.get(carId);
+      const carPosition = carOffset ? V.add(transform.position, carOffset) : transform.position;
+      visual.position.set(carPosition.x, carPosition.y, carPosition.z);
       visual.quaternion.set(
         transform.rotation.x,
         transform.rotation.y,
@@ -83,6 +123,17 @@ export class PhysicsRenderBinding implements RenderFrameModule {
       if (!seenCarIds.has(carId)) {
         this.root.remove(visual);
         this.carVisuals.delete(carId);
+      }
+    }
+  }
+
+  private decayCorrectionOffsets(dtSeconds: number): void {
+    for (const [target, offset] of this.correctionOffsets) {
+      const decayed = decayOffset(offset, dtSeconds);
+      if (V.length(decayed) < 1e-4) {
+        this.correctionOffsets.delete(target);
+      } else {
+        this.correctionOffsets.set(target, decayed);
       }
     }
   }

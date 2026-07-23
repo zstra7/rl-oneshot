@@ -15,7 +15,7 @@ import {
   type ModuleContainer
 } from "@/integration/ModuleContainer";
 import { BoostPadRenderBinding } from "@/integration/BoostPadRenderBinding";
-import { PhysicsRenderBinding } from "@/integration/PhysicsRenderBinding";
+import { PhysicsRenderBinding, type CorrectionTargetId } from "@/integration/PhysicsRenderBinding";
 import { installAssetTestApi } from "@/assets/testing/BrowserAssetTestApi";
 import { installInputTestApi } from "@/input/testing/BrowserInputTestApi";
 import { installPhysicsTestApi } from "@/physics/testing/BrowserPhysicsTestApi";
@@ -38,7 +38,7 @@ import {
   type CarInputSource
 } from "@/netcode/CarInputSource";
 import type { OnlineMatchContext } from "@/netcode/MultiplayerSession";
-import type { CarId } from "@/physics/PhysicsTypes";
+import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
@@ -69,6 +69,20 @@ const DEFAULT_PLAYER_CAR_COLOR = "#4ff0ff";
  * timeline outright instead of burning CPU replaying a stale gap.
  */
 const ONLINE_MAX_REPLAY_TICKS = 30;
+
+/**
+ * P1.2: match states in which a car/ball position change is a REAL teleport
+ * (kickoff spawn/reset) rather than reconciliation drift — correction
+ * smoothing must be suppressed here so a kickoff snaps instantly.
+ */
+const KICKOFF_PHASE_STATES: readonly MatchState[] = [
+  "KICKOFF_SETUP",
+  "KICKOFF_RESET",
+  "COUNTDOWN_3",
+  "COUNTDOWN_2",
+  "COUNTDOWN_1",
+  "COUNTDOWN_GO"
+];
 
 const MENU_MATCH_STATES: readonly MatchState[] = [
   "MAIN_MENU",
@@ -491,6 +505,15 @@ export class GameRuntime implements GameRuntimeFacade {
       // until its local input is submitted).
       this.driveOnlineSubmit();
 
+      // P1.2: a kickoff/countdown reset is a REAL teleport, not
+      // reconciliation drift — suppress correction smoothing for it so it
+      // snaps instantly rather than gliding.
+      if (this.modules) {
+        this.physicsRenderBinding?.setKickoffPhaseActive(
+          KICKOFF_PHASE_STATES.includes(this.modules.gameFlow.getMatchState())
+        );
+      }
+
       const frameDelta = this.clock.computeFrameDelta(timestampMs);
       this.fixedStepsLastFrame = this.fixedStepCoordinator.advance(frameDelta);
 
@@ -717,6 +740,11 @@ export class GameRuntime implements GameRuntimeFacade {
 
     modules.gameFlow.applyAuthorityState(snapshot.flow);
 
+    // P1.2: capture "where things appeared" before reconciling, so any net
+    // position change can be handed to the renderer as a decaying visual
+    // offset instead of a hard pop (see PhysicsRenderBinding.addCorrectionOffset).
+    const beforePositions = this.captureCorrectionPositions(modules.physics, context);
+
     // The world snapshot is the state AFTER the host simulated tick T; the
     // guest's own frontier is the last tick it simulated.
     const lastSimulated = this.fixedStepCoordinator.tick - 1;
@@ -729,6 +757,7 @@ export class GameRuntime implements GameRuntimeFacade {
       modules.physics.applyWorldSnapshot(snapshot.world);
       this.fixedStepCoordinator.setTickForOnlineSync(snapshot.tick + 1);
       this.onlineNextSubmitTick = Math.max(this.onlineNextSubmitTick, snapshot.tick + 1);
+      this.emitCorrectionOffsets(modules.physics, context, beforePositions);
       return;
     }
 
@@ -748,6 +777,59 @@ export class GameRuntime implements GameRuntimeFacade {
     // them so sounds/VFX don't double-fire.
     modules.physics.clearGoalEvents();
     modules.physics.clearBoostPadEvents();
+    this.emitCorrectionOffsets(modules.physics, context, beforePositions);
+  }
+
+  /** P1.2: snapshot the world-space positions correction smoothing cares about, or null where not yet spawned. */
+  private captureCorrectionPositions(
+    physics: ModuleContainer["physics"],
+    context: OnlineMatchContext
+  ): Partial<Record<CorrectionTargetId, Vec3Like>> {
+    const liveCarIds = physics.getCarIds();
+    const out: Partial<Record<CorrectionTargetId, Vec3Like>> = {};
+    if (liveCarIds.includes(context.localCarId)) {
+      out[context.localCarId] = physics.getCarState(context.localCarId).position;
+    }
+    if (liveCarIds.includes(context.remoteCarId)) {
+      out[context.remoteCarId] = physics.getCarState(context.remoteCarId).position;
+    }
+    out.ball = physics.getBallState().position;
+    return out;
+  }
+
+  /** P1.2: hand the renderer the delta between the pre-reconciliation and post-reconciliation positions. */
+  private emitCorrectionOffsets(
+    physics: ModuleContainer["physics"],
+    context: OnlineMatchContext,
+    before: Partial<Record<CorrectionTargetId, Vec3Like>>
+  ): void {
+    const binding = this.physicsRenderBinding;
+    if (!binding) {
+      return;
+    }
+    const liveCarIds = physics.getCarIds();
+    const targets: CorrectionTargetId[] = [context.localCarId, context.remoteCarId, "ball"];
+    for (const target of targets) {
+      const beforePos = before[target];
+      if (!beforePos) {
+        continue;
+      }
+      const afterPos =
+        target === "ball"
+          ? physics.getBallState().position
+          : liveCarIds.includes(target)
+            ? physics.getCarState(target).position
+            : null;
+      if (!afterPos) {
+        continue;
+      }
+      const delta = {
+        x: beforePos.x - afterPos.x,
+        y: beforePos.y - afterPos.y,
+        z: beforePos.z - afterPos.z
+      };
+      binding.addCorrectionOffset(target, delta);
+    }
   }
 
   private onFixedTick(tick: number): void {
