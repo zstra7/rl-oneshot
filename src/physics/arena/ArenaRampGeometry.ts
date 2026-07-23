@@ -72,8 +72,15 @@ function filletRun(wallBase: Vec3Like, inward: Vec3Like, runHalfLength: number):
   const specs: RampSegmentSpec[] = [];
   for (let i = 0; i < RAMP_FILLET_SEGMENTS; i += 1) {
     const theta = (i + 0.5) * (Math.PI / 2 / RAMP_FILLET_SEGMENTS);
-    const inset = R - (R - t) * Math.sin(theta);
-    const y = R - (R - t) * Math.cos(theta);
+    // F1 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): centres sit on radius
+    // R+t (not R-t) so the segment's INNER (drivable) face lands exactly on
+    // the tangent circle of radius R — flush with the floor at theta=0 and
+    // flush with the wall plane at theta=90 degrees. The old R-t placement
+    // floated the drivable surface 2t (0.24m) inside the ideal quarter-pipe,
+    // producing a visible step/lip at both the floor and wall seams. See
+    // docs/physics-deviations.md's F1 section for the full derivation.
+    const inset = R - (R + t) * Math.sin(theta);
+    const y = R - (R + t) * Math.cos(theta);
     const qTilt = V.quatFromAxisAngle(runDir, theta);
 
     specs.push({
@@ -101,30 +108,54 @@ function generateCorner(
   dims: ArenaRampDimensions
 ): RampSegmentSpec[] {
   const Rc = CORNER_RADIUS;
+  const t = CORNER_PANEL_HALF_THICK;
   const arcCentre: Vec3Like = { x: sx * (dims.halfWidth - Rc), y: 0, z: sz * (dims.halfLength - Rc) };
   const delta = Math.PI / 2 / CORNER_PANELS;
-  const chordHalf = Rc * Math.sin(delta / 2);
-  const chordDistance = Rc * Math.cos(delta / 2);
+  // F2 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): circumscribed (tangent)
+  // placement instead of inscribed (chord) placement. The old chord
+  // placement (`Rc * cos(delta/2)` centre distance, panel half-thickness t)
+  // put each panel's INNER (field-facing) face at radius
+  // `Rc*cos(delta/2) - t` (~5.45 for Rc=6, 6 panels) — ~0.55m inside the
+  // ideal arc of radius Rc where the straight walls are tangent, so a car
+  // sliding along a straight wall hit a ~0.5m step at every corner
+  // junction. Circumscribing instead (centre at `Rc + t`) puts the inner
+  // face's MIDPOINT exactly on the tangent circle of radius Rc; at panel
+  // edges it recedes slightly outward (radius `Rc/cos(delta/2)`, ~5cm) —
+  // shallow, harmless grooves rather than a protrusion into the field. The
+  // wider `chordHalf` (tangent-to-tangent, not chord-to-chord) makes
+  // adjacent panels' faces meet/slightly overlap instead of gapping. See
+  // docs/physics-deviations.md's F2 section for the full derivation.
+  const panelCentreDistance = Rc + t;
+  const chordHalf = Rc * Math.tan(delta / 2) + 0.05;
 
   const specs: RampSegmentSpec[] = [];
   for (let i = 0; i < CORNER_PANELS; i += 1) {
     const alphaMid = (i + 0.5) * delta;
     const outward = cornerOutward(alphaMid, sx, sz);
     const panelCentre: Vec3Like = {
-      x: arcCentre.x + outward.x * chordDistance,
+      x: arcCentre.x + outward.x * panelCentreDistance,
       y: 0,
-      z: arcCentre.z + outward.z * chordDistance
+      z: arcCentre.z + outward.z * panelCentreDistance
     };
 
     specs.push({
       kind: "corner-wall",
-      halfExtents: { x: chordHalf + 0.05, y: dims.height / 2, z: CORNER_PANEL_HALF_THICK },
+      halfExtents: { x: chordHalf, y: dims.height / 2, z: t },
       translation: { x: panelCentre.x, y: dims.height / 2, z: panelCentre.z },
       rotation: yawToDirection(outward)
     });
 
     const inward: Vec3Like = { x: -outward.x, y: 0, z: -outward.z };
-    specs.push(...filletRun(panelCentre, inward, chordHalf + 0.1));
+    // The corner's floor->wall fillet run is based on the WALL'S INNER
+    // FACE (tangent point, radius Rc from the arc centre), not the panel
+    // centre — panelCentre now sits further out (at Rc+t) than the
+    // drivable surface it's blending into.
+    const wallBase: Vec3Like = {
+      x: arcCentre.x + outward.x * Rc,
+      y: 0,
+      z: arcCentre.z + outward.z * Rc
+    };
+    specs.push(...filletRun(wallBase, inward, chordHalf + 0.1));
   }
   return specs;
 }

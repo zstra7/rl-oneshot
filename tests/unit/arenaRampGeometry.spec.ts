@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CORNER_PANEL_HALF_THICK,
   CORNER_RADIUS,
   generateArenaRamps,
   RAMP_FILLET_RADIUS,
   RAMP_FILLET_SEGMENTS,
+  RAMP_SEG_HALF_THICK,
   type ArenaRampDimensions
 } from "@/physics/arena/ArenaRampGeometry";
 import { PLACEHOLDER_PHYSICS_METADATA } from "@/assets/AssetTypes";
@@ -83,12 +85,17 @@ describe("generateArenaRamps", () => {
     expect(cornerSpecs).toHaveLength(24);
   });
 
-  it("anchor regression: right-wall run segment 0 matches the known-good legacy values", () => {
+  it("anchor regression: right-wall run segment 0 matches the flush (F1) placement", () => {
     const R = RAMP_FILLET_RADIUS;
     const t = 0.12;
     const theta = 0.5 * (Math.PI / 2 / RAMP_FILLET_SEGMENTS); // 9 degrees
-    const expectedX = DIMS.halfWidth - (R - (R - t) * Math.sin(theta));
-    const expectedY = R - (R - t) * Math.cos(theta);
+    // F1 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): centres sit on radius
+    // R+t (not the pre-F1 R-t) so the drivable inner face lands exactly on
+    // the tangent circle of radius R. The pre-F1 anchor pinned the R-t
+    // placement, which enshrined a 0.24m floor/wall seam gap — this anchor
+    // is intentionally different from that older value.
+    const expectedX = DIMS.halfWidth - (R - (R + t) * Math.sin(theta));
+    const expectedY = R - (R + t) * Math.cos(theta);
 
     // Right-wall run segments have translation.z === 0 and x close to
     // halfWidth; the *first* segment (theta closest to 0, near the floor)
@@ -105,6 +112,148 @@ describe("generateArenaRamps", () => {
       z: Math.sin(theta / 2),
       w: Math.cos(theta / 2)
     });
+  });
+
+  it("F1: floor-fillet drivable surface is flush at both the floor and wall seams for every straight run", () => {
+    // The drivable surface's outward normal is `rotate(rotation, (0,1,0))`
+    // (this is exactly what "every floor-fillet normal is field-facing"
+    // above already asserts .y > 0 on) — so the drivable FACE point is the
+    // box centre offset by +t along that normal (not -t). Reconstruct it
+    // for the first (near-floor) and last (near-wall) segment of each of
+    // the six straight runs and assert flushness directly, mirroring the
+    // production formulas exactly (same approach as the anchor test).
+    const R = RAMP_FILLET_RADIUS;
+    const t = RAMP_SEG_HALF_THICK;
+    const { halfWidth, halfLength, goalHalfWidth } = DIMS;
+    const Rc = CORNER_RADIUS;
+    const endRunHalfLength = (halfWidth - Rc - goalHalfWidth) / 2;
+    const endRunCentreX = goalHalfWidth + endRunHalfLength;
+
+    const runs: Array<{ wallBase: V.Vec3Like; inward: V.Vec3Like }> = [
+      { wallBase: { x: halfWidth, y: 0, z: 0 }, inward: { x: -1, y: 0, z: 0 } },
+      { wallBase: { x: -halfWidth, y: 0, z: 0 }, inward: { x: 1, y: 0, z: 0 } },
+      ...([-1, 1] as const).flatMap((zSign) =>
+        ([-1, 1] as const).map((xSign) => ({
+          wallBase: { x: xSign * endRunCentreX, y: 0, z: zSign * halfLength },
+          inward: { x: 0, y: 0, z: -zSign }
+        }))
+      )
+    ];
+
+    function drivableFace(theta: number, wallBase: V.Vec3Like, inward: V.Vec3Like) {
+      const runDir: V.Vec3Like = { x: inward.z, y: 0, z: -inward.x };
+      const qYaw = V.quatFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.atan2(runDir.x, runDir.z));
+      const qTilt = V.quatFromAxisAngle(runDir, theta);
+      const rotation = V.quatMultiply(qTilt, qYaw);
+      const inset = R - (R + t) * Math.sin(theta);
+      const y = R - (R + t) * Math.cos(theta);
+      const centre: V.Vec3Like = {
+        x: wallBase.x + inward.x * inset,
+        y,
+        z: wallBase.z + inward.z * inset
+      };
+      const normal = V.applyQuaternion({ x: 0, y: 1, z: 0 }, rotation);
+      return { x: centre.x + normal.x * t, y: centre.y + normal.y * t, z: centre.z + normal.z * t };
+    }
+
+    const firstTheta = 0.5 * (Math.PI / 2 / RAMP_FILLET_SEGMENTS); // 9 degrees
+    const lastTheta = (RAMP_FILLET_SEGMENTS - 0.5) * (Math.PI / 2 / RAMP_FILLET_SEGMENTS); // 81 degrees
+
+    for (const { wallBase, inward } of runs) {
+      const bottomFace = drivableFace(firstTheta, wallBase, inward);
+      // Flush with the floor (y=0): slightly buried by design, never
+      // floating above it.
+      expect(bottomFace.y).toBeLessThan(0.05);
+      expect(bottomFace.y).toBeGreaterThan(-0.15);
+
+      const topFace = drivableFace(lastTheta, wallBase, inward);
+      // Flush with the wall plane: the component of (topFace - wallBase)
+      // along `inward` must be near zero (neither a gap nor a large
+      // embed) — the old R-t placement left a ~0.24m gap here.
+      const alongInward =
+        (topFace.x - wallBase.x) * inward.x + (topFace.z - wallBase.z) * inward.z;
+      expect(Math.abs(alongInward)).toBeLessThan(0.06);
+    }
+  });
+
+  it("F2: corner-wall panels never protrude past the tangent circle of radius Rc into the field", () => {
+    // The pre-F2 (chord/inscribed) placement put each panel's inner face
+    // ~0.55m inside the arc — a step a car sliding along a straight wall
+    // would crash into. The fixed (tangent/circumscribed) placement must
+    // never let the inner face's distance from its corner's arc centre
+    // fall below Rc (a tiny numerical epsilon is allowed).
+    const { halfWidth, halfLength } = DIMS;
+    const Rc = CORNER_RADIUS;
+    const t = CORNER_PANEL_HALF_THICK;
+    const cornerCentres = [
+      { sx: 1, sz: 1, x: halfWidth - Rc, z: halfLength - Rc },
+      { sx: 1, sz: -1, x: halfWidth - Rc, z: -(halfLength - Rc) },
+      { sx: -1, sz: 1, x: -(halfWidth - Rc), z: halfLength - Rc },
+      { sx: -1, sz: -1, x: -(halfWidth - Rc), z: -(halfLength - Rc) }
+    ];
+
+    for (const spec of cornerSpecs) {
+      const centre = cornerCentres.reduce((closest, c) => {
+        const d = Math.hypot(spec.translation.x - c.x, spec.translation.z - c.z);
+        const dClosest = Math.hypot(spec.translation.x - closest.x, spec.translation.z - closest.z);
+        return d < dClosest ? c : closest;
+      });
+
+      // Inner-face bottom corners: translation offset by -halfExtents.z
+      // along the panel's local +Z (the outward normal, per
+      // `yawToDirection(outward)`) and ±halfExtents.x along local X.
+      const outwardNormal = V.applyQuaternion({ x: 0, y: 0, z: 1 }, spec.rotation);
+      const tangentDir = V.applyQuaternion({ x: 1, y: 0, z: 0 }, spec.rotation);
+      for (const sign of [-1, 1] as const) {
+        const innerFaceCorner = {
+          x: spec.translation.x - outwardNormal.x * t + tangentDir.x * sign * spec.halfExtents.x,
+          z: spec.translation.z - outwardNormal.z * t + tangentDir.z * sign * spec.halfExtents.x
+        };
+        const distanceFromArcCentre = Math.hypot(innerFaceCorner.x - centre.x, innerFaceCorner.z - centre.z);
+        expect(distanceFromArcCentre).toBeGreaterThanOrEqual(Rc - 1e-6);
+      }
+    }
+  });
+
+  it("F2: corner panels meet the adjacent straight wall flush (no junction step)", () => {
+    // The first/last panel of every corner (alpha nearest 0 or 90 degrees)
+    // must present an inner face very close to the straight wall's plane
+    // (|x| == halfWidth or |z| == halfLength) at its wall-adjacent edge.
+    const { halfWidth, halfLength } = DIMS;
+    const Rc = CORNER_RADIUS;
+    const CORNER_PANELS_COUNT = cornerSpecs.length / 4; // 24 / 4 corners = 6
+
+    for (const sx of [-1, 1] as const) {
+      for (const sz of [-1, 1] as const) {
+        const arcCentre = { x: sx * (halfWidth - Rc), z: sz * (halfLength - Rc) };
+        const cornerPanels = cornerSpecs.filter((spec) => {
+          const d = Math.hypot(spec.translation.x - arcCentre.x, spec.translation.z - arcCentre.z);
+          return d > Rc - 1 && d < Rc + 2 * CORNER_PANEL_HALF_THICK + 1;
+        });
+        expect(cornerPanels).toHaveLength(CORNER_PANELS_COUNT);
+
+        // Panel nearest alpha=0 (adjoins the side wall, constant-x plane)
+        // and nearest alpha=90 deg (adjoins the end wall, constant-z plane).
+        const byAlpha = cornerPanels
+          .map((spec) => ({
+            spec,
+            alpha: Math.atan2(sz * (spec.translation.z - arcCentre.z), sx * (spec.translation.x - arcCentre.x))
+          }))
+          .sort((a, b) => a.alpha - b.alpha);
+
+        const nearSideWall = byAlpha[0]!.spec;
+        const nearEndWall = byAlpha[byAlpha.length - 1]!.spec;
+
+        const t = CORNER_PANEL_HALF_THICK;
+        const outwardSide = V.applyQuaternion({ x: 0, y: 0, z: 1 }, nearSideWall.rotation);
+        const innerXSide = nearSideWall.translation.x - outwardSide.x * t;
+        expect(Math.abs(Math.abs(innerXSide) - halfWidth)).toBeLessThan(0.15);
+
+        const outwardEnd = V.applyQuaternion({ x: 0, y: 0, z: 1 }, nearEndWall.rotation);
+        const innerZEnd = nearEndWall.translation.z - outwardEnd.z * t;
+        expect(Math.abs(Math.abs(innerZEnd) - halfLength)).toBeLessThan(0.15);
+      }
+    }
   });
 
   it("every floor-fillet normal is field-facing and never overhangs", () => {

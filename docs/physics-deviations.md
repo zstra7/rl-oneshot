@@ -763,3 +763,104 @@ match-flow.spec.ts` exercises the same path end-to-end through
 `BrowserPhysicsTestApi`/`__PHYSICS_TEST__` (it already existed on
 `PhysicsFacade` as a test-only accessor) so the Playwright test can
 locate the goal mouth without hardcoding arena coordinates.
+
+## Post-launch polish pass — F1 (flush floor->wall ramps, `ArenaRampGeometry.filletRun`)
+
+**Root cause**: `filletRun()` placed each fillet segment's box **centre**
+on a circle of radius `R - t` around the arc centre (`R` = fillet radius
+2.0, `t` = segment half-thickness 0.12). The box's *outer/back* face
+(radius `(R-t)+t = R`) ended up tangent to the floor and wall — but the
+face a car actually drives on (and sees) is the **inner** face, at radius
+`(R-t)-t = R-2t = 1.76`. The whole drivable arc floated `2t` (0.24m)
+inside the ideal quarter-pipe, producing a visible step/lip at both the
+floor seam (bottom of the ramp) and the wall seam (top of the ramp).
+
+Proved algebraically (and pinned in a new test) that the drivable face —
+box centre offset by `+t` along the surface's own rotated normal — traces
+the circle `(R(1-sin theta), R(1-cos theta))`, which is *exactly* a
+circle of radius `R` centred at `(R, R)` for every `theta`, once the
+centre placement uses `R + t` instead of `R - t`:
+
+```
+inset = R - (R + t) * sin(theta)
+y     = R - (R + t) * cos(theta)
+```
+
+The fix is a two-line change (`filletRun` in `ArenaRampGeometry.ts`). The
+old anchor-regression test in `arenaRampGeometry.spec.ts` had pinned the
+buggy `R - t` values (inherited from the original WS5.C/R1 fillet
+design, which the R1 rewrite faithfully preserved instead of catching) —
+it's now updated to the flush values, with a comment explaining why the
+expected numbers changed. A new "flush surface" test independently
+recomputes the drivable-face point for the first (near-floor) and last
+(near-wall) segment of all six straight runs and asserts flushness
+directly from the closed-form formulas, mirroring the production math
+rather than re-deriving it differently (so a future regression in either
+place is still caught).
+
+A new physics-level test in `wallDriving.spec.ts` drives a car at
+moderate (non-boosted) speed straight into the base of the right-wall
+ramp and confirms no per-tick velocity-delta spike in the base band —
+this passed even on the pre-fix geometry (the pre-fix gap there was only
+~0.14m and mild at low speed), so the geometry-level tests above are the
+real gate for this bug; the physics test is an additional smoothness
+confirmation.
+
+**Unexpected side effect (not a regression, verified by debug trace)**:
+the existing wall-climb tests' `groundedOnFilletTicks / onFilletTicks`
+ratio dropped from their pre-fix threshold of 0.7 to ~0.20-0.46
+post-fix. Traced via a debug script: the pre-fix fillet's drivable arc
+had an effective radius of only `R - 2t = 1.76` (compressed inward), so
+it transitioned to the flat vertical wall — and out of suspension-probe
+"grounded" contact — at a *lower* height than the geometrically-correct,
+full-radius (`R = 2.0`) post-fix arc. The `onFilletTicks` window is
+defined purely by X (or Z) position near the wall, not height, so more
+of that window now falls in the "already past the fillet, climbing the
+flat wall via lateral wall-stick grip, not suspension-grounded" phase —
+which is completely smooth climbing, just not "grounded" by this
+particular metric. Confirmed via a tick-by-tick trace: `maxLinvelDelta`
+stays ~0.03-0.05 (no spike at all) exactly at the tick `grounded` flips
+to `false`, and the car continues climbing smoothly to well above the
+old max height. The four wall-climb tests' ratio thresholds were lowered
+to 0.2 (side walls) / 0.35 (end walls) with comments citing this
+analysis; their `maxLinvelDelta <= 12` assertions — the tests' actual
+smoothness gate — are unchanged.
+
+## Post-launch polish pass — F2 (non-protruding corner wall panels, `ArenaRampGeometry.generateCorner`)
+
+**Root cause**: `generateCorner()` placed each corner panel's centre on
+the **chord** (inscribed placement): `chordDistance = Rc * cos(delta/2)`
+(`Rc` = corner radius 6.0, `delta` = 15° per panel). With panel
+half-thickness `t = 0.5`, the panel's inner (field-facing) face ended up
+at radius `chordDistance - t ≈ 5.45` — **~0.55m inside** the ideal arc of
+radius `Rc = 6.0` where the straight walls are tangent. A car sliding
+along a straight wall toward a corner hit this ~0.5m step almost dead-on
+(confirmed via a physics probe: speed craters from a ~12.8 pre-corner
+peak to ~0.79 on contact).
+
+**Fix**: circumscribed (tangent) placement instead — panel centre at
+`Rc + t` so the inner face's *midpoint* sits exactly on the tangent
+circle of radius `Rc`. At panel edges the face recedes slightly outward
+(`Rc / cos(delta/2) ≈ 6.05`) — shallow (~5cm) grooves, never a
+protrusion into the field. The wider `chordHalf = Rc * tan(delta/2) +
+0.05` (tangent-to-tangent, not chord-to-chord) makes adjacent panels'
+faces meet or slightly overlap instead of gapping. The corner's
+floor→wall fillet run (`filletRun`, called per corner panel) now bases
+itself on the wall's inner-face tangent point (`arcCentre + outward *
+Rc`) rather than the old chord-centred `panelCentre`, since `panelCentre`
+now sits further out than the surface it blends into.
+
+New geometry-level tests: a no-protrusion invariant (every corner
+panel's inner-face corners must be at distance `>= Rc` from the arc
+centre — fails at ~5.51 on the pre-fix code) and a junction-continuity
+check (the panel nearest each straight wall must present its inner face
+within 0.15m of that wall's plane). New physics-level test: drives a car
+along the right wall toward a corner and asserts speed never craters
+below 40% of its pre-corner peak in any 30-tick window — fails
+distinctly on pre-fix code (0.79 vs. the required 5.12) with the exact
+crash-into-step symptom the user reported, and stays smooth post-fix
+(`maxLinvelDelta` unchanged, well under its ceiling).
+
+Both F1 and F2 share `filletRun`/the same generator consumed by both
+Rapier colliders and rendered meshes — one change fixes physics and
+visuals together, per the R1 design.
