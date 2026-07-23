@@ -1064,3 +1064,49 @@ off.
 (`tests/input`, `tests/physics`, `tests/ai`, `tests/game-flow`,
 `tests/integration`) green unchanged — proving the refactor is
 behaviour-preserving through the real device → physics path.
+
+## Online multiplayer — N2 (deterministic lockstep core, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+The transport-agnostic heart of online play, all pure TypeScript with no
+real network (`src/netcode/`):
+
+- **`protocol.ts`** — the wire codec (§4.3). One unreliable channel,
+  1-byte packet-type discriminator: INPUT (an ack + a redundancy window of
+  int8-encoded input frames), HASH (a tick + FNV-1a32 state fingerprint),
+  PING/PONG. `decodePacket` returns `null` for any malformed / truncated /
+  unknown packet so a hostile or corrupt peer can never crash the decoder
+  or inject an out-of-contract packet. Inputs are the pre-quantized int8
+  axes, so decode is lossless w.r.t. the sender's simulated value.
+- **`LockstepSession.ts`** — owns both peers' per-tick input buffers,
+  transmits the local car's inputs with an 8-frame redundancy window,
+  buffers the remote car's into the very `RemoteCarInputSource` (N1) that
+  GameRuntime installs, gates advance on holding both cars' inputs for a
+  tick, and runs the every-60-tick state-hash exchange that turns any
+  divergence into a detected `desynced` status rather than a silent split.
+  Physics-agnostic: the driver feeds it scheduled inputs and a serialized
+  world state to hash.
+- **`testing/FakeLink.ts`** — a deterministic, seeded model of an impaired
+  full-duplex channel (latency, jitter, loss, duplication, reordering) so
+  every adverse-network case is perfectly reproducible.
+
+**Correctness finding (caught by the two-facade harness, fixed in the
+core):** the value a peer simulates for a car must equal the value the
+*other* peer decodes off the wire for that same car. `makeInputScript`
+quantizes to 1/64 but the int8 wire grid is 1/127, so simulating the raw
+submitted value locally while the peer simulated the wire-decoded value
+diverged the two sims. `submitLocalInput` now quantizes to the wire grid
+before storing *and* sending — "what I simulate locally == what my peer
+decodes" is enforced inside the session, not left to the caller. (This is
+the same quantization LocalDeviceSource applies, so it's idempotent in the
+real N5 path.)
+
+**Gates** (`tests/unit/netProtocol.spec.ts`, `lockstepSession.spec.ts`,
+16 tests): codec round-trips every int8 axis level and rejects malformed
+packets; two independent PhysicsFacades over an impaired FakeLink run
+1500-tick scripted matches at {perfect, 50ms±10, 120ms±30, 3% loss, 10%
+loss+5% dup} and all reach **bit-identical** final state with zero desync
+and bounded stalls; a single forged remote input is caught within one
+60-tick hash interval and flips the session to `desynced`; and one
+surviving packet's redundancy window confirms all 8 of its ticks even
+when every other packet is dropped. Full suite 356/356, `vue-tsc` and
+`npm run validate` clean.

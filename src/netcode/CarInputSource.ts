@@ -114,6 +114,11 @@ export class RemoteCarInputSource implements CarInputSource {
     return this.buffer.has(tick);
   }
 
+  /** The buffered input for a tick, or undefined if it hasn't arrived. */
+  public getInputForTick(tick: number): CarInput | undefined {
+    return this.buffer.get(tick);
+  }
+
   public sampleForTick(context: CarInputContext): CarInputSample {
     const input = this.buffer.get(context.tick);
     return { input: input ?? { ...NEUTRAL_CAR_INPUT } };
