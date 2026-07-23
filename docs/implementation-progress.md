@@ -251,6 +251,105 @@ Workstreams R1-R13 are implemented, committed, and pushed to
 The ramps/features plan (`plan/RAMPS_AND_FEATURES_PLAN.md`, R1-R14) is
 now complete.
 
+## Arena flush & refinements (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md) — complete
+
+Workstreams F1-F15, all implemented, tested, committed, and pushed to
+`claude/master-build-brief-u8agzk`:
+
+- **F1+F2** — Ramp/corner geometry corrections in the shared generator
+  (`ArenaRampGeometry.ts`): the floor-fillet centre radius moved from
+  `R − t` to `R + t` so the drivable face traces the exact ideal circle
+  at every tilt angle (was leaving a small step/impulse spike where the
+  ramp met the floor); corner panels switched from inscribed (chord)
+  placement to circumscribed (tangent) placement so they never protrude
+  into the drivable field (was up to ~0.55m at the panel midpoints,
+  enough to catch a car rounding the corner).
+- **F3** — Single-layer square hex shell: every glass-shell surface
+  changed from a double-sided 1m box (rendering the hex pattern on both
+  parallel faces — the "double layer" look) to a single-sided plane on
+  the physics collider's inner face, with per-geometry UV scaling
+  (`HEX_TILE_WORLD_SIZE`) replacing a single shared `texture.repeat`
+  that stretched ~12:1 on the small corner panels. Hex texture doubled
+  in world size, thicker lines, made seam-periodic.
+- **F4** — Fixed the kickoff held-throttle stuck bug: the R11 menu-nav
+  require-release re-arm mask was firing on every controls activation,
+  including COUNTDOWN_GO → PLAYING (not a menu transition), so holding
+  W through the countdown got masked at GO. Scoped the re-arm to only
+  fire when the activation came from a `MENU_NAVIGABLE_STATES` state.
+- **F5** — Rewrote aerial pitch/yaw/roll from `applyTorqueImpulse`
+  (mass/inertia-divided, ~23x weaker than intended) to direct
+  velocity-space `setAngvel` integration, matching `DodgeController`'s
+  existing pattern; all three axis signs were also inverted from the
+  RL-standard convention and needed flipping. Re-audited every other
+  aerial-input consumer for the same physics-inversion bug: the AI's
+  ground-recovery P-D controller had both its proportional AND damping
+  terms backwards (fixed); the AI's aerial-pursuit heuristic turned out
+  to have an independent, pre-existing sign bug that happened to already
+  be correct under the new physics (left alone, confirmed via a real
+  convergence test).
+- **F6** — Removed the engine sound emitter (kept boost, dodge, jump,
+  ball-hit, boost-pad, countdown, goal, and UI sounds unchanged); the
+  underlying audio module capability stays intact for direct-emit tests.
+- **F7** — Floor panel texture/rotation picks changed from
+  `context.random` draws (pure noise) to a deterministic function of
+  each panel's distance-to-nearer-edge on both axes, so the pattern
+  mirrors across both field axes while keeping the alternating look.
+- **F8** — Boost pad layout: removed the 2 centre-circle small pads and
+  4 small pads next to the corner pads (16 → 10 total: 6 small + 4
+  full), per an explicit locked coordinate list.
+- **F9+F10** — Controller focus visibility: eight components' scoped
+  `:focus-visible { outline: none; }` were beating the global R11 amber
+  focus ring whenever focus arrived via keyboard/gamepad — removed.
+  Added focus styling for range/color inputs (newly gamepad-reachable
+  via F12). Replaced `PauseMenu.vue`'s two `window.confirm()` call sites
+  (invisible to the gamepad layer) with an inline, controller-navigable
+  CONFIRM/CANCEL row.
+- **F11** — Always-visible ball-cam HUD indicator (bottom-left, mirrors
+  the boost meter), showing the current toggle binding for whichever
+  input device was most recently used, dim when off / lit amber when
+  on. Extracted the R10 settings-panel binding-label formatting into a
+  shared `BindingLabels.ts` util.
+- **F12** — Settings reachable mid-match from the pause menu, as an
+  overlay (matchState stays `PAUSED` throughout — switching to the
+  `SETTINGS` state would have un-paused physics via `isPaused()`'s
+  gate) rather than a real state transition. Generalised the R11
+  gamepad-nav composable's auto-focus to trigger on any visible
+  `[data-menu-root]` change per navigation frame, not just on
+  `matchState` changes, since opening/closing this overlay doesn't
+  change `matchState`.
+- **F13** — AI stuck watchdog: if the opponent car makes no ≥1m
+  horizontal progress for 4s of live play, it's teleported to a real
+  kickoff pose (reusing `kickoffSpawn`, not a second hardcoded
+  position). Deliberately longer than the AI's own 3s self-recovery
+  steering window (`aiUnstuck.spec.ts`, unaffected), so this is a
+  last-resort backstop, not a replacement.
+- **F14** — Goal-blast buff: radius 16→26, max Δv 18→30, plus a 0.4
+  falloff floor so cars near the edge of the radius still get a solid
+  shove instead of a near-zero linear-falloff nudge.
+- **F15** — Final integration pass (this entry). `npx vue-tsc --noEmit`
+  clean; `npx vitest run` 324/324; `npm run validate` (contracts/
+  three.js-skills/assets/architecture) all pass; full Playwright sweep
+  on `chromium-dev` (153/154 — the one non-pass is
+  `release-gate.spec.ts`'s plain-build-only "no debug hooks" check
+  running against the dev server, which always exposes test hooks by
+  design; expected, not a regression) and on a fresh `PLAYWRIGHT_TEST=1`
+  `chromium-preview` build (151/151, all non-`tests/release` suites);
+  `npm run test:release` (its own plain, non-test build) 7/7 green,
+  including the debug-hooks check passing correctly against that build.
+  Screenshot QA (throwaway spec, not committed) across the main menu
+  (single hex layer, square hexes, symmetric floor, continuous corner
+  shell), a wall/corner climb, a goal-blast moment, both ball-cam
+  indicator states, and the full pause → SETTINGS → overlay → BACK →
+  RESUME flow — all matched the plan's intent. The "manual feel
+  checklist" (kickoff-hold launch, aerial tilt direction/speed, corner
+  drive-around, ramp base at speed, controller focus on every screen)
+  is covered by the newly-gated suites above (`kickoff-throttle.spec.ts`,
+  `aerialControl.spec.ts`, `wallDriving.spec.ts`, `arena-ramps.spec.ts`,
+  `focus-visibility.spec.ts`) rather than a separate scripted pass.
+
+The arena flush & refinements plan
+(`plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md`, F1-F15) is now complete.
+
 ## Next exact task
 - No open task from this plan. Future work would go back to picking
   up items from the various `docs/*-deviations.md` "Deferred" lists

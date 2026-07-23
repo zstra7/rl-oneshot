@@ -975,3 +975,35 @@ worker-scheduled run) all green, plus `tests/release/release-gate.spec.ts`
 production artifact per that file's own intent — its real
 Escape-driven pause→RETURN TO MENU flow, its "no test hooks exposed" gate,
 and its no-external-network-request check) all green too.
+
+## F15 — Arena flush & refinements: final integration pass
+
+`plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md`'s F1-F14 workstreams (ramp/
+corner geometry, single-layer hex shell, kickoff-hold fix, aerial
+rotation rewrite, engine-sound removal, symmetric floor pattern, boost
+pad layout, controller focus + inline confirms, ball-cam HUD indicator,
+pause-menu settings overlay, AI stuck watchdog, goal-blast buff) were
+each implemented and gated individually — see `docs/physics-deviations.md`,
+`docs/visual-language-deviations.md`, `docs/audio-deviations.md`,
+`docs/ai-calibration-log.md`, and this file's own F9/F10/F11/F12
+sections for the per-workstream detail. F15 is the cross-cutting
+verification pass: full `npx vue-tsc --noEmit`, `npx vitest run`
+(324/324), `npm run validate`, the complete Playwright suite on
+`chromium-dev` (153/154 — the sole non-pass is `release-gate.spec.ts`'s
+plain-build-only debug-hooks check, which is expected to differ under
+the dev server and is covered separately below, not a regression) and
+on a fresh `PLAYWRIGHT_TEST=1` `chromium-preview` build (151/151
+excluding `tests/release`, which needs the OTHER build), then
+`npm run test:release` (its own plain, non-test build) 7/7 green
+including that debug-hooks check passing correctly there. No
+cross-workstream regressions found — the individual workstreams' own
+test-first verification and the concurrent-session git-safety practice
+used throughout this plan (narrow `git add`, verify-via-`git show`,
+`git checkout HEAD --` to recover from working-tree races rather than
+redo work) meant integration risk was already retired incrementally
+rather than accumulating for this pass to discover. Screenshot QA
+(throwaway spec, not committed) confirmed the plan's five checkpoints
+visually: menu wide shot (single hex layer, square hexes, symmetric
+floor, continuous corner shell, ramps flush to the floor), a wall/
+corner climb, a goal-blast moment, both ball-cam indicator states, and
+the pause → SETTINGS → overlay → BACK → RESUME flow.
