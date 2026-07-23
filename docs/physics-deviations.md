@@ -864,3 +864,25 @@ crash-into-step symptom the user reported, and stays smooth post-fix
 Both F1 and F2 share `filletRun`/the same generator consumed by both
 Rapier colliders and rendered meshes — one change fixes physics and
 visuals together, per the R1 design.
+
+## Post-launch polish pass — F8 (boost pad layout reduced, `BoostPadLayout.ts`)
+
+Per user request, removed 6 of the original 12 small boost pads: the two
+nearest the centre circle (`(0,-7)`, `(0,7)`) and the four sitting right
+next to the big corner pads (`(-14,-20)`, `(14,-20)`, `(-14,20)`,
+`(14,20)`). The remaining layout is 6 small pads at `(±14,±7)` and
+`(0,±20)` plus the 4 full corner pads, unchanged, at `(±10,±26)` — 10
+pads total (was 16). Switched from the old nested `smallX × smallZ`
+loop to an explicit coordinate list so the removed positions are visible
+at a glance in the source rather than requiring a diff against the old
+bounds to reconstruct which pads survived.
+
+New test in `tests/unit/boostPads.spec.ts` asserts the exact locked
+coordinate set (not just the count) for both small and full pads, so a
+future accidental layout drift is caught even if the total count happens
+to stay the same. Pad-count assertions updated in
+`tests/unit/boostPads.spec.ts` and `tests/physics/boost-pads.spec.ts`
+(16 → 10); AI boost-awareness logic reads the pad registry dynamically
+(no hardcoded coordinates/counts found), so `aiDifficulty.spec.ts`/
+`opponentAi.spec.ts`/`aiScoring.spec.ts`/`aiUnstuck.spec.ts` all stay
+green unmodified.

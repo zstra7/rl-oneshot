@@ -1,14 +1,28 @@
 import { FULL_PAD_SENSOR, SMALL_PAD_SENSOR, type BoostPadDefinition } from "@/physics/boost/BoostPadTypes";
 
 /**
- * Deterministic 12-small/4-full layout (Master Brief Phase 6), symmetric
- * about both field axes. Not regulation Rocket League coordinates — this
- * project uses its own arena scale (physics spec section 2.3: no specific
- * stadium mesh is assumed) — see docs/physics-deviations.md.
+ * Deterministic 6-small/4-full layout (Master Brief Phase 6, reduced by
+ * F8 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md) per user request),
+ * symmetric about both field axes. Not regulation Rocket League
+ * coordinates — this project uses its own arena scale (physics spec
+ * section 2.3: no specific stadium mesh is assumed) — see
+ * docs/physics-deviations.md.
  */
 export function createDefaultBoostPadLayout(floorTopY = 0): readonly BoostPadDefinition[] {
-  const smallX = [-14, 0, 14];
-  const smallZ = [-20, -7, 7, 20];
+  // F8: the original 12-pad grid (x in {-14,0,14} * z in {-20,-7,7,20})
+  // removed the two centre-circle-adjacent pads (0,-7)/(0,7) and the four
+  // pads sitting right next to the big corner pads ((-14,-20),(14,-20),
+  // (-14,20),(14,20)) — locked user decision. Explicit coordinate list
+  // (not the old nested-loop grid) so the removed positions are visible
+  // at a glance rather than requiring a diff against the old bounds.
+  const smallPositions: ReadonlyArray<readonly [number, number]> = [
+    [-14, -7],
+    [14, -7],
+    [-14, 7],
+    [14, 7],
+    [0, -20],
+    [0, 20]
+  ];
 
   const definitions: BoostPadDefinition[] = [];
 
@@ -17,19 +31,15 @@ export function createDefaultBoostPadLayout(floorTopY = 0): readonly BoostPadDef
   // buried through it — a buried pad previously made the suspension
   // probe's shape-cast think it was hitting solid ground, corrupting
   // suspension forces near pad positions. See docs/physics-deviations.md.
-  let smallIndex = 0;
-  for (const z of smallZ) {
-    for (const x of smallX) {
-      definitions.push({
-        id: `boost-small-${smallIndex}`,
-        type: "small",
-        position: { x, y: floorTopY + SMALL_PAD_SENSOR.pickupHalfHeight, z },
-        pickupRadius: SMALL_PAD_SENSOR.pickupRadius,
-        pickupHalfHeight: SMALL_PAD_SENSOR.pickupHalfHeight
-      });
-      smallIndex += 1;
-    }
-  }
+  smallPositions.forEach(([x, z], smallIndex) => {
+    definitions.push({
+      id: `boost-small-${smallIndex}`,
+      type: "small",
+      position: { x, y: floorTopY + SMALL_PAD_SENSOR.pickupHalfHeight, z },
+      pickupRadius: SMALL_PAD_SENSOR.pickupRadius,
+      pickupHalfHeight: SMALL_PAD_SENSOR.pickupHalfHeight
+    });
+  });
 
   const fullPositions: ReadonlyArray<readonly [number, number]> = [
     [-10, -26],

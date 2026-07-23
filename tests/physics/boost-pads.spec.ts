@@ -9,10 +9,12 @@ test.beforeEach(async ({ page }) => {
     .toBe(true);
 });
 
-test("boost pad layout is present with 16 pads and default-active", async ({ page }) => {
+test("boost pad layout is present with 10 pads and default-active", async ({ page }) => {
+  // F8 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): reduced from 12 small +
+  // 4 full (16) to 6 small + 4 full (10) per user request.
   await page.evaluate(() => window.__PHYSICS_TEST__?.pauseRuntime());
   const pads = await page.evaluate(() => window.__PHYSICS_TEST__?.getBoostPadStates());
-  expect(pads).toHaveLength(16);
+  expect(pads).toHaveLength(10);
   expect(pads?.every((pad) => pad.active)).toBe(true);
 });
 

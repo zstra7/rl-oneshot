@@ -235,7 +235,47 @@ describe("Boost pad system (Phase 6, physics spec section 21.13)", () => {
     const idsA = physics.getBoostPadStates().map((p) => p.id);
     const idsB = physics.getBoostPadStates().map((p) => p.id);
     expect(idsA).toEqual(idsB);
-    expect(idsA).toHaveLength(16); // 12 small + 4 full
+    expect(idsA).toHaveLength(10); // F8: 6 small + 4 full (was 12 small + 4 full)
+  });
+
+  it("F8: layout is exactly the locked 6-small/4-full coordinate set, no stray pads", () => {
+    // Locked user decision (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md F8):
+    // removed the two centre-circle-adjacent small pads (0,-7)/(0,7) and
+    // the four small pads next to the big corner pads, leaving small pads
+    // at (+-14,+-7) and (0,+-20), plus the 4 unchanged full corner pads.
+    const smallCoords = physics
+      .getBoostPadStates()
+      .filter((p) => p.type === "small")
+      .map((p) => [p.position.x, p.position.z].join(","))
+      .sort();
+    const fullCoords = physics
+      .getBoostPadStates()
+      .filter((p) => p.type === "full")
+      .map((p) => [p.position.x, p.position.z].join(","))
+      .sort();
+
+    expect(smallCoords).toEqual(
+      [
+        [-14, -7],
+        [14, -7],
+        [-14, 7],
+        [14, 7],
+        [0, -20],
+        [0, 20]
+      ]
+        .map(([x, z]) => `${x},${z}`)
+        .sort()
+    );
+    expect(fullCoords).toEqual(
+      [
+        [-10, -26],
+        [10, -26],
+        [-10, 26],
+        [10, 26]
+      ]
+        .map(([x, z]) => `${x},${z}`)
+        .sort()
+    );
   });
 });
 
@@ -253,7 +293,7 @@ describe("WS5.D: boost pad visuals are seated on the floor", () => {
     binding.updateRenderFrame({ timestampMs: 0, frameDeltaSeconds: 1 / 60, alpha: 1 });
 
     const root = binding.getRoot();
-    expect(root.children.length).toBe(16);
+    expect(root.children.length).toBe(10); // F8: 6 small + 4 full
     for (const visual of root.children) {
       expect(visual.position.y).toBe(0);
     }
