@@ -108,6 +108,8 @@ export class MatchFlowController {
    * (N5) sets it false.
    */
   private opponentIsAi = true;
+  /** N5: true while an online 1v1 session is active (disables SP-only behaviours like pause-freeze). */
+  private onlineMode = false;
 
   private readonly events: MatchFlowEvent[] = [];
 
@@ -538,6 +540,56 @@ export class MatchFlowController {
   }
 
   /** Pause menu "RESTART MATCH": same duration, fresh scores/clock, immediate kickoff. */
+  /**
+   * N5 (plan/ONLINE_MULTIPLAYER_PLAN.md): start an online 1v1 match. Both
+   * peers call this with the SAME `kickoffSeed` (from the RoomDO handshake)
+   * so the deterministic kickoff-variant sequence starts identically on
+   * both, and the F13 watchdog is turned off (never teleport a remote
+   * human). Everything downstream — countdown, goals, celebration,
+   * kickoffs — is already tick-deterministic, so the two peers stay in
+   * lockstep by construction.
+   */
+  public startOnlineMatch(config: { durationMinutes: MatchDurationMinutes; kickoffSeed: number }): void {
+    this.onlineMode = true;
+    this.setOpponentIsAi(false);
+    this.selectedDurationMinutes = config.durationMinutes;
+
+    this.playerScore = 0;
+    this.opponentScore = 0;
+    this.overtimeElapsed = 0;
+    this.winner = null;
+    this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
+    // Seed the shared kickoff-variant sequence identically on both peers.
+    this.kickoffCounter = ((config.kickoffSeed % KICKOFF_VARIANT_COUNT) + KICKOFF_VARIANT_COUNT) % KICKOFF_VARIANT_COUNT;
+
+    this.setMatchState("MATCH_LOADING");
+    this.setMatchState("KICKOFF_SETUP");
+    this.beginKickoffReset("PLAYING");
+  }
+
+  /**
+   * N5: end an online match immediately with a decided winner — used when
+   * the peer forfeits or the connection drops past the grace period (win
+   * by abandonment). No-op outside a live/pausable online match.
+   */
+  public endOnlineMatchByForfeit(winner: TeamId): void {
+    if (!this.onlineMode) {
+      return;
+    }
+    if (this.matchState !== "PAUSED" && !PAUSABLE_STATES.includes(this.matchState)) {
+      return;
+    }
+    this.setMatchState("MATCH_ENDING");
+    this.winner = winner;
+    this.pushEvent({ type: "match-ended", winner });
+    this.setMatchState("MATCH_RESULTS");
+    this.onlineMode = false;
+  }
+
+  public isOnlineMode(): boolean {
+    return this.onlineMode;
+  }
+
   public restartMatch(): void {
     if (this.matchState !== "PAUSED" && !PAUSABLE_STATES.includes(this.matchState)) {
       return;

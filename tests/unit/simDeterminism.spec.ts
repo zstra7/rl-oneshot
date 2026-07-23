@@ -33,6 +33,12 @@ const SCRIPT_TICKS = 3000;
  * spike; identical on the standard build on the origin machine, and the
  * whole point of the deterministic build is that it also holds on every
  * other machine.
+ *
+ * CONFIRMED cross-machine: reproduced exactly on macOS (developer machine)
+ * against the x86-64 Linux CI container — different OS and CPU
+ * architecture, same `d12dfc99`. This empirically retires the plan's #1
+ * risk (cross-platform determinism), which the entire P2P lockstep
+ * architecture depends on.
  */
 const GOLDEN_HASH = "d12dfc99";
 

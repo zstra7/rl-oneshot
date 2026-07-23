@@ -1180,3 +1180,40 @@ miniflare/`wrangler dev` integration pass (real WS upgrade + DO routing)
 and deploy need the Cloudflare toolchain/account and are the documented
 local runbook in `backend/README.md` (which also carries the $0 free-tier
 arithmetic). Full main suite 390/390.
+
+## Online multiplayer — N5 (online match flow, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+Ties the netcode core into the game's match flow:
+
+- **`MatchFlowController.startOnlineMatch({ durationMinutes, kickoffSeed })`**
+  — both peers call it with the SAME seed from the RoomDO handshake, so the
+  deterministic kickoff-variant sequence starts identically; sets
+  `opponentIsAi(false)` (F13 watchdog off). **`endOnlineMatchByForfeit(winner)`**
+  ends the match on forfeit / disconnect-past-grace (win by abandonment).
+- **`LobbyClient`** (`src/netcode/LobbyClient.ts`) — the client side of the
+  N4 control plane: opens the room / matchmaking WebSocket, speaks the lobby
+  protocol, and exposes a `SignalingChannel` view so a PeerLink trickles SDP
+  + ICE through the same socket. Injectable WebSocket factory → fully
+  unit-testable.
+- **`MultiplayerSession`** (`src/netcode/MultiplayerSession.ts`) — the
+  orchestrator that sequences LobbyClient → PeerLink → LockstepSession and
+  emits high-level events (`queued`, `room-ready`, `connecting`,
+  `match-ready`, `handshake-rejected`, `disconnected`) for the runtime + UI.
+  Injectable lobby/peer factories → unit-testable end to end.
+
+**Gates**: the plan's core N5 vitest gate —
+`tests/unit/onlineMatchSync.spec.ts` — runs two independent
+MatchFlowControllers + PhysicsFacades + LockstepSessions over an impaired
+FakeLink through countdown → a scored goal → celebration → the next
+kickoff, and asserts **bit-identical world state on every tick** plus
+identical final session state. This proves the whole match flow (goal
+detection, celebration timing, kickoff reset), not just raw physics, stays
+in lockstep. Plus `lobbyClient.spec.ts` (7) and `multiplayerSession.spec.ts`
+(4) for the connection sequencing. Full suite 402/402.
+
+The remaining N5 wiring — `GameRuntime` installing the remote input source
++ lockstep advance-gate and driving submit-ahead/pump in its frame loop —
+is deliberately landed with **N6**, because its only real verification is
+the two-page live-match Playwright E2E that the lobby UI (N6) exists to
+drive. N5 proves the match-flow determinism that wiring relies on; N6
+connects it to a running browser and validates it end to end.
