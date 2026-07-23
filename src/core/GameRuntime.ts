@@ -29,7 +29,7 @@ import {
   type MatchState
 } from "@/game-flow/MatchFlowTypes";
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
-import { otherTeam } from "@/core/TeamTypes";
+import { otherTeam, type TeamId } from "@/core/TeamTypes";
 import {
   AiSource,
   BufferedLocalSource,
@@ -41,6 +41,8 @@ import type { OnlineMatchContext } from "@/netcode/MultiplayerSession";
 import { LEAD_EMA_ALPHA, computeRateScale, computeTargetLeadTicks } from "@/netcode/RateAlignment";
 import { FALLBACK_NICKNAME } from "@/netcode/Nickname";
 import { parsePeerPayload } from "@/netcode/PeerCosmetics";
+import { VoteKind } from "@/netcode/protocol";
+import { shouldPause, shouldResume } from "@/netcode/VotePolicy";
 import type { CarTeamId } from "@/assets/cars/CarModelTypes";
 import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
@@ -73,6 +75,9 @@ const DEFAULT_PLAYER_CAR_COLOR = "#4ff0ff";
  * timeline outright instead of burning CPU replaying a stale gap.
  */
 const ONLINE_MAX_REPLAY_TICKS = 30;
+
+/** P3 (host only): while paused, send a match-flow-carrying snapshot at most every this many rendered frames. */
+const PAUSED_SNAPSHOT_EVERY_N_FRAMES = 10;
 
 /**
  * P1.2: match states in which a car/ball position change is a REAL teleport
@@ -152,6 +157,18 @@ export interface GameRuntimeFacade {
   isOnlineSession(): boolean;
   /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
   getOnlineNicknames(): { local: string; remote: string } | null;
+  /** P3: LEAVE MATCH — forfeits immediately, regardless of pause state. */
+  leaveOnlineMatch(): void;
+  /** P3: ESC — toggle this client's personal pause overlay (never touches match state by itself). */
+  toggleOnlinePauseOverlay(): void;
+  isOnlinePauseOverlayOpen(): boolean;
+  /** P3: hold/release this client's "please pause" vote. */
+  requestOnlinePause(active: boolean): void;
+  /** P3: hold/release this client's "yes, continue" vote. */
+  voteOnlineContinue(active: boolean): void;
+  getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number };
+  isRequestingOnlinePause(): boolean;
+  isVotingOnlineContinue(): boolean;
 
   // -- Match flow (game-flow spec sections 28/35/39) --
 
@@ -342,6 +359,16 @@ export class GameRuntime implements GameRuntimeFacade {
   private onlineLeadEma = 4;
   /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
   private onlineNicknames: { local: string; remote: string } | null = null;
+  /**
+   * P3: whether THIS client's pause overlay is open. Purely local UI state —
+   * opening it never touches match state (the sim keeps running); only when
+   * both peers hold a pause-request vote does the match actually pause.
+   */
+  private onlinePauseOverlayOpen = false;
+  /** P3: match-flow's own isPaused() from the PREVIOUS frame, to detect the pause/resume edge and auto-clear the vote whose phase just ended. */
+  private onlineWasPaused = false;
+  /** P3 (host only): counts frames while paused, so the low-rate paused-frame snapshot only sends every Nth frame. */
+  private pausedSnapshotFrameCounter = 0;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -642,15 +669,19 @@ export class GameRuntime implements GameRuntimeFacade {
     const modules = this.requireModules();
     this.onlineSession = context;
     // Restart the fixed-step tick counter at 0 so the input stream numbers
-    // from match start on both peers. State-sync never STALLS (a missing
-    // remote input is predicted) and never FORFEITS on drift (the host's
-    // snapshots correct it), so the sim just runs free — no advance gate.
+    // from match start on both peers. State-sync never STALLS on a missing
+    // remote input (predicted) and never FORFEITS on drift (the host's
+    // snapshots correct it) — the only thing that can halt the shared
+    // timeline is a P3 both-players pause vote, via the gate installed below.
     this.fixedStepCoordinator.reset();
     this.onlineNextSubmitTick = 0;
     this.lastOnlineFrame = null;
     // P1.3: start the lead EMA at the fallback target; it converges to the
     // measured-RTT target within a few snapshots.
     this.onlineLeadEma = 4;
+    // P3: fresh pause/vote state for the new match.
+    this.onlinePauseOverlayOpen = false;
+    this.onlineWasPaused = false;
     // Follow this client's actual car (the guest drives car-opponent) so the
     // camera, HUD boost/supersonic/ball-cam readouts track the local player.
     this.localPlayerCarId = context.localCarId;
@@ -671,7 +702,12 @@ export class GameRuntime implements GameRuntimeFacade {
       }
     }
 
-    this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
+    // P3: freeze the shared timeline itself (both peers' tick counters)
+    // while the match is actually paused — the ONLY thing besides the clock
+    // that can halt online play. `isPaused()` only goes true once BOTH
+    // players hold a pause-request vote (see driveOnlineSubmit); opening the
+    // personal pause overlay alone never touches this.
+    this.fixedStepCoordinator.setAdvanceGate({ canAdvance: () => !modules.gameFlow.isPaused() });
     // The guest follows the host's authoritative match flow; the host runs it.
     modules.gameFlow.setOnlineGuest(!context.isHost);
     modules.gameFlow.startOnlineMatch({ durationMinutes, kickoffSeed: context.kickoffSeed });
@@ -704,6 +740,8 @@ export class GameRuntime implements GameRuntimeFacade {
     this.onlineSession = null;
     this.localPlayerCarId = PLAYER_CAR_ID;
     this.onlineNicknames = null;
+    this.onlinePauseOverlayOpen = false;
+    this.onlineWasPaused = false;
     this.cameraController?.setTargetCar(PLAYER_CAR_ID);
     this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
     this.requireModules().gameFlow.setOnlineGuest(false);
@@ -722,6 +760,21 @@ export class GameRuntime implements GameRuntimeFacade {
     this.configureSinglePlayerInputSources();
   }
 
+  /**
+   * P3: LEAVE MATCH — forfeits immediately (never needs a vote), regardless
+   * of pause state. The local team is inferred from which car this client
+   * drives; the OTHER team is recorded as the winner.
+   */
+  public leaveOnlineMatch(): void {
+    const context = this.onlineSession;
+    if (!context) {
+      return;
+    }
+    const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    this.requireModules().gameFlow.endOnlineMatchByForfeit(otherTeam(localTeam));
+    this.endOnlineSession();
+  }
+
   public isOnlineSession(): boolean {
     return this.onlineSession !== null;
   }
@@ -729,6 +782,52 @@ export class GameRuntime implements GameRuntimeFacade {
   /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
   public getOnlineNicknames(): { local: string; remote: string } | null {
     return this.onlineNicknames;
+  }
+
+  /**
+   * P3: ESC/pause in an online match — purely local UI state. Opening it
+   * never touches match state (the sim keeps running); it's the surface the
+   * REQUEST MATCH PAUSE / VOTE TO CONTINUE buttons live behind.
+   */
+  public toggleOnlinePauseOverlay(): void {
+    this.onlinePauseOverlayOpen = !this.onlinePauseOverlayOpen;
+  }
+
+  public isOnlinePauseOverlayOpen(): boolean {
+    return this.onlinePauseOverlayOpen;
+  }
+
+  /** P3: hold or release this client's "please pause the match" vote. No-op outside an online session. */
+  public requestOnlinePause(active: boolean): void {
+    this.onlineSession?.session.setLocalVote(VoteKind.PauseRequest, active);
+  }
+
+  /** P3: hold or release this client's "yes, continue" vote (only meaningful while actually paused). */
+  public voteOnlineContinue(active: boolean): void {
+    this.onlineSession?.session.setLocalVote(VoteKind.ContinueYes, active);
+  }
+
+  /** P3: whether THIS client currently holds the pause-request vote. */
+  public isRequestingOnlinePause(): boolean {
+    return this.onlineSession?.session.hasLocalVote(VoteKind.PauseRequest) ?? false;
+  }
+
+  /** P3: whether THIS client currently holds the continue-yes vote. */
+  public isVotingOnlineContinue(): boolean {
+    return this.onlineSession?.session.hasLocalVote(VoteKind.ContinueYes) ?? false;
+  }
+
+  /** P3: live vote tallies for the pause-request / continue-yes phases, for the overlay's "n/2" display. */
+  public getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number } {
+    const session = this.onlineSession?.session;
+    if (!session) {
+      return { pauseRequests: 0, continueVotes: 0 };
+    }
+    const pauseRequests =
+      (session.hasLocalVote(VoteKind.PauseRequest) ? 1 : 0) + (session.getRemoteVote(VoteKind.PauseRequest) ? 1 : 0);
+    const continueVotes =
+      (session.hasLocalVote(VoteKind.ContinueYes) ? 1 : 0) + (session.getRemoteVote(VoteKind.ContinueYes) ? 1 : 0);
+    return { pauseRequests, continueVotes };
   }
 
   /**
@@ -746,31 +845,113 @@ export class GameRuntime implements GameRuntimeFacade {
       return;
     }
 
-    // Sample only a small delay ahead so the local player's OWN car stays
-    // near-instant (inputDelayTicks ≈ a couple of ticks of latency). A hitchy
-    // frame can still advance several ticks past this in one go; those few
-    // ticks fall back to hold-last prediction (StateSyncSession.localInputForTick)
-    // rather than stalling or crashing — invisible for a brief catch-up burst.
-    const targetTick = this.fixedStepCoordinator.tick + context.session.inputDelayTicks;
-    const grounded = modules.physics.getCarIds().includes(context.localCarId)
-      ? modules.physics.getCarState(context.localCarId).grounded
-      : true;
+    const paused = modules.gameFlow.isPaused();
 
-    let submits = 0;
-    const maxSubmitsPerFrame = 32;
-    while (this.onlineNextSubmitTick <= targetTick && submits < maxSubmitsPerFrame) {
-      const frame = modules.input.sampleGameplayInputForTick(this.onlineNextSubmitTick, { grounded });
-      this.lastOnlineFrame = frame;
-      this.cameraController?.consumeCameraInput(frame.camera);
-      context.session.submitLocalInput(this.onlineNextSubmitTick, frame.car);
-      this.onlineNextSubmitTick += 1;
-      submits += 1;
+    // P3: while the match is actually paused (both players voted), the tick
+    // counter is frozen by the advance gate — don't keep sampling/submitting
+    // input for a tick that will never simulate. Network traffic (pump,
+    // votes, and the host's paused-frame snapshots below) keeps flowing so
+    // the two peers can still reach "both voted continue" and resume.
+    if (!paused) {
+      // Sample only a small delay ahead so the local player's OWN car stays
+      // near-instant (inputDelayTicks ≈ a couple of ticks of latency). A hitchy
+      // frame can still advance several ticks past this in one go; those few
+      // ticks fall back to hold-last prediction (StateSyncSession.localInputForTick)
+      // rather than stalling or crashing — invisible for a brief catch-up burst.
+      const targetTick = this.fixedStepCoordinator.tick + context.session.inputDelayTicks;
+      const grounded = modules.physics.getCarIds().includes(context.localCarId)
+        ? modules.physics.getCarState(context.localCarId).grounded
+        : true;
+
+      let submits = 0;
+      const maxSubmitsPerFrame = 32;
+      while (this.onlineNextSubmitTick <= targetTick && submits < maxSubmitsPerFrame) {
+        const frame = modules.input.sampleGameplayInputForTick(this.onlineNextSubmitTick, { grounded });
+        this.lastOnlineFrame = frame;
+        this.cameraController?.consumeCameraInput(frame.camera);
+        // P3: ESC opens/closes the personal pause overlay — never touches
+        // match state directly (that only happens once both peers vote).
+        if (frame.system.pausePressed) {
+          this.toggleOnlinePauseOverlay();
+        }
+        context.session.submitLocalInput(this.onlineNextSubmitTick, frame.car);
+        this.onlineNextSubmitTick += 1;
+        submits += 1;
+      }
+    } else {
+      // P3: while actually paused, no tick is being submitted, but ESC must
+      // still work (to close the overlay or change a vote) — sample once at
+      // the frame level purely to consume the pause-key edge.
+      const frame = modules.input.sampleGameplayInputForTick(this.fixedStepCoordinator.tick, { grounded: true });
+      if (frame.system.pausePressed) {
+        this.toggleOnlinePauseOverlay();
+      }
     }
 
     context.session.pump();
+    context.session.maintainVotes();
+    this.driveOnlinePauseVotes(context, modules, paused);
 
     if (!context.isHost) {
       this.applyHostSnapshot();
+    } else if (modules.gameFlow.isPaused() && this.pausedSnapshotFrameCounter % PAUSED_SNAPSHOT_EVERY_N_FRAMES === 0) {
+      // Host, while paused: onFixedTick never runs (ticks are frozen), so
+      // this is the only place left to keep the guest's mirrored match state
+      // (and the vote counts it renders) fresh — a low-rate frame-driven
+      // snapshot rather than the normal per-tick one.
+      context.session.sendSnapshot({
+        tick: this.fixedStepCoordinator.tick,
+        world: modules.physics.getWorldSnapshot(),
+        flow: modules.gameFlow.captureAuthorityState()
+      });
+    }
+    if (modules.gameFlow.isPaused()) {
+      this.pausedSnapshotFrameCounter += 1;
+    }
+
+    this.onlineWasPaused = modules.gameFlow.isPaused();
+
+    // P3: `onFixedTick` (the normal source of `emitSessionStateChanged`)
+    // never runs while the match is actually paused — the fixed-tick
+    // counter itself is frozen. This frame-level call is the only thing
+    // that keeps the Vue HUD (vote counts, the pause/resume transition
+    // itself) live while frozen; it's cheap and explicitly designed to be
+    // safe from outside the tick loop (see its own doc comment).
+    this.emitSessionStateChanged();
+  }
+
+  /**
+   * P3: the host-authoritative pause/resume decision. Both peers compute the
+   * SAME vote counts symmetrically (votes are exchanged peer-to-peer, not
+   * relayed through the host) via `VotePolicy`'s pure predicates, but only
+   * the host is allowed to act — it calls `pauseMatch()`/`resumeMatch()` and
+   * the guest mirrors the resulting transition from the host's next
+   * snapshot. Whichever vote's phase just ended is auto-cleared on BOTH
+   * sides (comparing this frame's paused state to last frame's) so a held
+   * vote never leaks into the next phase.
+   */
+  private driveOnlinePauseVotes(context: OnlineMatchContext, modules: ModuleContainer, paused: boolean): void {
+    const localPauseRequest = context.session.hasLocalVote(VoteKind.PauseRequest);
+    const remotePauseRequest = context.session.getRemoteVote(VoteKind.PauseRequest);
+    const localContinueYes = context.session.hasLocalVote(VoteKind.ContinueYes);
+    const remoteContinueYes = context.session.getRemoteVote(VoteKind.ContinueYes);
+
+    if (context.isHost) {
+      if (shouldPause(localPauseRequest, remotePauseRequest, paused)) {
+        modules.gameFlow.pause();
+      } else if (shouldResume(localContinueYes, remoteContinueYes, paused)) {
+        modules.gameFlow.resume();
+      }
+    }
+
+    const nowPaused = modules.gameFlow.isPaused();
+    if (!this.onlineWasPaused && nowPaused) {
+      context.session.setLocalVote(VoteKind.PauseRequest, false);
+      this.pausedSnapshotFrameCounter = 0;
+    }
+    if (this.onlineWasPaused && !nowPaused) {
+      context.session.setLocalVote(VoteKind.ContinueYes, false);
+      this.onlinePauseOverlayOpen = false;
     }
   }
 

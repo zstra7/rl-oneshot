@@ -17,7 +17,25 @@ export const enum PacketType {
   Hash = 2,
   Ping = 3,
   Pong = 4,
-  Snapshot = 5
+  Snapshot = 5,
+  Vote = 6
+}
+
+/**
+ * P3 (plan/ONLINE_POLISH_PLAN.md): a peer's currently-held vote. Sent
+ * repeatedly (not once) for as long as the vote is held — the channel is
+ * unreliable, so "I am voting K" must be re-asserted rather than relying on
+ * a single delivery; the receiver treats a vote as active only while it has
+ * been seen recently (see StateSyncSession.getRemoteVote).
+ */
+export const enum VoteKind {
+  PauseRequest = 1,
+  ContinueYes = 2,
+  RematchYes = 3
+}
+
+function isVoteKind(value: number): value is VoteKind {
+  return value === VoteKind.PauseRequest || value === VoteKind.ContinueYes || value === VoteKind.RematchYes;
 }
 
 /** Minimal transport contract shared by FakeLink (N2 tests) and PeerLink (N3, real WebRTC). */
@@ -37,7 +55,8 @@ export type DecodedPacket =
   | { readonly type: PacketType.Hash; readonly tick: number; readonly hash: number }
   | { readonly type: PacketType.Ping; readonly nonce: number }
   | { readonly type: PacketType.Pong; readonly nonce: number }
-  | { readonly type: PacketType.Snapshot; readonly snapshot: StateSyncSnapshot };
+  | { readonly type: PacketType.Snapshot; readonly snapshot: StateSyncSnapshot }
+  | { readonly type: PacketType.Vote; readonly kind: VoteKind };
 
 const BUTTON_JUMP = 1 << 0;
 const BUTTON_BOOST = 1 << 1;
@@ -117,6 +136,10 @@ export function encodePongPacket(nonce: number): Uint8Array {
   view.setUint8(0, PacketType.Pong);
   view.setUint32(1, nonce >>> 0, true);
   return bytes;
+}
+
+export function encodeVotePacket(kind: VoteKind): Uint8Array {
+  return new Uint8Array([PacketType.Vote, kind]);
 }
 
 const textEncoder = new TextEncoder();
@@ -210,6 +233,12 @@ export function decodePacket(bytes: Uint8Array): DecodedPacket | null {
       } catch {
         return null;
       }
+    }
+    case PacketType.Vote: {
+      if (bytes.length !== 2 || !isVoteKind(bytes[1]!)) {
+        return null;
+      }
+      return { type: PacketType.Vote, kind: bytes[1] as VoteKind };
     }
     default:
       return null;

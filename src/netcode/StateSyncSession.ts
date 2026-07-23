@@ -3,11 +3,13 @@ import { quantizeCarInput } from "@/netcode/InputQuantize";
 import { recommendDelayTicks, stabilizeDelay } from "@/netcode/AdaptiveDelay";
 import {
   PacketType,
+  VoteKind,
   decodePacket,
   encodeInputPacket,
   encodePingPacket,
   encodePongPacket,
   encodeSnapshotPacket,
+  encodeVotePacket,
   type InputFrame,
   type NetLink
 } from "@/netcode/protocol";
@@ -56,6 +58,10 @@ export const DEFAULT_STATE_SYNC_CONFIG = {
   snapshotIntervalTicks: 4
 } as const;
 
+/** P3: how often (ms) an actively-held vote is re-sent, and how long since the last sighting a remote vote stays "active". */
+const VOTE_RESEND_INTERVAL_MS = 200;
+const VOTE_TIMEOUT_MS = 900;
+
 /** P1.1: send a ping every this many ticks to measure RTT/jitter. */
 const PING_INTERVAL_TICKS = 30;
 /** P1.1: only re-evaluate the adaptive delay this often (ticks), to avoid thrashing. */
@@ -86,6 +92,12 @@ export class StateSyncSession {
   private readonly pingsSentAt = new Map<number, number>();
   private rttEmaMs: number | null = null;
   private jitterEmaMs = 0;
+
+  /** P3: votes this client currently holds (re-sent on every maintainVotes() while held). */
+  private readonly localVotes = new Set<VoteKind>();
+  /** P3: wall-clock time each vote kind was last SEEN from the remote peer. */
+  private readonly remoteVoteLastSeenMs = new Map<VoteKind, number>();
+  private lastVoteSendMs = -Infinity;
 
   public constructor(private readonly config: StateSyncConfig) {
     this.remoteSource = new RemoteCarInputSource(config.remoteCarId);
@@ -195,7 +207,49 @@ export class StateSyncSession {
           }
           break;
         }
+        case PacketType.Vote:
+          this.remoteVoteLastSeenMs.set(packet.kind, this.now());
+          break;
       }
+    }
+  }
+
+  /** P3: hold (or release) a vote of the given kind — re-sent every frame while held (see `maintainVotes`). */
+  public setLocalVote(kind: VoteKind, active: boolean): void {
+    if (active) {
+      this.localVotes.add(kind);
+    } else {
+      this.localVotes.delete(kind);
+    }
+  }
+
+  /** P3: whether THIS client currently holds a vote of the given kind. */
+  public hasLocalVote(kind: VoteKind): boolean {
+    return this.localVotes.has(kind);
+  }
+
+  /** P3: whether the REMOTE peer's vote of the given kind was seen recently enough to count as still active. */
+  public getRemoteVote(kind: VoteKind): boolean {
+    const seenAt = this.remoteVoteLastSeenMs.get(kind);
+    return seenAt !== undefined && this.now() - seenAt <= VOTE_TIMEOUT_MS;
+  }
+
+  /**
+   * P3: re-send every currently-held local vote at a fixed wall-clock
+   * cadence. Call this every rendered FRAME (not gated on simulated ticks —
+   * ticks freeze once the match actually pauses, but votes must still flow
+   * to ever reach the "both voted" state that unpauses it).
+   */
+  public maintainVotes(): void {
+    if (this.localVotes.size === 0) {
+      return;
+    }
+    if (this.now() - this.lastVoteSendMs < VOTE_RESEND_INTERVAL_MS) {
+      return;
+    }
+    this.lastVoteSendMs = this.now();
+    for (const kind of this.localVotes) {
+      this.config.link.send(encodeVotePacket(kind));
     }
   }
 

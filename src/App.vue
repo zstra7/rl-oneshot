@@ -106,6 +106,20 @@ watch(matchState, (next) => {
   }
 });
 
+// P3: online has a SECOND way into PauseMenu besides matchState === "PAUSED"
+// (the actually-paused state, once both peers vote) — pressing ESC opens a
+// personal overlay that never touches matchState by itself (the sim keeps
+// running). `matchFlowStore.session` is re-emitted every rendered frame
+// while online (even while actually paused — see GameRuntime.driveOnlineSubmit),
+// so reading it here forces this to stay live in both cases.
+const showPauseMenu = computed(() => {
+  void matchFlowStore.session;
+  if (matchState.value === "PAUSED") {
+    return !pauseSettingsOpen.value;
+  }
+  return runtime.isOnlineSession() && runtime.isOnlinePauseOverlayOpen();
+});
+
 const showGameplayHud = computed(
   () =>
     ![
@@ -146,7 +160,7 @@ const showGameplayHud = computed(
     />
     <GoalBanner v-if="['GOAL_LATCHED', 'GOAL_CELEBRATION'].includes(matchState)" />
     <OvertimeBanner v-if="matchState === 'OVERTIME_INTRO'" />
-    <PauseMenu v-if="matchState === 'PAUSED' && !pauseSettingsOpen" />
+    <PauseMenu v-if="showPauseMenu" />
     <ResultsScreen v-if="matchState === 'MATCH_RESULTS'" />
   </div>
 </template>
