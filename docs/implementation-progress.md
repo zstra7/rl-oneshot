@@ -350,6 +350,53 @@ Workstreams F1-F15, all implemented, tested, committed, and pushed to
 The arena flush & refinements plan
 (`plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md`, F1-F15) is now complete.
 
+## Online multiplayer (plan/ONLINE_MULTIPLAYER_PLAN.md, N0–N8) — complete
+
+Peer-to-peer deterministic-lockstep online 1v1 (room codes + quick match)
+over WebRTC, with a $0 Cloudflare control plane. The game already had the
+foundations (fixed 120Hz tick, no-unseeded-randomness rule, AI fed through
+the same input seam as the player), so the two clients exchange only inputs
+(~5 KB/s) and each simulates the identical match.
+
+- **N0** — Swapped to `@dimforge/rapier3d-deterministic-compat` (npm alias,
+  zero source changes) for cross-machine bit-identical physics; permanent
+  determinism gate at golden hash `d12dfc99`. **Confirmed cross-machine**:
+  reproduced exactly on macOS vs the x86-64 Linux CI.
+- **N1** — `CarInputSource` seam (Local/Ai/Remote) replacing hard-coded
+  player/AI branches; int8 input quantization at the sampling seam;
+  `TickAdvanceGate` on the fixed-step loop; F13 watchdog gated off for
+  remote humans. Zero behaviour change.
+- **N2** — `LockstepSession` (input buffers, 8-frame redundancy, desync
+  hasher) + wire codec + seeded `FakeLink`. Two sims over impaired links
+  (to 10% loss+dup) stay bit-identical; forged input caught in one hash
+  interval.
+- **N3** — `PeerLink`: a `NetLink` over an unordered/unreliable WebRTC
+  DataChannel with trickle ICE, reconnect/ICE-restart, RTT.
+- **N4** — `backend/` Cloudflare Workers + Durable Objects control plane:
+  rooms, FIFO matchmaking, signaling relay, TURN minting; pure cores unit-
+  tested, DO adapters typecheck vs workers-types; $0 free-tier runbook.
+- **N5** — `MatchFlowController` online mode (shared kickoff seed, forfeit),
+  `LobbyClient`, `MultiplayerSession` orchestrator. Two full match
+  controllers over an impaired link stay bit-identical through goals and
+  kickoffs.
+- **N6** — `GameRuntime` online frame-loop wiring (submit-ahead + advance
+  gate + desync-hash) and the lobby UI (ONLINE menu, create/join/quick
+  match, room-code copy + `?room=` deep link, error handling), controller-
+  nav + focus compliant.
+- **N7** — Adaptive input-delay policy (RTT/jitter → clamped delay);
+  validated through the lockstep harness to keep stalls near-zero at
+  reasonable ping and bounded at extreme ping.
+- **N8** — Offline-first opt-in guarantee (single-player opens NO
+  multiplayer socket; MP connects only on explicit opt-in), `VITE_MP_CONTROL_URL`
+  config, docs, and full sweeps.
+
+**Runs the user still owns** (can't be done from CI): deploy the control
+plane (`cd backend && wrangler deploy`, ~15 min, `backend/README.md`) and a
+real two-machine internet match. The two-page live-match E2E and the
+in-match connection-quality HUD / background-tab handling are the documented
+follow-ons that need a running control plane / are thin presentational
+polish over already-tested session data.
+
 ## Next exact task
 - No open task from this plan. Future work would go back to picking
   up items from the various `docs/*-deviations.md` "Deferred" lists
