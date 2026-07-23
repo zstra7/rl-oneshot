@@ -1110,3 +1110,38 @@ and bounded stalls; a single forged remote input is caught within one
 surviving packet's redundancy window confirms all 8 of its ticks even
 when every other packet is dropped. Full suite 356/356, `vue-tsc` and
 `npm run validate` clean.
+
+## Online multiplayer — N3 (WebRTC transport, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+`PeerLink` (`src/netcode/PeerLink.ts`) is a real WebRTC DataChannel behind
+the exact `NetLink` interface the lockstep core (N2) was validated against
+over `FakeLink` — so the whole client stack composes by construction. The
+channel is `{ ordered: false, maxRetransmits: 0 }`: input streaming must
+never head-of-line block behind a lost packet (the N2 redundancy window
+recovers loss; a reliable channel would turn one drop into a stall of
+every later input). The `RTCPeerConnection` is created through an
+injectable factory so the connection/reconnect state machine is
+unit-testable in node.
+
+Handshake is trickle-ICE via a small `SignalingChannel` interface
+(`Signaling.ts`) — the RoomDO WebSocket client (N4) implements it;
+`createLoopbackSignaling` wires two peers in-process for tests. Remote ICE
+candidates arriving before the remote description is set are buffered and
+flushed (they'd otherwise throw). On `failed`/`disconnected`, PeerLink
+calls `restartIce()` and (as offerer) re-offers with `{ iceRestart: true }`,
+capped at 3 attempts before surfacing `failed`. RTT is read best-effort
+from the nominated candidate pair's `getStats()` (feeds N7's adaptive
+delay). `connected` requires BOTH the PC connected and the channel open.
+
+**Gates**: `tests/unit/peerLink.spec.ts` (11 tests, controllable mock
+RTCPeerConnection) covers channel config, send/receive queueing,
+candidate buffering/flush, the connected/reconnecting/failed transitions,
+ICE-restart + cap, RTT, and idempotent teardown;
+`tests/unit/peerLinkLockstep.spec.ts` runs two real PeerLinks (cross-wired
+mock connections) fronting two real LockstepSessions + PhysicsFacades
+through a 400-tick match to bit-identical state. The real browser
+DataChannel path stays covered by `tests/netspike/webrtc-lockstep.spec.ts`
+(two pages, real RTCPeerConnection, hash `d12dfc99` on both). The in-app
+browser E2E of PeerLink+LockstepSession is deferred to N5's online-match
+Playwright test, where the runtime wiring that installs them exists —
+building a bundled test page for it in isolation would duplicate that.
