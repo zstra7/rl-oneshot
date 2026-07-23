@@ -91,6 +91,31 @@ export class AiSource implements CarInputSource {
   }
 }
 
+/** Anything that can supply the local car's already-scheduled input for a tick (a LockstepSession). */
+export interface LocalInputBuffer {
+  localInputForTick(tick: number): CarInput;
+}
+
+/**
+ * N6: the local player's car in ONLINE mode. Unlike `LocalDeviceSource`
+ * (which samples the device fresh each tick), this replays the input that
+ * was sampled `inputDelayTicks` ago and scheduled into the lockstep local
+ * buffer — so the local car is simulated on the exact same tick, from the
+ * exact same value, as the remote peer simulates it. The fresh device
+ * sample happens once per tick in the runtime's submit-ahead loop, not
+ * here.
+ */
+export class BufferedLocalSource implements CarInputSource {
+  public constructor(
+    public readonly carId: CarId,
+    private readonly buffer: LocalInputBuffer
+  ) {}
+
+  public sampleForTick(context: CarInputContext): CarInputSample {
+    return { input: this.buffer.localInputForTick(context.tick) };
+  }
+}
+
 /**
  * A car driven by a remote peer. Inputs arrive out of band (N2 pushes
  * decoded wire inputs into the per-tick buffer) and are replayed exactly

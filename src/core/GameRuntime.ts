@@ -5,7 +5,7 @@ import { validateModuleContracts } from "@/core/ContractRegistry";
 import { DefaultErrorReporter, type ErrorReporter } from "@/core/ErrorReporter";
 import { EventDispatcher, type Unsubscribe } from "@/core/EventDispatcher";
 import type { TypedEventMap } from "@/core/EventTypes";
-import { FixedStepCoordinator, FIXED_DT_SECONDS } from "@/core/FixedStepCoordinator";
+import { ALWAYS_ADVANCE, FixedStepCoordinator, FIXED_DT_SECONDS } from "@/core/FixedStepCoordinator";
 import { FrameCoordinator } from "@/core/FrameCoordinator";
 import type { ModuleStatus } from "@/core/GameModule";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
@@ -31,10 +31,13 @@ import {
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
 import {
   AiSource,
+  BufferedLocalSource,
   LocalDeviceSource,
   type CarInputContext,
   type CarInputSource
 } from "@/netcode/CarInputSource";
+import type { OnlineMatchContext } from "@/netcode/MultiplayerSession";
+import { fnv1a32 } from "@/netcode/protocol";
 import type { CarId } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
@@ -52,7 +55,7 @@ import { AudioEventAdapter } from "@/integration/AudioEventAdapter";
 import { DEFAULT_AUDIO_SETTINGS, type AudioDiagnostics, type AudioSettings } from "@/audio/AudioTypes";
 import type { ControlBindings } from "@/input/bindings/BindingsConfig";
 import type { CapturedBinding } from "@/input/InputControlsModule";
-import type { ActiveInputDevice } from "@/input/InputTypes";
+import type { ActiveInputDevice, HumanGameplayInputFrame } from "@/input/InputTypes";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
@@ -115,6 +118,12 @@ export interface GameRuntimeFacade {
     type: K,
     listener: (event: TypedEventMap[K]) => void
   ): Unsubscribe;
+
+  // -- Online multiplayer (plan/ONLINE_MULTIPLAYER_PLAN.md, N5/N6) --
+
+  startOnlineSession(context: OnlineMatchContext, durationMinutes: MatchDurationMinutes): void;
+  endOnlineSession(): void;
+  isOnlineSession(): boolean;
 
   // -- Match flow (game-flow spec sections 28/35/39) --
 
@@ -289,6 +298,13 @@ export class GameRuntime implements GameRuntimeFacade {
    */
   private readonly carInputSources = new Map<CarId, CarInputSource>();
 
+  /** N6: the active online 1v1 session, or null in single-player. */
+  private onlineSession: OnlineMatchContext | null = null;
+  /** N6: the next tick whose local input the online submit-ahead loop should sample and send. */
+  private onlineNextSubmitTick = 0;
+  /** N6: last local input frame sampled in the online submit loop (for the fixed-tick input context). */
+  private lastOnlineFrame: HumanGameplayInputFrame | null = null;
+
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
       throw new Error("GameRuntime is already initialised.");
@@ -455,6 +471,12 @@ export class GameRuntime implements GameRuntimeFacade {
 
       this.modules?.input.updateBrowserFrame(timestampMs);
 
+      // N6: in online mode, sample the local input ahead of the simulation
+      // and hand it to the lockstep session BEFORE the gated advance, so
+      // the advance-gate can actually let ticks through (a tick can't run
+      // until its local input is submitted).
+      this.driveOnlineSubmit();
+
       const frameDelta = this.clock.computeFrameDelta(timestampMs);
       this.fixedStepsLastFrame = this.fixedStepCoordinator.advance(frameDelta);
 
@@ -551,6 +573,85 @@ export class GameRuntime implements GameRuntimeFacade {
     );
   }
 
+  /**
+   * N6 (plan/ONLINE_MULTIPLAYER_PLAN.md): enter online 1v1 mode. Installs
+   * the buffered local source + the remote peer's source, gates the
+   * fixed-step advance on the lockstep session (a tick can't run until both
+   * cars' inputs for it are in hand), and starts the synchronized match
+   * with the shared kickoff seed. The `MultiplayerSession` orchestrator
+   * (N5) produces the `context`; the lobby UI (N6) calls this on
+   * `match-ready`.
+   */
+  public startOnlineSession(context: OnlineMatchContext, durationMinutes: MatchDurationMinutes): void {
+    const modules = this.requireModules();
+    this.onlineSession = context;
+    this.onlineNextSubmitTick = 0;
+    this.lastOnlineFrame = null;
+
+    this.carInputSources.clear();
+    this.carInputSources.set(context.localCarId, new BufferedLocalSource(context.localCarId, context.session));
+    this.carInputSources.set(context.remoteCarId, context.session.remoteSource);
+
+    this.fixedStepCoordinator.setAdvanceGate({ canAdvance: (tick) => context.session.canSimulate(tick) });
+    modules.gameFlow.startOnlineMatch({ durationMinutes, kickoffSeed: context.kickoffSeed });
+  }
+
+  /** N6: leave online mode and restore single-player timing + input sources. */
+  public endOnlineSession(): void {
+    this.onlineSession = null;
+    this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
+    this.configureSinglePlayerInputSources();
+  }
+
+  public isOnlineSession(): boolean {
+    return this.onlineSession !== null;
+  }
+
+  /**
+   * N6: online submit-ahead. Each rendered frame, sample the local input
+   * for every tick up to `currentTick + inputDelay` that hasn't been sent
+   * yet, hand it to the lockstep session (which quantizes, buffers, and
+   * transmits it), and pump incoming packets. This runs BEFORE the gated
+   * fixed-step advance so the gate has the local inputs it needs to let
+   * ticks through. Camera/pause edges are consumed here (the online
+   * fixed-tick path does not re-sample). Runs at most a bounded number of
+   * submits per frame to avoid unbounded catch-up bursts.
+   */
+  private driveOnlineSubmit(): void {
+    const context = this.onlineSession;
+    const modules = this.modules;
+    if (!context || !modules) {
+      return;
+    }
+
+    const targetTick = this.fixedStepCoordinator.tick + context.session.inputDelayTicks;
+    const grounded = modules.physics.getCarIds().includes(context.localCarId)
+      ? modules.physics.getCarState(context.localCarId).grounded
+      : true;
+
+    let submits = 0;
+    const maxSubmitsPerFrame = 16;
+    while (this.onlineNextSubmitTick <= targetTick && submits < maxSubmitsPerFrame) {
+      const frame = modules.input.sampleGameplayInputForTick(this.onlineNextSubmitTick, { grounded });
+      this.lastOnlineFrame = frame;
+      this.cameraController?.consumeCameraInput(frame.camera);
+      // A pause press opens the non-freezing online overlay via the UI; the
+      // simulation never freezes (that would desync the peers).
+      context.session.submitLocalInput(this.onlineNextSubmitTick, frame.car);
+      this.onlineNextSubmitTick += 1;
+      submits += 1;
+    }
+
+    context.session.pump();
+
+    if (context.session.getStatus() === "desynced") {
+      // A determinism break was detected — end the match rather than let
+      // the two peers silently diverge.
+      modules.gameFlow.endOnlineMatchByForfeit("player");
+      this.endOnlineSession();
+    }
+  }
+
   private onFixedTick(tick: number): void {
     const modules = this.modules;
     if (!modules) {
@@ -569,6 +670,12 @@ export class GameRuntime implements GameRuntimeFacade {
       return;
     }
 
+    // N6: in online mode the local input was already sampled (once per
+    // tick) and submitted by `driveOnlineSubmit` before the gated advance,
+    // so DO NOT re-sample here (that would double-consume edges). The
+    // buffered local source + remote source read from the lockstep buffers.
+    const online = this.onlineSession;
+
     // Sample input once per tick regardless of match state (input spec:
     // one sample per tick) so camera toggles/swivel still respond during
     // countdown/pause, then either apply or neutralise the CarInput half
@@ -580,11 +687,18 @@ export class GameRuntime implements GameRuntimeFacade {
       ? modules.physics.getCarState(PLAYER_CAR_ID).grounded
       : true;
 
-    const frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
-    this.cameraController?.consumeCameraInput(frame.camera);
-
-    if (frame.system.pausePressed) {
-      this.pauseMatch();
+    let frame: HumanGameplayInputFrame;
+    if (online) {
+      // Reuse the frame the submit loop sampled (for the input context's
+      // shape); the online sources don't read it, and camera/pause were
+      // already handled in driveOnlineSubmit.
+      frame = this.lastOnlineFrame ?? modules.input.sampleGameplayInputForTick(tick, { grounded });
+    } else {
+      frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
+      this.cameraController?.consumeCameraInput(frame.camera);
+      if (frame.system.pausePressed) {
+        this.pauseMatch();
+      }
     }
 
     if (modules.gameFlow.areControlsActive()) {
@@ -619,6 +733,14 @@ export class GameRuntime implements GameRuntimeFacade {
     modules.physics.step();
 
     modules.gameFlow.applyPhysicsResults();
+
+    if (online) {
+      // N6: feed the just-simulated world state to the lockstep session
+      // for the periodic desync-hash exchange.
+      const world = modules.physics.getWorldState();
+      const stateJson = JSON.stringify({ cars: world.cars, ball: world.ball, boostPads: world.boostPads, tick: world.tick });
+      online.session.recordSimulated(tick, String(fnv1a32(stateJson)));
+    }
 
     this.dispatcher.emit("runtime:fixed-tick", {
       tick,
