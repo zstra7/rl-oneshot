@@ -41,12 +41,14 @@ describe("Goal-scored blast force", () => {
       physics.spawnCar({ id: "car-a", transform: { x: 0, y: 0.4, z: -26 } });
       physics.stepTicks(5);
 
-      physics.applyRadialCarImpulse(goalCentre, 16, 18);
+      // F14 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): "big + strong"
+      // locked decision — radius 16->26, maxDeltaV 18->30.
+      physics.applyRadialCarImpulse(goalCentre, 26, 30);
       physics.stepTicks(1);
 
       const state = physics.getCarState("car-a");
       const speed = V.length(state.linearVelocity);
-      expect(speed).toBeGreaterThanOrEqual(10);
+      expect(speed).toBeGreaterThanOrEqual(15);
 
       const carPosition = { x: state.position.x, y: 0, z: state.position.z };
       const awayFromGoal = V.normalize(V.sub(carPosition, { x: goalCentre.x, y: 0, z: goalCentre.z }));
@@ -55,13 +57,25 @@ describe("Goal-scored blast force", () => {
       expect(state.linearVelocity.y).toBeGreaterThan(0);
     });
 
+    it("F14: still gets a solid shove near the edge of the radius (0.4 falloff floor)", () => {
+      const goalCentre = { x: 0, y: 0, z: -30 };
+      physics.spawnCar({ id: "car-a", transform: { x: 0, y: 0.4, z: -6 } }); // 24m away, inside the 26m radius
+      physics.stepTicks(5);
+
+      physics.applyRadialCarImpulse(goalCentre, 26, 30);
+      physics.stepTicks(1);
+
+      const speed = V.length(physics.getCarState("car-a").linearVelocity);
+      expect(speed).toBeGreaterThanOrEqual(10);
+    });
+
     it("falls off with distance — a car outside the radius is basically untouched", () => {
       const goalCentre = { x: 0, y: 0, z: -30 };
-      physics.spawnCar({ id: "car-a", transform: { x: 0, y: 0.4, z: -5 } }); // 25m away
+      physics.spawnCar({ id: "car-a", transform: { x: 0, y: 0.4, z: -2 } }); // 28m away, outside the 26m radius
       physics.stepTicks(5);
       const before = physics.getCarState("car-a").linearVelocity;
 
-      physics.applyRadialCarImpulse(goalCentre, 16, 18);
+      physics.applyRadialCarImpulse(goalCentre, 26, 30);
       physics.stepTicks(1);
 
       const after = physics.getCarState("car-a").linearVelocity;
@@ -109,7 +123,8 @@ describe("Goal-scored blast force", () => {
       expect(gameFlow.getSessionState().playerScore).toBe(1);
       const playerSpeed = V.length(physics.getCarState(PLAYER_CAR_ID).linearVelocity);
       const opponentSpeed = V.length(physics.getCarState(OPPONENT_CAR_ID).linearVelocity);
-      expect(playerSpeed).toBeGreaterThanOrEqual(6);
+      // F14: raised from >=6 to >=12 with the "big + strong" blast retune.
+      expect(playerSpeed).toBeGreaterThanOrEqual(12);
       expect(opponentSpeed).toBeLessThan(1);
     });
 
@@ -126,7 +141,8 @@ describe("Goal-scored blast force", () => {
       tick(physics, gameFlow);
 
       const speedRightAfter = V.length(physics.getCarState(PLAYER_CAR_ID).linearVelocity);
-      expect(speedRightAfter).toBeGreaterThanOrEqual(6);
+      // F14: raised from >=6 to >=12 with the "big + strong" blast retune.
+      expect(speedRightAfter).toBeGreaterThanOrEqual(12);
 
       // A second impulse mid-decay would spike speed back up well above
       // its post-blast peak; friction/drag noise alone never does that.

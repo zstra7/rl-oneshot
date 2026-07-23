@@ -707,9 +707,14 @@ export class PhysicsFacade implements GameModule {
   /**
    * R6 (plan/RAMPS_AND_FEATURES_PLAN.md): a real-RL-style "goal explosion"
    * shockwave — cars within `radius` of `centre` get a velocity change of
-   * up to `maxDeltaV` (linear falloff with distance), directed away from
-   * `centre` horizontally with a small upward component, mass-scaled so
-   * the impulse produces the same delta-v regardless of car mass.
+   * up to `maxDeltaV`, directed away from `centre` horizontally with a
+   * small upward component, mass-scaled so the impulse produces the same
+   * delta-v regardless of car mass. F14 (plan/
+   * ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): falloff floored at 0.4 (was a
+   * pure linear ramp to 0 at the edge) — the locked "big + strong" design
+   * means even a car near the edge of the radius still gets a solid
+   * shove, not a token nudge; still a hard zero the instant a car is
+   * outside `radius` entirely.
    */
   public applyRadialCarImpulse(centre: V.Vec3Like, radius: number, maxDeltaV: number): void {
     for (const car of this.carRegistry.getAllStable()) {
@@ -718,7 +723,7 @@ export class PhysicsFacade implements GameModule {
       if (distance > radius) {
         continue;
       }
-      const falloff = 1 - distance / radius;
+      const falloff = Math.max(0.4, 1 - distance / radius);
       const dirH = distance < 1e-4 ? { x: 0, y: 0, z: 0 } : V.normalize({ x: toCar.x, y: 0, z: toCar.z });
       const dir = V.normalize({ x: dirH.x, y: 0.35, z: dirH.z });
       car.body.applyImpulse(V.scale(dir, RL_CONSTANTS.carMass * maxDeltaV * falloff), true);

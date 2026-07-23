@@ -172,7 +172,9 @@ test("R6: a goal blasts a nearby parked car away from the scored-on goal", async
     playerState!.linearVelocity.y,
     playerState!.linearVelocity.z
   );
-  expect(speed).toBeGreaterThan(6);
+  // F14 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): raised from >6 to >12
+  // with the "big + strong" blast retune (radius 16->26, maxDeltaV 18->30).
+  expect(speed).toBeGreaterThan(12);
 });
 
 test("results screen shows victory/defeat, final score, and replay/return buttons", async ({

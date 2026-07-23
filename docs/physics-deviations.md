@@ -886,3 +886,29 @@ to stay the same. Pad-count assertions updated in
 (no hardcoded coordinates/counts found), so `aiDifficulty.spec.ts`/
 `opponentAi.spec.ts`/`aiScoring.spec.ts`/`aiUnstuck.spec.ts` all stay
 green unmodified.
+
+## Post-launch polish pass — F14 (goal blast retuned, `MatchFlowController.ts` / `PhysicsFacade.applyRadialCarImpulse`)
+
+Per locked "big + strong" user decision, `GOAL_BLAST_RADIUS` 16 → 26 and
+`GOAL_BLAST_MAX_DELTA_V` 18 → 30. `applyRadialCarImpulse`'s falloff is
+also floored at 0.4 (`Math.max(0.4, 1 - distance / radius)`, was a pure
+linear ramp to 0 at the edge) so a car near the edge of the radius still
+gets a solid shove rather than a token nudge — still a hard zero the
+instant a car is outside `radius` entirely (the `distance > radius`
+early-continue is unchanged).
+
+Sanity-checked against the arena: the goal sensor centre sits at
+`z ≈ ±32.5`, so a midfield car (`z = 0`, ~32.5m away) stays outside the
+26m radius and the "midfield car unaffected" behaviour survives
+unchanged.
+
+`tests/unit/goalBlast.spec.ts` updated: direct-method calls now use
+`(26, 30)`; the near-goal speed assertion raised `≥10 → ≥15`; a new test
+covers a car at 24m (inside the radius, near its edge) still getting
+`≥10` speed (the falloff-floor gate); the "outside the radius" car moved
+from 25m to 28m (now genuinely outside 26m) with its `<0.5` untouched-
+delta assertion unchanged. Full-flow parked-at-goal assertions raised
+`≥6 → ≥12` (both the "kicked vs. midfield unaffected" and the
+"idempotence" tests); the idempotence test's own decay-only assertion is
+unaffected by the constant change. `tests/game-flow/match-flow.spec.ts`'s
+R6 Playwright test raised its threshold `>6 → >12` to match.

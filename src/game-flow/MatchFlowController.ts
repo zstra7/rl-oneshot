@@ -41,8 +41,11 @@ const MENU_STATES: readonly MatchState[] = [
 ];
 
 // R6 (plan/RAMPS_AND_FEATURES_PLAN.md): goal-scored blast radius/strength.
-const GOAL_BLAST_RADIUS = 16;
-const GOAL_BLAST_MAX_DELTA_V = 18;
+// F14 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): "big + strong" locked
+// decision — most of the defending third gets visibly thrown, not just
+// cars parked right at the goal mouth.
+const GOAL_BLAST_RADIUS = 26;
+const GOAL_BLAST_MAX_DELTA_V = 30;
 
 const PAUSABLE_STATES: readonly MatchState[] = [
   "PLAYING",

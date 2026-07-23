@@ -303,3 +303,91 @@ are now implemented.
   `"high"` (`glowEnabled` was already `true`, `fullscreen` stays `false`
   — a fullscreen default would be surprising/disruptive on load, unlike
   a visual-fidelity knob).
+
+## Post-launch polish pass — F3 (single-layer square hex shell, plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+- **Root cause 1: double hex layer.** Every glass-shell surface
+  (`SideWallLeft`/`Right`, `Ceiling`, end-wall side segments + lintel,
+  goal-box back/sides/roof, `CornerWallPanel`s) was a 1m-thick
+  `BoxGeometry` using the shared transparent `DoubleSide` glass material
+  with `depthWrite: false`. A transparent double-sided box renders its
+  hex pattern on **both** parallel faces — so every wall and the roof
+  visibly showed two hex layers roughly a metre apart. Fixed by
+  converting every one of those surfaces from a box to a single-sided
+  `PlaneGeometry` positioned exactly on the collider's inner (field-
+  facing) face — `createShellPlaneGeometry()` in
+  `StadiumGeometryFactory.ts` builds and registry-caches these planes.
+  The material itself keeps `side: THREE.DoubleSide` (bumped to registry
+  key `stadium-glass-shell-v3`) so the single plane still reads correctly
+  from both interior and exterior camera angles — only the geometry
+  changed from two parallel faces to one.
+- **Root cause 2: stretched, inconsistent hexes.** One glass material
+  with `hexTexture.repeat.set(10, 10)` was shared by every surface
+  regardless of its own world-space dimensions: side walls (48×20 world
+  units) got hex cells stretched 2.4:1, the ceiling (42×60) a different
+  4.2:1-ish stretch, and the corner panels (≈1.67×20, since a single
+  panel's chord is barely 2m wide but the wall is 20m tall) were
+  stretched roughly **12:1** — this is exactly why the corners visually
+  "looked different" from the straight walls. Fixed by moving hex
+  density off the material's shared `repeat` (now identity `(1, 1)` —
+  see the material's own comment for why it stays on the material, not
+  the geometry, for `DoubleSide` sake) and onto each plane's own UVs:
+  `createShellPlaneGeometry(registry, key, worldW, worldH)` builds a
+  `PlaneGeometry(worldW, worldH)` and rescales its UV attribute by
+  `worldW / HEX_TILE_WORLD_SIZE` and `worldH / HEX_TILE_WORLD_SIZE`
+  (`HEX_TILE_WORLD_SIZE = 11.5` world units per full texture tile, ≈1.92m
+  hexes) — so every surface, corner panels included, reads the same
+  real-world hex size and stays square regardless of its own aspect
+  ratio.
+- **Root cause 3: non-periodic tile + thin lines.**
+  `HexPatternTexture.ts` used `HEX_CIRCUMRADIUS = 48` px on a 512px tile
+  with `colStep = 72` (`hexWidth * 0.75`) — 72 does not divide 512, so
+  the pattern drifted out of phase across a `RepeatWrapping` tile
+  boundary, adding faint seam lines. `LINE_WIDTH = 2.5` also read as
+  thin. Reworked around four related constants: `COL_STEP = 64` (8
+  columns; horizontal *period* is `2 * COL_STEP = 128`, which divides
+  512 exactly — the alternating even/odd column vertical offset means
+  the true repeat unit is two columns, not one), `HEX_CIRCUMRADIUS =
+  COL_STEP / 1.5 ≈ 42.667` (flat-top geometry keeps `colStep = 1.5R`),
+  `ROW_STEP = TEXTURE_SIZE / 7 ≈ 73.14` (vs the ideal `√3·R ≈ 73.9` — an
+  ~1% vertical squash, invisible in practice, in exchange for `7 *
+  ROW_STEP` landing exactly on the tile height), and `LINE_WIDTH = 4.0`.
+  `drawHexGrid` now iterates exact integer column/row indices scaled by
+  these constants (`cx = col * COL_STEP`, `cy = row * ROW_STEP`) instead
+  of accumulating `cx += colStep` in a float loop and deriving row
+  spacing from `√3·R` — every hex centre lands on an exact multiple of
+  the periodic step, so the pattern tiles seamlessly. Still a raw
+  `DataTexture` (not `CanvasTexture`), since this factory has to keep
+  working under Vitest's DOM-less Node environment.
+- **Positioning math, one surface at a time**: every plane replaces a box
+  whose thickness ran along a known local axis, so the "inner face"
+  offset is always half that box's thickness in the field-facing
+  direction — side walls/ceiling/end walls/goal-box faces all move from
+  the old box-centre position to `centre ∓ WALL_THICKNESS / 2`,
+  reasoned out per-surface directly in `StadiumGeometryFactory.ts`'s
+  inline comments. `CornerWallPanel`s are the one non-trivial case: each
+  panel's `spec.rotation` (from `ArenaRampGeometry.ts`'s
+  `generateCorner`, unchanged by F1/F2) maps the panel's local +Z axis to
+  the OUTWARD normal, so the inner (drivable/visible) face sits at
+  `spec.translation + rotate(spec.rotation, {0, 0, -CORNER_PANEL_HALF_THICK})`
+  — the box's *centre*, offset inward along its own rotated local Z, not
+  a world-axis offset. This keeps "what you see is what you drive on"
+  intact: the glass plane lands exactly on the F2-fixed inner face the
+  physics collider actually presents, not the box centre.
+- **What the tests prove** (`tests/unit/stadiumVisuals.spec.ts`): a
+  single-layer invariant (every named glass-shell mesh's
+  `geometry.type === "PlaneGeometry"`, never `"BoxGeometry"`) covering
+  side walls, ceiling, all 24 corner panels, and every glass child of the
+  end-wall/goal-box groups (found by material identity, not just name,
+  so nothing is missed); a square-hex invariant computing each plane's
+  UV span against its `geometry.parameters.width/height` and asserting
+  `worldW / uvSpanU` and `worldH / uvSpanV` both equal
+  `HEX_TILE_WORLD_SIZE` within 1% (this is the test that would have
+  failed pre-F3, since the corner panels were ~12:1 off); and texture
+  constants (`LINE_WIDTH >= 4`, `TEXTURE_SIZE % (2 * COL_STEP) === 0`).
+  `tests/unit/arenaRampGeometry.spec.ts`'s visual/physics bijection test
+  was updated so its `CornerWallPanel` branch reconstructs the same
+  inner-face offset `StadiumGeometryFactory.ts` computes (rather than
+  expecting the mesh at the spec's raw `translation`), preserving the
+  test's actual guarantee — visual surface exactly matches physics
+  surface — instead of weakening it.
