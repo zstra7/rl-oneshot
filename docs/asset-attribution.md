@@ -33,6 +33,10 @@ adjustment happens on cloned runtime copies only (see
 `docs/car-intake-report.md`).
 Used by: both cars in every live match and the main-menu presentation
 (`src/integration/PhysicsRenderBinding.ts`, `AssetPipeline.buildPlaceholderWorld`).
+In-app attribution: surfaced at runtime on the main-menu **CREDITS** screen
+(`src/components/menu/CreditsPanel.vue`, data sourced from
+`src/assets/attribution/AssetCredits.ts`) so a distributed build carries the
+required CC-BY notice, not just this doc.
 Notes: see `docs/car-intake-report.md` for the full technical intake
 report (mesh/material/triangle counts, bounds, axis findings).
 

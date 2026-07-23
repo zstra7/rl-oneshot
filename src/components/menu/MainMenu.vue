@@ -22,6 +22,11 @@ function openTournament(): void {
   runtime.playUiSound("confirm");
   runtime.enterTournament();
 }
+
+function openCredits(): void {
+  runtime.playUiSound("confirm");
+  runtime.openCredits();
+}
 </script>
 
 <template>
@@ -60,6 +65,15 @@ function openTournament(): void {
       </button>
       <button type="button" class="menu-item wo-item" data-index="04" @click="openSettings">
         SETTINGS
+      </button>
+      <button
+        type="button"
+        class="menu-item wo-item"
+        data-index="05"
+        data-testid="open-credits"
+        @click="openCredits"
+      >
+        CREDITS
       </button>
     </nav>
   </div>

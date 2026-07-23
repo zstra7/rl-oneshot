@@ -36,6 +36,7 @@ const MENU_STATES: readonly MatchState[] = [
   "MATCH_SETUP",
   "SETTINGS",
   "CAR_CUSTOMISE",
+  "CREDITS",
   "TOURNAMENT_BRACKET",
   "TOURNAMENT_VICTORY"
 ];
@@ -177,6 +178,13 @@ export class MatchFlowController {
   public openCarCustomise(): void {
     if (this.matchState === "MAIN_MENU") {
       this.setMatchState("CAR_CUSTOMISE");
+    }
+  }
+
+  /** Credits/attribution screen — only reachable from the main menu, scoped like openCarCustomise. */
+  public openCredits(): void {
+    if (this.matchState === "MAIN_MENU") {
+      this.setMatchState("CREDITS");
     }
   }
 

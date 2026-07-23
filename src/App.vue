@@ -10,6 +10,7 @@ import PauseMenu from "@/components/hud/PauseMenu.vue";
 import QuickChatOverlay from "@/components/hud/QuickChatOverlay.vue";
 import ResultsScreen from "@/components/hud/ResultsScreen.vue";
 import CarCustomise from "@/components/menu/CarCustomise.vue";
+import CreditsPanel from "@/components/menu/CreditsPanel.vue";
 import MainMenu from "@/components/menu/MainMenu.vue";
 import MatchSetup from "@/components/menu/MatchSetup.vue";
 import SettingsPanel from "@/components/menu/SettingsPanel.vue";
@@ -93,6 +94,7 @@ const showGameplayHud = computed(
       "MATCH_SETUP",
       "SETTINGS",
       "CAR_CUSTOMISE",
+      "CREDITS",
       "MATCH_LOADING",
       "KICKOFF_SETUP",
       "MATCH_RESULTS",
@@ -113,6 +115,7 @@ const showGameplayHud = computed(
     <MainMenu v-if="matchState === 'MAIN_MENU'" />
     <MatchSetup v-else-if="matchState === 'MATCH_SETUP'" />
     <CarCustomise v-else-if="matchState === 'CAR_CUSTOMISE'" />
+    <CreditsPanel v-else-if="matchState === 'CREDITS'" />
     <TournamentBracket v-else-if="matchState === 'TOURNAMENT_BRACKET'" />
     <TournamentVictory v-else-if="matchState === 'TOURNAMENT_VICTORY'" />
 

@@ -29,6 +29,7 @@ export interface BrowserGameFlowTestApi {
   openMatchSetup(): void;
   openSettings(): void;
   openCarCustomise(): void;
+  openCredits(): void;
 
   selectMatchDuration(minutes: MatchDurationMinutes): void;
   startMatch(config?: Partial<MatchConfig>): void;
@@ -76,6 +77,7 @@ export function createGameFlowTestApi(
     openMatchSetup: () => withNotify(() => gameFlow.openMatchSetup()),
     openSettings: () => withNotify(() => gameFlow.openSettings()),
     openCarCustomise: () => withNotify(() => gameFlow.openCarCustomise()),
+    openCredits: () => withNotify(() => gameFlow.openCredits()),
 
     selectMatchDuration: (minutes) => withNotify(() => gameFlow.selectMatchDuration(minutes)),
     startMatch: (config) => withNotify(() => gameFlow.startMatch(config)),

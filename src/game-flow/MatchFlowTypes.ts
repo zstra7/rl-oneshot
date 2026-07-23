@@ -8,6 +8,7 @@ export type MatchState =
   | "MATCH_SETUP"
   | "SETTINGS"
   | "CAR_CUSTOMISE"
+  | "CREDITS"
   | "MATCH_LOADING"
   | "KICKOFF_SETUP"
   | "COUNTDOWN_3"
@@ -39,6 +40,7 @@ export const MENU_NAVIGABLE_STATES: readonly MatchState[] = [
   "MATCH_SETUP",
   "SETTINGS",
   "CAR_CUSTOMISE",
+  "CREDITS",
   "PAUSED",
   "MATCH_RESULTS",
   "TOURNAMENT_BRACKET",

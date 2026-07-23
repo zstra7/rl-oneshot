@@ -15,6 +15,7 @@ const MENU_MATCH_STATES: readonly MatchState[] = [
   "MAIN_MENU",
   "MATCH_SETUP",
   "SETTINGS",
+  "CREDITS",
   // R13: plain orbit camera is fine for the tournament screens — no
   // dedicated framing needed, unlike CAR_CUSTOMISE below.
   "TOURNAMENT_BRACKET",

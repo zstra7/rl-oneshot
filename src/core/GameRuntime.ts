@@ -57,6 +57,7 @@ const MENU_MATCH_STATES: readonly MatchState[] = [
   "MATCH_SETUP",
   "SETTINGS",
   "CAR_CUSTOMISE",
+  "CREDITS",
   "TOURNAMENT_BRACKET",
   "TOURNAMENT_VICTORY"
 ];
@@ -118,6 +119,7 @@ export interface GameRuntimeFacade {
   openMatchSetup(): void;
   openSettings(): void;
   openCarCustomise(): void;
+  openCredits(): void;
 
   /** R12.2: Customise Car live preview — applies the asset override, rebuilds the player's cached visual, and re-tints boost-trail VFX. */
   setPlayerCarColors(colors: { bodyColor: string; boostColor: string }): void;
@@ -842,6 +844,11 @@ export class GameRuntime implements GameRuntimeFacade {
 
   public openCarCustomise(): void {
     this.requireModules().gameFlow.openCarCustomise();
+    this.emitSessionStateChanged();
+  }
+
+  public openCredits(): void {
+    this.requireModules().gameFlow.openCredits();
     this.emitSessionStateChanged();
   }
 
