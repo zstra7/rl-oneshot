@@ -66,8 +66,8 @@ test("the plain production build boots, plays through menus into a live match, a
   // Pause and return to the main menu without waiting out the full match.
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("pause-menu")).toBeVisible();
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByText("RETURN TO MENU").click();
+  await page.getByTestId("pause-confirm-yes").click();
 
   await expect
     .poll(() => page.evaluate(() => document.querySelector("#app-root")?.getAttribute("data-app-state")), {

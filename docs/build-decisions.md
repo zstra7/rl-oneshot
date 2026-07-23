@@ -650,6 +650,112 @@ stuck pose, rebind a key, navigate every menu with a virtual pad) as
 already covered by the existing real-input Playwright suites for each
 of those features rather than writing a redundant standalone script.
 
+## F9 — Controller focus visibility on every menu button (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+**Root cause.** `src/styles/retro-ui.css` defines a global R11 amber
+`:focus` outline rule for `.wo-item`/`.duration-item`/`.tab`/`.chip`, but
+eight components (`MainMenu`, `MatchSetup`, `PauseMenu`, `ResultsScreen`,
+`TournamentBracket`, `TournamentVictory`, `SettingsPanel`,
+`CarCustomise`) each carried their own scoped
+`.menu-item:hover, .menu-item:focus-visible { outline: none; }` block.
+Vue's scoped-style `data-v-xxxx` attribute selector gives the scoped rule
+equal-or-higher specificity than the global `:focus` rule for the same
+`outline` property, and it's later in the cascade, so whenever focus
+arrived via keyboard/gamepad (triggering both `:focus` and
+`:focus-visible`) the scoped `outline: none` won — the item was
+functionally focused (gamepad South activates it) but had **zero visible
+indication** for controller/keyboard users. Chips worked because
+`.wo-chip`/`.duration-item` never had a competing scoped suppressor.
+`CarCustomise.vue`'s `.swatch:focus-visible` had the identical bug, and
+range/color inputs (`SettingsPanel.vue`'s sliders and the two colour
+pickers) were never covered by any focus rule at all — invisible focus by
+omission, not suppression.
+
+**Fix.** Deleted the `outline: none` declaration from every scoped
+`:focus-visible` rule listed above (kept the `:hover` half and any
+`transform`/`border-color` styling those rules also carried — where
+`outline: none` was the *only* declaration, the now-empty rule block was
+removed entirely rather than left as a no-op). Added
+`.swatch:focus`, `input[type="range"]:focus`, and
+`input[type="color"]:focus` to the global amber-outline rule in
+`retro-ui.css` (swatches and range/color inputs aren't `.wo-item`, so
+they need to opt in explicitly). No component now overrides `outline` on
+focus at all — the global R11 rule is the single source of truth.
+
+**Tests** (`tests/ui/focus-visibility.spec.ts`, live rAF loop, virtual
+gamepad d-pad navigation — never `el.focus()`, per the plan's "test the
+real path"): one test per screen (main menu's 4 items, MatchSetup's
+`start-match` + BACK, all three PauseMenu items, ResultsScreen's REPLAY +
+RETURN TO MENU, tournament setup's BEGIN TOURNAMENT + BACK, a settings
+tab + the FOV range slider, a CarCustomise swatch) asserts
+`getComputedStyle(document.activeElement).outlineStyle !== "none"` and
+`outlineWidth !== "0px"` after driving focus there with dpad pulses.
+Verified pre-fix failure directly (`git apply -R` on just the
+CSS/`retro-ui.css` hunks, isolated from other in-flight work on the same
+branch — a plain `git stash` risked catching concurrent uncommitted edits
+from other sessions in shared files like `SettingsPanel.vue`): the main
+menu test failed with `outlineStyle` = `"none"` as expected, then passed
+once the fix was restored. `tests/ui/controller-navigation.spec.ts` stays
+green (only the one test F10 required updating — see below), and the
+full `npx vitest run` sweep (324 tests) is unaffected.
+
+## F10 — Replace `window.confirm` with controller-navigable inline confirms (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+**Root cause.** `PauseMenu.vue`'s `restartMatch()`/`returnToMenu()` gated
+the actual runtime call behind `window.confirm(...)`. Native dialogs are
+outside the DOM, so the R11 gamepad-navigation layer (which only ever
+touches `document.activeElement` and `[data-menu-root]`/`[data-menu-back]`
+elements) can't see or drive them at all — a controller player pressing
+South on RESTART MATCH got no visible feedback and no way to confirm.
+Worse, this was fully masked in Playwright: the test runner
+auto-dismisses native `dialog` events by default, so
+`tests/ui/controller-navigation.spec.ts`'s "south taps while paused never
+leak" test was "passing" only because the auto-dismissed confirm happened
+to behave like a cancel — it was never exercising a real confirm/cancel
+choice.
+
+**Fix.** `PauseMenu.vue` now holds local `confirming =
+ref<null | "restart" | "return">(null)`. Clicking RESTART MATCH/RETURN TO
+MENU sets `confirming` instead of acting immediately; the button column
+`v-if`-swaps to an "ARE YOU SURE?" `.wo-label` line + CONFIRM
+(`data-testid="pause-confirm-yes"`) + CANCEL
+(`data-testid="pause-confirm-no"`, carrying `data-menu-back`). Because
+the normal column (where RESUME carries `data-menu-back`) is entirely
+`v-if`'d out while confirming, controller East now cancels the confirm
+rather than resuming the match — exactly the plan's intended behaviour.
+CONFIRM runs the pending action (`restartMatch()`/`returnToMenu()` plus
+the original UI sounds) and clears `confirming`; CANCEL just clears it,
+restoring the normal column. Since the R11 gamepad-nav composable
+(`useMenuGamepadNavigation.ts`) only re-focuses on `matchFlowStore.
+matchState` changes — which don't happen for this `v-if` swap within the
+same `PAUSED` state — both transitions explicitly move DOM focus via
+`nextTick(() => …focus())`: into confirm mode focuses CANCEL (the safe
+default), out of it (via CANCEL) focuses back onto whichever button
+opened the confirm (RESTART MATCH or RETURN TO MENU).
+
+**Tests.** `tests/ui/controller-navigation.spec.ts`'s "south taps while
+paused never leak into a gameplay JUMP edge on resume" test was rewritten
+for the new flow: first South opens the confirm row (asserted visible,
+CANCEL focused), second South cancels it (still PAUSED, RESTART MATCH
+still present) — the original no-leak assertions on resume still hold.
+New `tests/ui/pause-confirm.spec.ts` covers: mouse RETURN TO MENU →
+confirm visible, CANCEL focused → CONFIRM → `MAIN_MENU`; mouse RESTART
+MATCH → CANCEL → still `PAUSED` with RESTART MATCH restored; pad dpad to
+RESTART MATCH, South (opens confirm, focus lands on CANCEL per spec),
+dpad-down wraps focus to CONFIRM, South → `COUNTDOWN_3` (proves the real
+`restartMatch()` runtime call fired, not just a UI state flip).
+`tests/game-flow/tournament.spec.ts`'s mid-tournament pause-return
+abandonment test and `tests/release/release-gate.spec.ts`'s production-build
+smoke test both used to rely on auto-dismissed/accepted native dialogs
+for this same PauseMenu flow — both updated to click through the new
+inline confirm row instead, and stay green. Verified pre-fix failure
+directly (`git apply -R` on just `PauseMenu.vue`, a file no other
+in-flight session was touching): the new mouse RETURN TO MENU test failed
+with "element(s) not found" for `pause-confirm-yes` as expected (the
+dialog auto-dismissed, `MAIN_MENU` never reached), then passed once the
+fix was restored. The full `npx vitest run` sweep (324 tests) is
+unaffected.
+
 ## F11 — Ball-cam HUD indicator (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
 
 Always-visible bottom-left HUD element mirroring the boost meter's

@@ -178,7 +178,6 @@ onBeforeUnmount(() => {
 .swatch:hover,
 .swatch:focus-visible {
   border-color: var(--ui-ink);
-  outline: none;
 }
 
 .swatch.active {
@@ -213,8 +212,4 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
 }
 
-.menu-item:hover,
-.menu-item:focus-visible {
-  outline: none;
-}
 </style>

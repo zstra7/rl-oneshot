@@ -129,7 +129,10 @@
 .wo-item:focus,
 .duration-item:focus,
 .tab:focus,
-.chip:focus {
+.chip:focus,
+.swatch:focus,
+input[type="range"]:focus,
+input[type="color"]:focus {
   outline: 2px solid var(--ui-amber);
   outline-offset: 2px;
 }

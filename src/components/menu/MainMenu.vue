@@ -120,6 +120,5 @@ function openTournament(): void {
 .menu-item:hover,
 .menu-item:focus-visible {
   transform: translateX(6px);
-  outline: none;
 }
 </style>

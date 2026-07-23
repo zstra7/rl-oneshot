@@ -165,8 +165,4 @@ function returnToMenu(): void {
   text-transform: uppercase;
 }
 
-.menu-item:hover,
-.menu-item:focus-visible {
-  outline: none;
-}
 </style>

@@ -284,8 +284,6 @@ test("anti-double-trigger: no jump on resume while South is held through the pau
 test("anti-double-trigger: south taps while paused never leak into a gameplay JUMP edge on resume", async ({
   page
 }) => {
-  page.on("dialog", (dialog) => dialog.dismiss());
-
   await startMatchAndReachPlaying(page);
 
   const index = await connectPad(page);
@@ -294,15 +292,19 @@ test("anti-double-trigger: south taps while paused never leak into a gameplay JU
   await expect.poll(() => matchState(page)).toBe("PAUSED");
   await expect.poll(() => activeElementText(page)).toBe("RESUME");
 
-  // Move to RESTART MATCH and tap South twice — each opens (and the
-  // handler above dismisses) a window.confirm(), never resuming and never
-  // touching the gameplay JUMP queue, since South is quarantined as a menu
-  // edge for the whole time the pause menu is up.
+  // Move to RESTART MATCH and tap South twice: the first South opens the
+  // inline confirm row (never resuming, never touching the gameplay JUMP
+  // queue, since South is quarantined as a menu edge for the whole time the
+  // pause menu is up); focus lands on CANCEL, so the second South cancels
+  // the confirm rather than confirming it — still no leak either way.
   await pulse(page, index, DPAD_DOWN);
   expect(await activeElementText(page)).toBe("RESTART MATCH");
   await pulse(page, index, SOUTH);
+  await expect.poll(() => page.getByTestId("pause-confirm-no").isVisible()).toBe(true);
+  await expect.poll(() => activeElementText(page)).toBe("CANCEL");
   await pulse(page, index, SOUTH);
   expect(await matchState(page)).toBe("PAUSED");
+  await expect(page.getByText("RESTART MATCH")).toBeVisible();
 
   // Back to RESUME, then resume via East (back).
   await pulse(page, index, DPAD_UP);

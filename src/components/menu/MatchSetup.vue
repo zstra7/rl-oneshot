@@ -165,8 +165,4 @@ function back(): void {
   font-size: 1.3rem;
 }
 
-.menu-item:hover,
-.menu-item:focus-visible {
-  outline: none;
-}
 </style>

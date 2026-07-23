@@ -243,11 +243,11 @@ test("abandonment safety net: pause menu's own RETURN TO MENU mid-tournament-mat
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.pause());
   await expect(page.getByTestId("pause-menu")).toBeVisible();
 
-  // The pause menu's own RETURN TO MENU (window.confirm-gated) — not the
-  // tournament's LEAVE button — must still trigger the abandonment safety
-  // net.
-  page.once("dialog", (dialog) => dialog.accept());
+  // The pause menu's own RETURN TO MENU (F10: inline confirm row, not
+  // window.confirm) — not the tournament's LEAVE button — must still
+  // trigger the abandonment safety net.
   await page.getByRole("button", { name: "RETURN TO MENU" }).click();
+  await page.getByTestId("pause-confirm-yes").click();
 
   await expect(page.getByTestId("main-menu")).toBeVisible();
 

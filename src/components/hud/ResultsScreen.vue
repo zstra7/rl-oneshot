@@ -166,8 +166,4 @@ function leaveTournament(): void {
   text-align: left;
 }
 
-.menu-item:hover,
-.menu-item:focus-visible {
-  outline: none;
-}
 </style>
