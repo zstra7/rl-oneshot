@@ -38,6 +38,7 @@ import {
   type CarInputSource
 } from "@/netcode/CarInputSource";
 import type { OnlineMatchContext } from "@/netcode/MultiplayerSession";
+import { LEAD_EMA_ALPHA, computeRateScale, computeTargetLeadTicks } from "@/netcode/RateAlignment";
 import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
@@ -332,6 +333,8 @@ export class GameRuntime implements GameRuntimeFacade {
    * online offerer; OPPONENT_CAR_ID for the online answerer.
    */
   private localPlayerCarId: CarId = PLAYER_CAR_ID;
+  /** P1.3 (guest only): EMA of the replay "lead" (guest tick ahead of the host's snapshot tick). */
+  private onlineLeadEma = 4;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -514,7 +517,16 @@ export class GameRuntime implements GameRuntimeFacade {
         );
       }
 
-      const frameDelta = this.clock.computeFrameDelta(timestampMs);
+      let frameDelta = this.clock.computeFrameDelta(timestampMs);
+      // P1.3 (guest only): nudge the frame clock by at most ±3% so the
+      // guest's replay lead over the host's snapshot tick gently converges
+      // to an RTT-derived target instead of drifting unbounded over a long
+      // match. The host is unaffected (its clock is the authority).
+      const onlineGuestSession = this.onlineSession && !this.onlineSession.isHost ? this.onlineSession : null;
+      if (onlineGuestSession) {
+        const targetLead = computeTargetLeadTicks(onlineGuestSession.session.getRttMs());
+        frameDelta *= computeRateScale(this.onlineLeadEma, targetLead);
+      }
       this.fixedStepsLastFrame = this.fixedStepCoordinator.advance(frameDelta);
 
       this.frameCoordinator.updateFrame({
@@ -629,6 +641,9 @@ export class GameRuntime implements GameRuntimeFacade {
     this.fixedStepCoordinator.reset();
     this.onlineNextSubmitTick = 0;
     this.lastOnlineFrame = null;
+    // P1.3: start the lead EMA at the fallback target; it converges to the
+    // measured-RTT target within a few snapshots.
+    this.onlineLeadEma = 4;
     // Follow this client's actual car (the guest drives car-opponent) so the
     // camera, HUD boost/supersonic/ball-cam readouts track the local player.
     this.localPlayerCarId = context.localCarId;
@@ -749,6 +764,14 @@ export class GameRuntime implements GameRuntimeFacade {
     // guest's own frontier is the last tick it simulated.
     const lastSimulated = this.fixedStepCoordinator.tick - 1;
     const replayTicks = lastSimulated - snapshot.tick;
+
+    // P1.3: this "replay ticks" figure IS the guest's lead over the host's
+    // snapshot tick — EMA it (only in the well-behaved case; the outright
+    // -adopt branch below is an already-abnormal jump, not a lead sample)
+    // so the frame-clock nudge in `frame()` can track it smoothly.
+    if (replayTicks >= 0 && replayTicks <= ONLINE_MAX_REPLAY_TICKS) {
+      this.onlineLeadEma += LEAD_EMA_ALPHA * (replayTicks - this.onlineLeadEma);
+    }
 
     if (replayTicks < 0 || replayTicks > ONLINE_MAX_REPLAY_TICKS) {
       // The guest is behind the host (slower machine / just joined) or too
