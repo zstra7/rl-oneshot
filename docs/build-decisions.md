@@ -1217,3 +1217,29 @@ is deliberately landed with **N6**, because its only real verification is
 the two-page live-match Playwright E2E that the lobby UI (N6) exists to
 drive. N5 proves the match-flow determinism that wiring relies on; N6
 connects it to a running browser and validates it end to end.
+
+## Online multiplayer — N7 (resilience & feel, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+The adaptive input-delay policy (`src/netcode/AdaptiveDelay.ts`) — the core
+resilience mechanism. `recommendDelayTicks(rttMs, jitterMs)` picks the
+smallest delay that covers one-way latency + the jitter spread, clamped to
+[2, 10] ticks (17–83ms); `classifyConnection` buckets RTT into good/ok/poor
+for a connection HUD; `stabilizeDelay` avoids ±1-tick thrashing on RTT
+noise. Delay changes apply only at safe boundaries (kickoffs) so the shared
+timeline never warps mid-play.
+
+**Gates** (`tests/unit/adaptiveDelay.spec.ts`, 8 tests): the policy is
+monotone in RTT/jitter, clamped, and classified correctly; and — run
+through the real two-facade lockstep harness — the *recommended* delay
+produces near-zero stalls at a reasonable ping (~100ms RTT) and, at extreme
+ping (~233ms RTT, beyond what the 83ms max delay can hide — an acknowledged
+high-RTT limit, plan §9), the match still completes **bit-identically with
+bounded, non-runaway stalls**. This is the plan's "impairment matrix stays
+synced with bounded stall ceilings" gate, driven by the policy itself.
+
+Deferred to a follow-on (folded into the N8 pass as UI polish, low risk):
+the in-match connection-quality HUD readout and page-visibility
+(background-tab) stall handling — both are thin presentational layers over
+data the session already exposes (`getStats()`, `PeerLink.getRttMs`), and
+the underlying stall accounting + desync-safety they'd surface is already
+tested here and in N2.
