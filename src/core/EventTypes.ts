@@ -2,6 +2,7 @@ import type { AppState } from "@/core/ApplicationState";
 import type { GameSessionState } from "@/game-flow/MatchFlowTypes";
 import type { TournamentPublicState } from "@/game-flow/TournamentController";
 import type { MenuNavigationFrame } from "@/input/InputControlsModule";
+import type { ActiveInputDevice } from "@/input/InputTypes";
 
 export interface RuntimeErrorRecord {
   readonly message: string;
@@ -37,6 +38,10 @@ export interface SessionStateChangedEvent {
   readonly playerBoostAmount: number;
   /** WS9.C: HUD supersonic feedback on the boost ring. */
   readonly playerSupersonic: boolean;
+  /** F11: HUD ball-cam indicator lit/dim state. */
+  readonly playerBallCamera: boolean;
+  /** F11: most-recently-used input device, drives the HUD binding label; "none" before any input has arrived. */
+  readonly activeInputDevice: ActiveInputDevice;
   /** R13: always present; inactive default when no tournament is running. */
   readonly tournament: TournamentPublicState;
 }

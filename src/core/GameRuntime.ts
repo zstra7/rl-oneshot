@@ -45,6 +45,7 @@ import { AudioEventAdapter } from "@/integration/AudioEventAdapter";
 import { DEFAULT_AUDIO_SETTINGS, type AudioDiagnostics, type AudioSettings } from "@/audio/AudioTypes";
 import type { ControlBindings } from "@/input/bindings/BindingsConfig";
 import type { CapturedBinding } from "@/input/InputControlsModule";
+import type { ActiveInputDevice } from "@/input/InputTypes";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
@@ -154,6 +155,12 @@ export interface GameRuntimeFacade {
 
   /** WS9.C: whether the human player's car is currently supersonic, false before it has spawned. */
   getPlayerSupersonic(): boolean;
+
+  /** F11: whether the human player's ball-cam is currently enabled, false before the camera controller exists. */
+  getPlayerBallCamera(): boolean;
+
+  /** F11: the most recently used input device, "none" before any input has arrived. */
+  getActiveInputDevice(): ActiveInputDevice;
 
   /** Null before the camera controller has been constructed. */
   getCameraDiagnostics(): CameraDiagnostics | null;
@@ -629,6 +636,8 @@ export class GameRuntime implements GameRuntimeFacade {
       session: this.modules.gameFlow.getSessionState(),
       playerBoostAmount: this.getPlayerBoostAmount(),
       playerSupersonic: this.getPlayerSupersonic(),
+      playerBallCamera: this.getPlayerBallCamera(),
+      activeInputDevice: this.getActiveInputDevice(),
       tournament: this.tournament.getPublicState()
     });
   }
@@ -951,6 +960,16 @@ export class GameRuntime implements GameRuntimeFacade {
     return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
       ? modules.physics.getCarState(PLAYER_CAR_ID).supersonic
       : false;
+  }
+
+  /** F11: false before the camera controller has been constructed. */
+  public getPlayerBallCamera(): boolean {
+    return this.cameraController?.isBallCameraEnabled() ?? false;
+  }
+
+  /** F11: forwards InputControlsModule's most-recently-used-device tracking to the HUD. */
+  public getActiveInputDevice(): ActiveInputDevice {
+    return this.requireModules().input.getActiveDevice();
   }
 
   public selectAiDifficulty(difficulty: AiDifficulty): void {

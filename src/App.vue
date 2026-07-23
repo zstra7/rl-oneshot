@@ -45,6 +45,8 @@ const unsubscribeSession = runtime.onEvent("runtime:session-state-changed", (eve
   matchFlowStore.setSession(event.session);
   matchFlowStore.setPlayerBoostAmount(event.playerBoostAmount);
   matchFlowStore.setPlayerSupersonic(event.playerSupersonic);
+  matchFlowStore.setPlayerBallCamera(event.playerBallCamera);
+  matchFlowStore.setActiveInputDevice(event.activeInputDevice);
   tournamentStore.setState(event.tournament);
 });
 

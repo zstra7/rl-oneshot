@@ -1,12 +1,31 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { useGameRuntime } from "@/core/useGameRuntime";
+import { friendlyGamepadLabel, friendlyKeyLabel } from "@/input/bindings/BindingLabels";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
 
+const runtime = useGameRuntime();
 const matchFlowStore = useMatchFlowStore();
 
 const boost = computed(() => Math.round(matchFlowStore.playerBoostAmount));
 const supersonic = computed(() => matchFlowStore.playerSupersonic);
+
+// F11: ball-cam HUD indicator (bottom-left). `runtime.getControlBindings()`
+// is not itself reactive, so this computed also reads `matchFlowStore.session`
+// (a fresh object every fixed tick via `setSession`) purely to force
+// re-evaluation each tick — that way a live rebind from the settings panel
+// (or a device switch) is picked up on the very next tick rather than
+// staying stale until some unrelated prop happens to change.
+const ballCameraActive = computed(() => matchFlowStore.playerBallCamera);
+const ballCameraLabel = computed(() => {
+  void matchFlowStore.session;
+  const device = matchFlowStore.activeInputDevice;
+  const bindings = runtime.getControlBindings();
+  return device === "gamepad"
+    ? friendlyGamepadLabel(bindings.gamepad.ballCameraButton)
+    : friendlyKeyLabel(bindings.keyboardMouse.ballCamera);
+});
 
 const session = computed(() => matchFlowStore.session);
 
@@ -50,6 +69,11 @@ function formatClock(totalSeconds: number): string {
     >
       <span class="boost-value wo-numeral">{{ boost }}</span>
       <span v-if="supersonic" class="supersonic-label wo-label">SUPERSONIC</span>
+    </div>
+
+    <div class="ballcam-indicator" :class="{ active: ballCameraActive }" data-testid="ballcam-indicator">
+      <span class="ballcam-label wo-label">BALL CAM</span>
+      <span class="ballcam-key wo-numeral">{{ ballCameraLabel }}</span>
     </div>
   </div>
 </template>
@@ -150,5 +174,45 @@ function formatClock(totalSeconds: number): string {
   100% {
     filter: brightness(0.65);
   }
+}
+
+/* F11: mirrors .boost-meter's bottom offset/size on the opposite corner. */
+.ballcam-indicator {
+  position: absolute;
+  bottom: 1.25rem;
+  left: 1.5rem;
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  background: radial-gradient(circle, rgba(6, 4, 14, 0.85) 62%, transparent 63%);
+  opacity: 0.45;
+  transition:
+    opacity 0.15s ease-out,
+    box-shadow 0.15s ease-out;
+}
+
+.ballcam-indicator.active {
+  opacity: 1;
+  box-shadow: 0 0 14px 3px rgba(255, 198, 95, 0.55);
+}
+
+.ballcam-label {
+  font-size: 0.55rem;
+  letter-spacing: 0.05em;
+  color: var(--ui-ink);
+}
+
+.ballcam-key {
+  font-size: 1.1rem;
+  color: var(--ui-ink);
+}
+
+.ballcam-indicator.active .ballcam-key {
+  color: var(--ui-amber);
 }
 </style>

@@ -5,10 +5,13 @@ import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import {
   DEFAULT_CONTROL_BINDINGS,
   type GamepadBindings,
-  type KeyOrMouseBinding,
   type KeyboardMouseBindings
 } from "@/input/bindings/BindingsConfig";
-import { STANDARD_GAMEPAD_BUTTONS } from "@/input/bindings/DefaultBindings";
+import {
+  friendlyGamepadLabel,
+  friendlyKeyLabel,
+  friendlyKeyOrMouseLabel
+} from "@/input/bindings/BindingLabels";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
 import type { CelebrationIntensity, DensityLevel } from "@/stores/settingsStore";
@@ -165,46 +168,6 @@ const gamepadRows: readonly { key: GamepadActionKey; label: string }[] = [
   { key: "pauseButton", label: "PAUSE" },
   { key: "rearViewButton", label: "REAR VIEW" }
 ];
-
-const KEY_LABELS: Record<string, string> = {
-  ShiftLeft: "LSHIFT",
-  ShiftRight: "RSHIFT",
-  ControlLeft: "LCTRL",
-  ControlRight: "RCTRL",
-  AltLeft: "LALT",
-  AltRight: "RALT",
-  Space: "SPACE",
-  Escape: "ESC",
-  Tab: "TAB",
-  Enter: "ENTER",
-  ArrowUp: "UP",
-  ArrowDown: "DOWN",
-  ArrowLeft: "LEFT",
-  ArrowRight: "RIGHT"
-};
-
-function friendlyKeyLabel(code: string): string {
-  if (code.startsWith("Key")) return code.slice(3);
-  if (code.startsWith("Digit")) return code.slice(5);
-  return KEY_LABELS[code] ?? code.toUpperCase();
-}
-
-function friendlyMouseLabel(button: number): string {
-  const names: Record<number, string> = { 0: "LMB", 1: "MMB", 2: "RMB" };
-  return names[button] ?? `MOUSE ${button}`;
-}
-
-const GAMEPAD_BUTTON_NAMES: Record<number, string> = Object.fromEntries(
-  Object.entries(STANDARD_GAMEPAD_BUTTONS).map(([name, index]) => [index, name.toUpperCase()])
-);
-
-function friendlyGamepadLabel(button: number): string {
-  return GAMEPAD_BUTTON_NAMES[button] ? `BTN ${button} (${GAMEPAD_BUTTON_NAMES[button]})` : `BTN ${button}`;
-}
-
-function friendlyKeyOrMouseLabel(binding: KeyOrMouseBinding): string {
-  return binding.kind === "key" ? friendlyKeyLabel(binding.code) : friendlyMouseLabel(binding.button);
-}
 
 function kbmRowLabel(key: KbmActionKey): string {
   if (capturingDevice.value === "keyboardMouse" && capturingAction.value === key) {
@@ -951,8 +914,4 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
 }
 
-.menu-item:hover,
-.menu-item:focus-visible {
-  outline: none;
-}
 </style>

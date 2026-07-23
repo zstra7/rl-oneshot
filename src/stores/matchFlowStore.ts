@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 
 import type { GameSessionState, MatchState } from "@/game-flow/MatchFlowTypes";
+import type { ActiveInputDevice } from "@/input/InputTypes";
 
 const BOOT_SESSION: GameSessionState = {
   matchState: "BOOT",
@@ -18,6 +19,10 @@ export interface MatchFlowStoreState {
   playerBoostAmount: number;
   /** WS9.C: HUD supersonic feedback on the boost ring. */
   playerSupersonic: boolean;
+  /** F11: HUD ball-cam indicator lit/dim state. */
+  playerBallCamera: boolean;
+  /** F11: most-recently-used input device, drives the HUD binding label. */
+  activeInputDevice: ActiveInputDevice;
 }
 
 /**
@@ -32,7 +37,9 @@ export const useMatchFlowStore = defineStore("matchFlow", {
   state: (): MatchFlowStoreState => ({
     session: BOOT_SESSION,
     playerBoostAmount: 0,
-    playerSupersonic: false
+    playerSupersonic: false,
+    playerBallCamera: false,
+    activeInputDevice: "none"
   }),
 
   getters: {
@@ -48,6 +55,12 @@ export const useMatchFlowStore = defineStore("matchFlow", {
     },
     setPlayerSupersonic(supersonic: boolean): void {
       this.playerSupersonic = supersonic;
+    },
+    setPlayerBallCamera(ballCamera: boolean): void {
+      this.playerBallCamera = ballCamera;
+    },
+    setActiveInputDevice(device: ActiveInputDevice): void {
+      this.activeInputDevice = device;
     }
   }
 });

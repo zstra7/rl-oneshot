@@ -649,3 +649,67 @@ every wall/corner, flip with a steady camera, get auto-flipped from a
 stuck pose, rebind a key, navigate every menu with a virtual pad) as
 already covered by the existing real-input Playwright suites for each
 of those features rather than writing a redundant standalone script.
+
+## F11 — Ball-cam HUD indicator (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+Always-visible bottom-left HUD element mirroring the boost meter's
+bottom-right placement: "BALL CAM" label + a key chip for the ball-cam
+toggle binding of the **most recently used input device**, dimmed
+(0.45 opacity) when ball cam is off and lit (full opacity + amber ring)
+when on.
+
+**State plumbing.** `SessionStateChangedEvent` gained two fields,
+mirrored into `matchFlowStore` exactly like the existing
+`playerBoostAmount`/`playerSupersonic` pair: `playerBallCamera` (from
+`GameRuntime.getPlayerBallCamera()`, which reads
+`cameraController?.isBallCameraEnabled() ?? false`) and
+`activeInputDevice` (from a new `GameRuntime.getActiveInputDevice()`,
+forwarding `InputControlsModule.getActiveDevice()` — that getter was
+already public, so no new surface was needed on `InputControlsModule`
+itself, only on the `GameRuntimeFacade`). Both are emitted once per
+fixed tick alongside the rest of `SessionStateChangedEvent`, same as
+every other HUD-facing field.
+
+**Binding-label extraction.** The R10 `SettingsPanel.vue` binding-label
+formatters (`friendlyKeyLabel`/`friendlyMouseLabel`/`friendlyGamepadLabel`/
+`friendlyKeyOrMouseLabel`, plus the `KEY_LABELS`/`GAMEPAD_BUTTON_NAMES`
+lookup tables) moved verbatim into a new
+`src/input/bindings/BindingLabels.ts`, with `SettingsPanel.vue` importing
+them instead of defining its own copies. No behavioural change —
+`tests/ui/settings.spec.ts` and `tests/input/rebinding.spec.ts` pass
+unmodified against the extracted version.
+
+**HUD computed.** `GameplayHud.vue`'s `ballcam-indicator`
+(`data-testid="ballcam-indicator"`) picks the label via
+`runtime.getControlBindings()` inside a `computed`: gamepad device →
+`friendlyGamepadLabel(bindings.gamepad.ballCameraButton)`, otherwise
+(including the boot-time `"none"` device before any input has arrived)
+→ `friendlyKeyLabel(bindings.keyboardMouse.ballCamera)`. Bindings
+themselves aren't reactive state, so the computed also reads
+`matchFlowStore.session` purely to force re-evaluation every fixed tick
+(a fresh object every tick via `setSession`) — otherwise a live rebind
+from the settings panel, or a live device switch, would sit stale until
+some unrelated reactive dependency happened to change. `active` class is
+driven directly off `playerBallCamera`.
+
+**Tests** (`tests/ui/ballcam-indicator.spec.ts`, live rAF loop, real
+keyboard/gamepad input — same pattern as
+`tests/ui/controller-navigation.spec.ts`): the indicator is visible and
+dim on match start with label `SPACE`, and a real `Space` keypress
+toggles `.active` on/off; connecting a virtual pad and pressing a
+button that is *not* the ball-cam binding (east/boost) switches the
+label to `BTN 3` (the default `ballCameraButton`, "north") without
+toggling `.active`, proving the label follows the device rather than
+the binding firing — then pressing the actually-mapped button (north)
+toggles `.active`, proving the binding itself reads correctly
+end-to-end; rebinding ball cam to `KeyB` via
+`runtime.setControlBindings` and pressing a real key switches the
+device back to keyboard-mouse and updates the label to `B`. Confirmed
+via `git stash` (source files only, isolated from other in-flight work
+on the same branch) that all three tests fail on the pre-fix code with
+"element(s) not found" (the indicator doesn't exist yet), then pass
+once the fix is restored.
+`tests/camera/chase-camera.spec.ts`'s ball-cam toggle test,
+`tests/ui/settings.spec.ts`, and `tests/input/rebinding.spec.ts` all
+stay green, and the full `npx vitest run` sweep (324 tests) is
+unaffected.
