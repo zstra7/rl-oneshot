@@ -1007,3 +1007,60 @@ visually: menu wide shot (single hex layer, square hexes, symmetric
 floor, continuous corner shell, ramps flush to the floor), a wall/
 corner climb, a goal-blast moment, both ball-cam indicator states, and
 the pause → SETTINGS → overlay → BACK → RESUME flow.
+
+## Online multiplayer — N1 (sim/net input seam, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+A pure refactor with **zero intended behaviour change**, preparing
+`GameRuntime.onFixedTick` to accept remote-peer inputs without special-
+casing them. Three seams were introduced:
+
+1. **`CarInputSource`** (`src/netcode/CarInputSource.ts`) — every
+   simulated car's per-tick `CarInput` now comes from a source keyed by
+   `CarId`, not from hard-coded "player" / "AI" branches.
+   `LocalDeviceSource` wraps the sampled local frame, `AiSource` wraps
+   the existing `OpponentAiController.update` (faithful pass-through —
+   verified by a test that an independently-seeded controller fed the
+   identical context produces the identical input), and
+   `RemoteCarInputSource` buffers decoded wire inputs per tick (wired but
+   unused in single-player; fed by N2, installed as the opponent by N5).
+   `onFixedTick` iterates a `Map<CarId, CarInputSource>` assembled once at
+   init (`configureSinglePlayerInputSources`: local player + AI opponent),
+   skipping cars not yet spawned — exactly the old
+   `getCarIds().includes(...)` guard. Only local human sources carry a
+   `CarControlProfile`, so profile application stays player-only as
+   before. This map's size — not any hard-coded pair — is what makes the
+   core 2v2-ready (§4.6).
+
+2. **Input quantization at the sampling seam**
+   (`src/netcode/InputQuantize.ts`) — `LocalDeviceSource` quantizes the
+   five analog axes to the shared int8 wire grid (1/127 steps) *before*
+   they are simulated, so single-player and online simulate the identical
+   input space and a peer decoding the int8 wire value can never disagree
+   with the sender's local sim. Full deflection (±1) and neutral (0) are
+   exact, so the existing input-foundation assertions (`throttle=1`,
+   `steer=1`, `throttle=-1`) are unaffected; intermediate values snap by
+   at most 1/254, below perceptibility. `int8ToAxis(axisToInt8(q)) === q`
+   for any grid value `q` — the round-trip identity the N2 codec relies
+   on, pinned in `tests/unit/inputQuantize.spec.ts`.
+
+3. **`TickAdvanceGate`** on `FixedStepCoordinator` — before advancing to a
+   tick, the coordinator asks a gate whether that tick may run.
+   Single-player uses `ALWAYS_ADVANCE` (a no-op, byte-identical timing to
+   pre-N1); online lockstep (N2) installs a gate that only allows tick T
+   once the remote input for T is buffered, so a missing input **stalls**
+   the shared timeline rather than letting peers diverge. `stepOnce`
+   (manual Playwright stepping) stays ungated by design.
+
+Also: `MatchFlowController.setOpponentIsAi(boolean)` (default true) gates
+the F13 stuck-watchdog, which teleports the opponent car — correct for a
+wedged AI, but it must never rubber-band a live remote human (and would
+desync the two peers). Single-player keeps it on; online (N5) turns it
+off.
+
+**Gates**: `vue-tsc` clean; new unit specs
+(`inputQuantize.spec.ts`, `carInputSource.spec.ts`,
+`tickAdvanceGate.spec.ts`, 15 tests); full `vitest run` 341/341 with
+**zero** existing tests modified; the live-input Playwright suites
+(`tests/input`, `tests/physics`, `tests/ai`, `tests/game-flow`,
+`tests/integration`) green unchanged — proving the refactor is
+behaviour-preserving through the real device → physics path.

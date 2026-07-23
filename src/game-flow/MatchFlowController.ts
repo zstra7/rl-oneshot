@@ -99,6 +99,15 @@ export class MatchFlowController {
   private aiStuckAnchor: Vec3Like | null = null;
   /** F13: ticks since `aiStuckAnchor` was last reset (car hasn't moved AI_STUCK_MIN_DISPLACEMENT since). */
   private aiStuckTicksSinceAnchor = 0;
+  /**
+   * N1 (plan/ONLINE_MULTIPLAYER_PLAN.md): whether OPPONENT_CAR_ID is AI-
+   * controlled. The F13 stuck-watchdog teleports the opponent car, which
+   * is correct for an AI that got wedged but WRONG for a remote human
+   * (it would rubber-band a live player and, worse, diverge the two
+   * peers' simulations). Defaults true (single-player); online mode
+   * (N5) sets it false.
+   */
+  private opponentIsAi = true;
 
   private readonly events: MatchFlowEvent[] = [];
 
@@ -143,6 +152,19 @@ export class MatchFlowController {
 
   public areControlsActive(): boolean {
     return CONTROLS_ACTIVE_STATES.includes(this.matchState);
+  }
+
+  /**
+   * N1: set whether the opponent car is AI-controlled (true, the
+   * default) or a remote human (false, online mode). Gates the F13
+   * stuck-watchdog, which must never teleport a live remote player.
+   */
+  public setOpponentIsAi(isAi: boolean): void {
+    this.opponentIsAi = isAi;
+    if (!isAi) {
+      this.aiStuckAnchor = null;
+      this.aiStuckTicksSinceAnchor = 0;
+    }
   }
 
   public getMatchFlowEvents(): readonly MatchFlowEvent[] {
@@ -300,6 +322,11 @@ export class MatchFlowController {
    * window, and a fresh kickoff always starts the watchdog clean.
    */
   private tickAiStuckWatchdog(physics: PhysicsFacade): void {
+    // N1: never teleport a remote human opponent — the watchdog is an
+    // AI-only backstop.
+    if (!this.opponentIsAi) {
+      return;
+    }
     if (!this.areControlsActive()) {
       this.aiStuckAnchor = null;
       this.aiStuckTicksSinceAnchor = 0;

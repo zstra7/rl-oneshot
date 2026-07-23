@@ -29,6 +29,13 @@ import {
   type MatchState
 } from "@/game-flow/MatchFlowTypes";
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
+import {
+  AiSource,
+  LocalDeviceSource,
+  type CarInputContext,
+  type CarInputSource
+} from "@/netcode/CarInputSource";
+import type { CarId } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
@@ -273,6 +280,15 @@ export class GameRuntime implements GameRuntimeFacade {
    */
   private previousMatchStateForGates: MatchState = "BOOT";
 
+  /**
+   * N1 (plan/ONLINE_MULTIPLAYER_PLAN.md): every simulated car's per-tick
+   * input origin, keyed by CarId. Single-player installs
+   * `{ player: local device, opponent: AI }`; online 1v1 (N5) swaps the
+   * opponent for a remote source. `onFixedTick` iterates this map instead
+   * of hard-coding "the player" and "the AI".
+   */
+  private readonly carInputSources = new Map<CarId, CarInputSource>();
+
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
       throw new Error("GameRuntime is already initialised.");
@@ -285,6 +301,7 @@ export class GameRuntime implements GameRuntimeFacade {
     validateModuleContracts([]);
 
     this.modules = createNullModuleContainer();
+    this.configureSinglePlayerInputSources();
 
     const { input, gameFlow, ...modulesWithGenericInit } = this.modules;
 
@@ -515,6 +532,25 @@ export class GameRuntime implements GameRuntimeFacade {
     }
   }
 
+  /**
+   * N1: the single-player car-input wiring — the local player's device
+   * drives PLAYER_CAR_ID, the AI drives OPPONENT_CAR_ID (targeting the
+   * player, defending the opponent net). Behaviour-identical to the
+   * pre-N1 inline branches. Online 1v1 (N5) installs a different map with
+   * a remote source for the opponent.
+   */
+  private configureSinglePlayerInputSources(): void {
+    if (!this.modules) {
+      return;
+    }
+    this.carInputSources.clear();
+    this.carInputSources.set(PLAYER_CAR_ID, new LocalDeviceSource(PLAYER_CAR_ID));
+    this.carInputSources.set(
+      OPPONENT_CAR_ID,
+      new AiSource(OPPONENT_CAR_ID, this.modules.ai, PLAYER_CAR_ID, "opponent", "player")
+    );
+  }
+
   private onFixedTick(tick: number): void {
     const modules = this.modules;
     if (!modules) {
@@ -552,25 +588,24 @@ export class GameRuntime implements GameRuntimeFacade {
     }
 
     if (modules.gameFlow.areControlsActive()) {
-      modules.physics.setCarInput(PLAYER_CAR_ID, frame.car);
-      modules.physics.setCarControlProfile(PLAYER_CAR_ID, frame.carControlProfile);
-
-      if (modules.physics.getCarIds().includes(OPPONENT_CAR_ID)) {
-        const ownGoalCentre = modules.physics.getGoalSensorCentre("opponent");
-        const targetGoalCentre = modules.physics.getGoalSensorCentre("player");
-
-        if (ownGoalCentre && targetGoalCentre) {
-          const aiInput = modules.ai.update({
-            tick,
-            matchState: modules.gameFlow.getMatchState(),
-            controlledCar: modules.physics.getCarState(OPPONENT_CAR_ID),
-            humanCar: modules.physics.getCarState(PLAYER_CAR_ID),
-            ball: modules.physics.getBallState(),
-            boostPads: modules.physics.getBoostPadStates(),
-            ownGoalCentre,
-            targetGoalCentre
-          });
-          modules.physics.setCarInput(OPPONENT_CAR_ID, aiInput);
+      // N1: drive every car from its CarInputSource (local device, AI, or
+      // — online — a remote peer). Cars not yet spawned in physics are
+      // skipped, exactly as the old `getCarIds().includes(...)` guards did.
+      const context: CarInputContext = {
+        tick,
+        matchState: modules.gameFlow.getMatchState(),
+        physics: modules.physics,
+        localFrame: frame
+      };
+      const liveCarIds = modules.physics.getCarIds();
+      for (const [carId, source] of this.carInputSources) {
+        if (!liveCarIds.includes(carId)) {
+          continue;
+        }
+        const sample = source.sampleForTick(context);
+        modules.physics.setCarInput(carId, sample.input);
+        if (sample.profile) {
+          modules.physics.setCarControlProfile(carId, sample.profile);
         }
       }
     } else {

@@ -6,6 +6,23 @@ const MAX_CATCH_UP_STEPS = 8;
 export type FixedTickCallback = (tick: number) => void;
 
 /**
+ * N1 (plan/ONLINE_MULTIPLAYER_PLAN.md): the seam deterministic lockstep
+ * needs. Before advancing to a tick, the coordinator asks the gate
+ * whether that tick may run. Single-player uses `ALWAYS_ADVANCE` (a
+ * no-op, identical to the pre-N1 behaviour); online mode installs a gate
+ * that only lets the sim advance to tick T once the remote peer's input
+ * for T is in hand, so a missing input STALLS the shared timeline
+ * instead of letting the two peers diverge.
+ */
+export interface TickAdvanceGate {
+  canAdvance(tick: number): boolean;
+}
+
+export const ALWAYS_ADVANCE: TickAdvanceGate = {
+  canAdvance: () => true
+};
+
+/**
  * Owns the single accumulator-driven fixed-step advance used by GameRuntime.
  * See core architecture spec section 24. Manual Playwright stepping bypasses
  * requestAnimationFrame entirely via stepOnce().
@@ -14,8 +31,17 @@ export class FixedStepCoordinator {
   private accumulator = 0;
   private tickCount = 0;
   private droppedFixedTimeSecondsTotal = 0;
+  private advanceGate: TickAdvanceGate = ALWAYS_ADVANCE;
 
   public constructor(private readonly onFixedTick: FixedTickCallback) {}
+
+  /**
+   * Swap the tick-advance gate. Online mode installs a lockstep gate here;
+   * passing `ALWAYS_ADVANCE` (the default) restores single-player timing.
+   */
+  public setAdvanceGate(gate: TickAdvanceGate): void {
+    this.advanceGate = gate;
+  }
 
   public advance(frameDelta: number): number {
     this.accumulator += Math.min(frameDelta, MAX_FRAME_DELTA_SECONDS);
@@ -24,7 +50,8 @@ export class FixedStepCoordinator {
 
     while (
       this.accumulator >= FIXED_DT_SECONDS &&
-      steps < MAX_CATCH_UP_STEPS
+      steps < MAX_CATCH_UP_STEPS &&
+      this.advanceGate.canAdvance(this.tickCount)
     ) {
       this.onFixedTick(this.tickCount);
 
