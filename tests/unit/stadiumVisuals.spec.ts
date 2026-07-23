@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import { PLACEHOLDER_PHYSICS_METADATA, DEFAULT_STADIUM_DIMENSIONS } from "@/assets/AssetTypes";
 import { GeometryRegistry } from "@/assets/procedural/GeometryRegistry";
+import { COL_STEP, LINE_WIDTH, TEXTURE_SIZE } from "@/assets/procedural/HexPatternTexture";
 import { MaterialRegistry } from "@/assets/procedural/MaterialRegistry";
 import { SeededRandom } from "@/assets/procedural/SeededRandom";
-import { createStadiumBlockout } from "@/assets/procedural/StadiumGeometryFactory";
+import { createStadiumBlockout, HEX_TILE_WORLD_SIZE } from "@/assets/procedural/StadiumGeometryFactory";
 
 /**
  * R2 (plan/RAMPS_AND_FEATURES_PLAN.md): the hex glass shell was too dark
@@ -47,6 +48,120 @@ describe("R2: hex shell glass material is emissive and visibly faint", () => {
     const sideWall = stadium.getObjectByName("SideWallLeft") as THREE.Mesh;
     const ceiling = stadium.getObjectByName("Ceiling") as THREE.Mesh;
     expect(ceiling.material).toBe(sideWall.material);
+  });
+
+  // F3 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): the shared texture's
+  // `repeat` no longer carries the per-surface density — that now lives in
+  // each plane's own rescaled UVs (`HEX_TILE_WORLD_SIZE`), so `repeat` sits
+  // at identity on every surface regardless of its dimensions.
+  it("glass texture repeat is identity — density comes from per-geometry UVs, not a shared repeat", () => {
+    const stadium = buildStadium();
+    const sideWall = stadium.getObjectByName("SideWallLeft") as THREE.Mesh;
+    const material = sideWall.material as THREE.MeshStandardMaterial;
+    const map = material.map as THREE.Texture;
+    expect(map.repeat.x).toBe(1);
+    expect(map.repeat.y).toBe(1);
+  });
+});
+
+/**
+ * F3 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): every glass-shell surface
+ * used to be a 1m-thick, double-sided BoxGeometry — a transparent
+ * double-sided box renders its hex pattern on BOTH parallel faces, so every
+ * wall/roof showed two hex layers ~1m apart. Converting to single-sided
+ * planes positioned on the collider's inner face (material stays
+ * `DoubleSide` so the single plane still reads from both camera sides)
+ * removes the second layer entirely.
+ */
+describe("F3: single-layer glass shell — planes, not boxes", () => {
+  function collectGlassMeshes(stadium: THREE.Object3D, glassMaterial: THREE.Material): THREE.Mesh[] {
+    const meshes: THREE.Mesh[] = [];
+    stadium.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.material === glassMaterial) {
+        meshes.push(object);
+      }
+    });
+    return meshes;
+  }
+
+  it("every glass-shell mesh (side walls, ceiling, end walls, goal boxes, corner panels) is a PlaneGeometry, not a BoxGeometry", () => {
+    const stadium = buildStadium();
+    const sideWall = stadium.getObjectByName("SideWallLeft") as THREE.Mesh;
+    const glassMaterial = sideWall.material as THREE.Material;
+
+    const meshes = collectGlassMeshes(stadium, glassMaterial);
+
+    // Sanity: this should cover side walls (2), ceiling (1), end walls
+    // (2 side segments + a lintel each, x2 end walls), goal boxes (back +
+    // 2 sides + roof, x2 goal boxes) and the 24 corner wall panels.
+    expect(meshes.length).toBeGreaterThanOrEqual(30);
+
+    for (const mesh of meshes) {
+      expect(mesh.geometry.type).toBe("PlaneGeometry");
+    }
+
+    // Names called out explicitly by the plan.
+    expect((stadium.getObjectByName("SideWallLeft") as THREE.Mesh).geometry.type).toBe("PlaneGeometry");
+    expect((stadium.getObjectByName("SideWallRight") as THREE.Mesh).geometry.type).toBe("PlaneGeometry");
+    expect((stadium.getObjectByName("Ceiling") as THREE.Mesh).geometry.type).toBe("PlaneGeometry");
+
+    let cornerPanelCount = 0;
+    stadium.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.name === "CornerWallPanel") {
+        expect(object.geometry.type).toBe("PlaneGeometry");
+        cornerPanelCount += 1;
+      }
+    });
+    expect(cornerPanelCount).toBe(24);
+  });
+
+  it("square-hex invariant: every glass-shell plane's UV scale matches HEX_TILE_WORLD_SIZE on both axes, within 1%", () => {
+    const stadium = buildStadium();
+    const sideWall = stadium.getObjectByName("SideWallLeft") as THREE.Mesh;
+    const glassMaterial = sideWall.material as THREE.Material;
+    const meshes = collectGlassMeshes(stadium, glassMaterial);
+    expect(meshes.length).toBeGreaterThan(0);
+
+    for (const mesh of meshes) {
+      const geometry = mesh.geometry as THREE.PlaneGeometry;
+      const { width: worldW, height: worldH } = geometry.parameters;
+
+      const uv = geometry.attributes.uv!;
+      let minU = Infinity;
+      let maxU = -Infinity;
+      let minV = Infinity;
+      let maxV = -Infinity;
+      for (let i = 0; i < uv.count; i += 1) {
+        const u = uv.getX(i);
+        const v = uv.getY(i);
+        minU = Math.min(minU, u);
+        maxU = Math.max(maxU, u);
+        minV = Math.min(minV, v);
+        maxV = Math.max(maxV, v);
+      }
+      const uvSpanU = maxU - minU;
+      const uvSpanV = maxV - minV;
+
+      // Square cells: the two axes' world-per-UV ratios must agree with
+      // each other, and both must equal HEX_TILE_WORLD_SIZE — i.e. the
+      // same real-world hex density on every surface, corners included
+      // (pre-F3 corner panels were ~12:1 stretched relative to the walls).
+      const ratioU = worldW / uvSpanU;
+      const ratioV = worldH / uvSpanV;
+      expect(ratioU / ratioV).toBeCloseTo(1, 1);
+      expect(Math.abs(ratioU - HEX_TILE_WORLD_SIZE) / HEX_TILE_WORLD_SIZE).toBeLessThan(0.01);
+      expect(Math.abs(ratioV - HEX_TILE_WORLD_SIZE) / HEX_TILE_WORLD_SIZE).toBeLessThan(0.01);
+    }
+  });
+});
+
+describe("F3: hex texture constants — legible lines, seamless tiling", () => {
+  it("LINE_WIDTH is at least 4 px (was 2.5)", () => {
+    expect(LINE_WIDTH).toBeGreaterThanOrEqual(4);
+  });
+
+  it("the tile is exactly periodic: TEXTURE_SIZE is an integer multiple of 2*COL_STEP", () => {
+    expect(TEXTURE_SIZE % (2 * COL_STEP)).toBe(0);
   });
 });
 

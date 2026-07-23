@@ -377,16 +377,44 @@ describe("createStadiumBlockout ramp visuals match the physics generator (biject
 
     const remaining = [...meshes];
     for (const spec of specs) {
+      // F3 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): `CornerWallPanel`
+      // meshes are now single-sided planes positioned on the collider's
+      // inner (field-facing) face, not boxes at the spec's translation
+      // (the box CENTRE) — offset by `-CORNER_PANEL_HALF_THICK` along the
+      // panel's own local +Z (the OUTWARD normal per
+      // `yawToDirection(outward)` in `ArenaRampGeometry.ts`'s
+      // `generateCorner`). `RampSegment` fillet boxes are unchanged by F3
+      // and still sit exactly at `spec.translation`. Reconstruct the same
+      // expected position `StadiumGeometryFactory.ts` computes, rather
+      // than weakening the match to "close enough" — this keeps the test's
+      // actual guarantee ("the visual surface is exactly where the physics
+      // surface is") intact.
+      const isCornerWall = spec.kind === "corner-wall";
+      const expectedName = isCornerWall ? "CornerWallPanel" : "RampSegment";
+      let expectedPos: V.Vec3Like = spec.translation;
+      if (isCornerWall) {
+        const outward = V.applyQuaternion({ x: 0, y: 0, z: 1 }, spec.rotation);
+        expectedPos = {
+          x: spec.translation.x - outward.x * CORNER_PANEL_HALF_THICK,
+          y: spec.translation.y - outward.y * CORNER_PANEL_HALF_THICK,
+          z: spec.translation.z - outward.z * CORNER_PANEL_HALF_THICK
+        };
+      }
+
       const matchIndex = remaining.findIndex((mesh) => {
+        if (mesh.name !== expectedName) {
+          return false;
+        }
+
         const worldPos = new THREE.Vector3();
         mesh.getWorldPosition(worldPos);
         const worldQuat = new THREE.Quaternion();
         mesh.getWorldQuaternion(worldQuat);
 
         const posClose =
-          Math.abs(worldPos.x - spec.translation.x) < 1e-3 &&
-          Math.abs(worldPos.y - spec.translation.y) < 1e-3 &&
-          Math.abs(worldPos.z - spec.translation.z) < 1e-3;
+          Math.abs(worldPos.x - expectedPos.x) < 1e-3 &&
+          Math.abs(worldPos.y - expectedPos.y) < 1e-3 &&
+          Math.abs(worldPos.z - expectedPos.z) < 1e-3;
 
         const dotAbs = Math.abs(
           worldQuat.x * spec.rotation.x +

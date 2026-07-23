@@ -1,8 +1,15 @@
 import * as THREE from "three";
 
-const TEXTURE_SIZE = 512;
-const HEX_CIRCUMRADIUS = 48;
-const LINE_WIDTH = 2.5;
+/**
+ * Exported for the unit tests: `LINE_WIDTH` legibility floor and the
+ * `TEXTURE_SIZE % (2 * COL_STEP) === 0` periodicity invariant that keeps
+ * the pattern seamless when tiled with `RepeatWrapping`.
+ */
+export const TEXTURE_SIZE = 512;
+export const COL_STEP = 64; // 8 columns; horizontal period 2*COL_STEP = 128 divides 512 exactly
+export const HEX_CIRCUMRADIUS = COL_STEP / 1.5; // ≈ 42.667 — flat-top geometry keeps colStep = 1.5R
+export const ROW_STEP = TEXTURE_SIZE / 7; // ≈ 73.14 vs ideal √3·R ≈ 73.9 → ~1% vertical squash, invisible
+export const LINE_WIDTH = 4.0; // was 2.5 — lines a bit thicker
 const PRIMARY_RGBA: readonly [number, number, number, number] = [150, 225, 255, 140]; // ~0.55 alpha
 const SECONDARY_RGBA: readonly [number, number, number, number] = [150, 225, 255, 31]; // ~0.12 alpha
 
@@ -35,7 +42,16 @@ export function createHexShellTexture(): THREE.DataTexture {
   return texture;
 }
 
-/** Flat-top hexagon grid outline, rasterised as a set of thick line segments. */
+/**
+ * Flat-top hexagon grid outline, rasterised as a set of thick line segments.
+ *
+ * Iterates exact integer column/row indices scaled by `COL_STEP`/`ROW_STEP`
+ * (rather than accumulating `cx += colStep` in a float loop, and rather than
+ * deriving row spacing from `√3·R`) so every hex centre lands on a position
+ * that is an exact multiple of the tile's periodic step — this is what
+ * makes the pattern tile seamlessly at `TEXTURE_SIZE` boundaries under
+ * `RepeatWrapping` instead of drifting into a visible seam.
+ */
 function drawHexGrid(
   data: Uint8Array,
   offsetX: number,
@@ -45,16 +61,20 @@ function drawHexGrid(
 ): void {
   const R = HEX_CIRCUMRADIUS;
   const hexWidth = R * 2;
-  const hexHeight = Math.sqrt(3) * R;
-  const colStep = hexWidth * 0.75;
-  const rowStep = hexHeight;
-  const cellShift = halfCellOffset ? colStep * 0.5 : 0;
+  const cellShift = halfCellOffset ? COL_STEP * 0.5 : 0;
 
   const margin = hexWidth;
-  for (let cx = -margin + offsetX + cellShift; cx < TEXTURE_SIZE + margin; cx += colStep) {
-    const col = Math.round((cx - offsetX - cellShift) / colStep);
-    const rowOffset = col % 2 !== 0 ? rowStep / 2 : 0;
-    for (let cy = -margin + offsetY + rowOffset; cy < TEXTURE_SIZE + margin; cy += rowStep) {
+  const minCol = Math.floor((-margin - offsetX - cellShift) / COL_STEP) - 1;
+  const maxCol = Math.ceil((TEXTURE_SIZE + margin - offsetX - cellShift) / COL_STEP) + 1;
+  const minRow = Math.floor((-margin - offsetY) / ROW_STEP) - 1;
+  const maxRow = Math.ceil((TEXTURE_SIZE + margin - offsetY) / ROW_STEP) + 1;
+
+  for (let col = minCol; col <= maxCol; col += 1) {
+    const cx = offsetX + cellShift + col * COL_STEP;
+    const isOddColumn = (((col % 2) + 2) % 2) !== 0;
+    const rowOffset = isOddColumn ? ROW_STEP / 2 : 0;
+    for (let row = minRow; row <= maxRow; row += 1) {
+      const cy = offsetY + rowOffset + row * ROW_STEP;
       strokeFlatTopHexagon(data, cx, cy, R, rgba);
     }
   }

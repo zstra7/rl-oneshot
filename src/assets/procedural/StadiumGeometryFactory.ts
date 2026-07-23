@@ -1,8 +1,9 @@
 import * as THREE from "three";
 
 import { createHexShellTexture } from "@/assets/procedural/HexPatternTexture";
+import type { GeometryRegistry } from "@/assets/procedural/GeometryRegistry";
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
-import { CORNER_RADIUS, generateArenaRamps } from "@/physics/arena/ArenaRampGeometry";
+import { CORNER_PANEL_HALF_THICK, CORNER_RADIUS, generateArenaRamps } from "@/physics/arena/ArenaRampGeometry";
 import { TEST_ARENA_DIMENSIONS } from "@/physics/arena/TestArenaPresets";
 import { GOAL_HALF_WIDTH } from "@/physics/goal/GoalTypes";
 import { VISUAL_PALETTE } from "@/visual-language/PsxVisualPalette";
@@ -11,6 +12,44 @@ import { applyVertexJitter } from "@/visual-language/VertexJitter";
 const WALL_THICKNESS = 1;
 /** Meshes drawn after all opaque geometry, so the transparent shell never fights the floor/ribs for depth order. */
 const SHELL_RENDER_ORDER = 10;
+
+/**
+ * F3 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): world units per full hex
+ * texture tile. The hex texture's primary-pass geometry occupies a
+ * `2*HEX_CIRCUMRADIUS` px span of the 512 px tile, so at this world size a
+ * single hex reads as roughly 1.92 m across — "square, ~2x the old size"
+ * per the plan's brief. Every glass-shell plane below sizes its UVs off
+ * this single constant (instead of a per-material `texture.repeat`), so
+ * hex cells read as consistent, square, correctly-scaled world size on
+ * every surface — including the corner panels, which used to be
+ * ~12:1 stretched because they shared the side walls' `repeat.set(10, 10)`
+ * regardless of their own (much smaller) dimensions.
+ */
+export const HEX_TILE_WORLD_SIZE = 11.5;
+
+/**
+ * F3: builds (and registry-caches) a single-sided plane sized in world
+ * units, with UVs rescaled so `HEX_TILE_WORLD_SIZE` world units span
+ * exactly one full hex-texture tile on both axes — this is what keeps hex
+ * cells square and consistently sized regardless of the plane's aspect
+ * ratio, replacing the old shared `hexTexture.repeat.set(10, 10)` that
+ * stretched differently per surface.
+ */
+function createShellPlaneGeometry(
+  registry: GeometryRegistry,
+  key: string,
+  worldW: number,
+  worldH: number
+): THREE.BufferGeometry {
+  return registry.getOrCreate(key, () => {
+    const g = new THREE.PlaneGeometry(worldW, worldH);
+    const uv = g.attributes.uv!;
+    for (let i = 0; i < uv.count; i += 1) {
+      uv.setXY(i, uv.getX(i) * (worldW / HEX_TILE_WORLD_SIZE), uv.getY(i) * (worldH / HEX_TILE_WORLD_SIZE));
+    }
+    return g;
+  });
+}
 
 /**
  * Rectangular blockout (Master Brief Phase 2) plus Phase 14's floor
@@ -50,9 +89,18 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   // transparent-black background between hex lines stays dark and only
   // the lines themselves glow) and raised opacity slightly. Still clearly
   // see-through, now visibly faint rather than invisible.
-  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v2", () => {
+  // F3 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): every glass surface is
+  // now a single-sided plane (was a double-sided box, which rendered the
+  // hex pattern on both parallel faces — a visible double layer) whose
+  // geometry carries its own per-surface UV scale, so `repeat` drops back
+  // to identity (1,1) — density now comes from `createShellPlaneGeometry`,
+  // not a single shared repeat value that stretched differently on every
+  // surface. `DoubleSide` stays on the material (not the geometry) purely
+  // so the single plane still renders correctly from both interior and
+  // exterior camera angles.
+  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v3", () => {
     const hexTexture = createHexShellTexture();
-    hexTexture.repeat.set(10, 10);
+    hexTexture.repeat.set(1, 1);
     return new THREE.MeshStandardMaterial({
       color: 0x9fd8ff,
       map: hexTexture,
@@ -83,31 +131,55 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   // shortened to meet the curved corner panels instead of interpenetrating
   // them at full length (avoids a double-alpha overlap seam where the
   // transparent glass would stack).
+  // F3: single-sided plane sitting exactly on the physics collider's inner
+  // (field-facing) face (`x = ∓fieldWidth/2`) instead of a 1m-thick box
+  // centred half a metre further out — the box rendered its hex pattern on
+  // both parallel faces, which was the "double hex layer" bug.
   const sideWallLength = fieldLength - 2 * CORNER_RADIUS;
-  const sideWallGeometry = context.geometryRegistry.getOrCreate(
-    "stadium-side-wall-v2",
-    () => new THREE.BoxGeometry(WALL_THICKNESS, interiorHeight, sideWallLength)
+  const leftWallGeometry = createShellPlaneGeometry(
+    context.geometryRegistry,
+    "stadium-side-wall-plane-left-v3",
+    sideWallLength,
+    interiorHeight
+  );
+  const rightWallGeometry = createShellPlaneGeometry(
+    context.geometryRegistry,
+    "stadium-side-wall-plane-right-v3",
+    sideWallLength,
+    interiorHeight
   );
 
-  const leftWall = new THREE.Mesh(sideWallGeometry, glassMaterial);
+  const leftWall = new THREE.Mesh(leftWallGeometry, glassMaterial);
   leftWall.name = "SideWallLeft";
-  leftWall.position.set(-fieldWidth / 2 - WALL_THICKNESS / 2, interiorHeight / 2, 0);
+  leftWall.position.set(-fieldWidth / 2, interiorHeight / 2, 0);
+  // Rotate the plane (default normal +Z, width along local X) so its width
+  // axis runs along world Z and its normal faces +X, into the field.
+  leftWall.rotation.y = Math.PI / 2;
   leftWall.renderOrder = SHELL_RENDER_ORDER;
   root.add(leftWall);
 
-  const rightWall = new THREE.Mesh(sideWallGeometry, glassMaterial);
+  const rightWall = new THREE.Mesh(rightWallGeometry, glassMaterial);
   rightWall.name = "SideWallRight";
-  rightWall.position.set(fieldWidth / 2 + WALL_THICKNESS / 2, interiorHeight / 2, 0);
+  rightWall.position.set(fieldWidth / 2, interiorHeight / 2, 0);
+  // Normal faces -X, into the field, from the opposite wall.
+  rightWall.rotation.y = -Math.PI / 2;
   rightWall.renderOrder = SHELL_RENDER_ORDER;
   root.add(rightWall);
 
-  const ceilingGeometry = context.geometryRegistry.getOrCreate(
-    "stadium-ceiling-v1",
-    () => new THREE.BoxGeometry(fieldWidth + WALL_THICKNESS * 2, WALL_THICKNESS, fieldLength)
+  // F3: plane at the underside (interior) face of the ceiling, `y =
+  // interiorHeight`, not the old box's centre half a metre higher.
+  const ceilingGeometry = createShellPlaneGeometry(
+    context.geometryRegistry,
+    "stadium-ceiling-plane-v3",
+    fieldWidth,
+    fieldLength
   );
   const ceiling = new THREE.Mesh(ceilingGeometry, glassMaterial);
   ceiling.name = "Ceiling";
-  ceiling.position.set(0, interiorHeight + WALL_THICKNESS / 2, 0);
+  ceiling.position.set(0, interiorHeight, 0);
+  // Lay flat, facing down into the arena (matches the floor panels'
+  // `rotation.x = -Math.PI / 2` convention used elsewhere in this file).
+  ceiling.rotation.x = -Math.PI / 2;
   ceiling.renderOrder = SHELL_RENDER_ORDER;
   root.add(ceiling);
 
@@ -162,20 +234,51 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
   );
 
   for (const spec of specs) {
+    if (spec.kind === "corner-wall") {
+      // F3: single-sided plane sized off the collider's own half-extents,
+      // instead of a 1m-thick box that rendered the hex pattern on both
+      // parallel faces.
+      const key = `stadium-corner-panel-plane-v3-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}`;
+      const geometry = createShellPlaneGeometry(
+        context.geometryRegistry,
+        key,
+        spec.halfExtents.x * 2,
+        spec.halfExtents.y * 2
+      );
+
+      const mesh = new THREE.Mesh(geometry, cornerGlassMaterial);
+      mesh.name = "CornerWallPanel";
+      mesh.quaternion.set(spec.rotation.x, spec.rotation.y, spec.rotation.z, spec.rotation.w);
+
+      // `spec.rotation` is `yawToDirection(outward)` (ArenaRampGeometry.ts's
+      // `generateCorner`), which maps the panel's local +Z axis to the
+      // OUTWARD normal — so the collider's inner (field-facing) face is
+      // `CORNER_PANEL_HALF_THICK` in the local -Z direction from
+      // `spec.translation` (the box's CENTRE). Offsetting the plane there,
+      // via the same rotation, keeps "what you see is what you drive on":
+      // the visible surface lands exactly on the F2-fixed inner face the
+      // physics collider actually presents, not the box centre.
+      const innerFaceOffset = new THREE.Vector3(0, 0, -CORNER_PANEL_HALF_THICK).applyQuaternion(mesh.quaternion);
+      mesh.position.set(
+        spec.translation.x + innerFaceOffset.x,
+        spec.translation.y + innerFaceOffset.y,
+        spec.translation.z + innerFaceOffset.z
+      );
+      mesh.renderOrder = SHELL_RENDER_ORDER;
+      group.add(mesh);
+      continue;
+    }
+
     const key = `stadium-ramp-box-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}-${spec.halfExtents.z.toFixed(3)}`;
     const geometry = context.geometryRegistry.getOrCreate(
       key,
       () => new THREE.BoxGeometry(spec.halfExtents.x * 2, spec.halfExtents.y * 2, spec.halfExtents.z * 2)
     );
 
-    const isCornerWall = spec.kind === "corner-wall";
-    const mesh = new THREE.Mesh(geometry, isCornerWall ? cornerGlassMaterial : rampMaterial);
-    mesh.name = isCornerWall ? "CornerWallPanel" : "RampSegment";
+    const mesh = new THREE.Mesh(geometry, rampMaterial);
+    mesh.name = "RampSegment";
     mesh.position.set(spec.translation.x, spec.translation.y, spec.translation.z);
     mesh.quaternion.set(spec.rotation.x, spec.rotation.y, spec.rotation.z, spec.rotation.w);
-    if (isCornerWall) {
-      mesh.renderOrder = SHELL_RENDER_ORDER;
-    }
     group.add(mesh);
   }
 
@@ -438,18 +541,26 @@ function createEndWallWithGoalGap(
   // short of the curved corner panels instead — same reasoning as the
   // side-wall shortening above.
   const sideSegmentWidth = fieldWidth / 2 - CORNER_RADIUS - goalWidth / 2;
-  const zPosition = (zSign * (fieldLength + WALL_THICKNESS)) / 2;
+  // F3: the plane sits at the wall's inner face (`z = ±fieldLength/2`),
+  // half the old box's thickness closer to the field than `zPosition`
+  // (the box's centre) used to be. A default-orientation PlaneGeometry
+  // already has width along local X and height along local Y with the
+  // normal on Z, which matches these segments' box axes exactly (thickness
+  // was along Z) — no rotation needed, unlike the side walls/ceiling.
+  const innerZ = zSign * (fieldLength / 2);
 
-  const sideGeometry = context.geometryRegistry.getOrCreate(
-    "stadium-end-wall-side-v2",
-    () => new THREE.BoxGeometry(sideSegmentWidth, interiorHeight, WALL_THICKNESS)
+  const sideGeometry = createShellPlaneGeometry(
+    context.geometryRegistry,
+    "stadium-end-wall-side-plane-v3",
+    sideSegmentWidth,
+    interiorHeight
   );
 
   const leftSegment = new THREE.Mesh(sideGeometry, material);
   leftSegment.position.set(
     -(goalWidth / 2 + sideSegmentWidth / 2),
     interiorHeight / 2,
-    zPosition
+    innerZ
   );
   leftSegment.renderOrder = SHELL_RENDER_ORDER;
   group.add(leftSegment);
@@ -458,7 +569,7 @@ function createEndWallWithGoalGap(
   rightSegment.position.set(
     goalWidth / 2 + sideSegmentWidth / 2,
     interiorHeight / 2,
-    zPosition
+    innerZ
   );
   rightSegment.renderOrder = SHELL_RENDER_ORDER;
   group.add(rightSegment);
@@ -466,12 +577,14 @@ function createEndWallWithGoalGap(
   const lintelHeight = interiorHeight - goalHeight;
 
   if (lintelHeight > 0) {
-    const lintelGeometry = context.geometryRegistry.getOrCreate(
-      "stadium-end-wall-lintel-v1",
-      () => new THREE.BoxGeometry(goalWidth, lintelHeight, WALL_THICKNESS)
+    const lintelGeometry = createShellPlaneGeometry(
+      context.geometryRegistry,
+      "stadium-end-wall-lintel-plane-v3",
+      goalWidth,
+      lintelHeight
     );
     const lintel = new THREE.Mesh(lintelGeometry, material);
-    lintel.position.set(0, goalHeight + lintelHeight / 2, zPosition);
+    lintel.position.set(0, goalHeight + lintelHeight / 2, innerZ);
     lintel.renderOrder = SHELL_RENDER_ORDER;
     group.add(lintel);
   }
@@ -500,36 +613,48 @@ function createGoalBoxShell(
   const group = new THREE.Group();
   group.name = name;
 
-  const backWallGeometry = context.geometryRegistry.getOrCreate(
-    "stadium-goalbox-back-v1",
-    () => new THREE.BoxGeometry(goalWidth, goalHeight, WALL_THICKNESS)
+  // F3: planes at each surface's physics inner face — half the old box
+  // thickness closer to the goal-box interior than the box centres used
+  // above (still the box-centre `zSign * (halfLength + goalDepth)`/etc.
+  // formulas the physics goal-box colliders use, just offset inward by
+  // `WALL_THICKNESS / 2`).
+  const backWallGeometry = createShellPlaneGeometry(
+    context.geometryRegistry,
+    "stadium-goalbox-back-plane-v3",
+    goalWidth,
+    goalHeight
   );
   const backWall = new THREE.Mesh(backWallGeometry, material);
-  backWall.position.set(0, goalHeight / 2, zSign * (halfLength + goalDepth));
+  backWall.position.set(0, goalHeight / 2, zSign * (halfLength + goalDepth - WALL_THICKNESS / 2));
   backWall.renderOrder = SHELL_RENDER_ORDER;
   group.add(backWall);
 
-  const sideWallGeometry = context.geometryRegistry.getOrCreate(
-    "stadium-goalbox-side-v1",
-    () => new THREE.BoxGeometry(WALL_THICKNESS, goalHeight, goalDepth)
+  const sideWallGeometry = createShellPlaneGeometry(
+    context.geometryRegistry,
+    "stadium-goalbox-side-plane-v3",
+    goalDepth,
+    goalHeight
   );
   for (const xSign of [-1, 1] as const) {
     const sideWall = new THREE.Mesh(sideWallGeometry, material);
-    sideWall.position.set(
-      xSign * (goalWidth / 2 + WALL_THICKNESS / 2),
-      goalHeight / 2,
-      zSign * (halfLength + goalDepth / 2)
-    );
+    sideWall.position.set(xSign * (goalWidth / 2), goalHeight / 2, zSign * (halfLength + goalDepth / 2));
+    // Same rotation convention as the arena's own side walls: width axis
+    // (local X) onto world Z, normal facing into the goal box's interior.
+    sideWall.rotation.y = xSign === 1 ? -Math.PI / 2 : Math.PI / 2;
     sideWall.renderOrder = SHELL_RENDER_ORDER;
     group.add(sideWall);
   }
 
-  const roofGeometry = context.geometryRegistry.getOrCreate(
-    "stadium-goalbox-roof-v1",
-    () => new THREE.BoxGeometry(goalWidth, WALL_THICKNESS, goalDepth)
+  const roofGeometry = createShellPlaneGeometry(
+    context.geometryRegistry,
+    "stadium-goalbox-roof-plane-v3",
+    goalWidth,
+    goalDepth
   );
   const roof = new THREE.Mesh(roofGeometry, material);
-  roof.position.set(0, goalHeight + WALL_THICKNESS / 2, zSign * (halfLength + goalDepth / 2));
+  // Underside (interior) face: `y = goalHeight`, not the box's centre.
+  roof.position.set(0, goalHeight, zSign * (halfLength + goalDepth / 2));
+  roof.rotation.x = -Math.PI / 2;
   roof.renderOrder = SHELL_RENDER_ORDER;
   group.add(roof);
 

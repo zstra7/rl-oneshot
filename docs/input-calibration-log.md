@@ -158,6 +158,45 @@
   extend this same list (`CAR_CUSTOMISE`, `TOURNAMENT_BRACKET`,
   `TOURNAMENT_VICTORY`) rather than each screen inventing its own.
 
+## Post-launch polish pass — F4 (kickoff held-throttle fix, plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+**Root cause**: R11's require-release re-arm mask (see above) fires on
+*every* `areControlsActive()` false→true transition, unconditionally —
+including `COUNTDOWN_GO → PLAYING`. A player holding accelerate through
+the countdown into GO got that held key captured into the mask and
+suppressed until released and re-pressed, even though no menu button was
+ever involved — exactly the reported "car gets stuck at the start of the
+game" symptom. The mask exists solely to stop a held gamepad-South from
+jumping the car when *closing the pause menu*; it was never meant to
+apply to the countdown, which isn't a menu-navigable state at all.
+
+**Fix**: `GameRuntime` now tracks the match state the previous frame
+observed (`previousMatchStateForGates`) and only re-arms when the
+transition into controls-active came *from* a `MENU_NAVIGABLE_STATES`
+origin (`applyMenuNavigationGates()` in `GameRuntime.ts`). `COUNTDOWN_GO`
+is not menu-navigable, so no mask is armed at kickoff and a held key
+carries straight through; `PAUSED` is menu-navigable, so resume-from-
+pause still masks exactly as R11 intended.
+
+**Why this needed a live-rAF test, not the usual `advanceGameTicks`
+pattern**: `applyMenuNavigationGates()` runs inside `GameRuntime.frame()`
+(the rendered-frame/rAF callback), not inside `onFixedTick`.
+`stepFixedTicksForTesting`/`advanceGameTicks` (used by nearly every other
+game-flow Playwright test in this repo, always after
+`__PHYSICS_TEST__.pauseRuntime()`) calls `FixedStepCoordinator.stepOnce()`
+directly and never touches `frame()` at all — so this bug (and its fix)
+is completely invisible to that pattern. `tests/input/kickoff-throttle.
+spec.ts` deliberately does NOT pause the runtime: it starts a match,
+holds a real key down through the live countdown via real wall-clock
+polling, and asserts real motion within 0.75s of reaching `PLAYING`,
+still holding the key the whole time.
+
+**Verified NOT to reopen the resume bug F4 was carved out of**: the full
+R11 anti-double-trigger suite (`tests/ui/controller-navigation.spec.ts`,
+including "no jump on resume while South is held" and "south taps while
+paused never leak") and `tests/input/foundation.spec.ts` both stay green
+unmodified.
+
 ## Post-launch polish pass — WS1 (plan/POLISH_OVERHAUL_PLAN.md)
 
 - **Confirmed and fixed the real "controller does not work at all" bug**:

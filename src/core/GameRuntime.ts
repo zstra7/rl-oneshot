@@ -256,6 +256,15 @@ export class GameRuntime implements GameRuntimeFacade {
   private frameTimeMs = 0;
   /** R11: previous frame's `areControlsActive()`, to detect the false->true transition. */
   private previousControlsActive = false;
+  /**
+   * F4 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): the match state the
+   * previous frame's `applyMenuNavigationGates()` observed, so the
+   * require-release re-arm only fires when controls-active was entered
+   * FROM a menu-navigable state (pause resume, menu -> match) — never
+   * from `COUNTDOWN_GO -> PLAYING`, which is not menu-navigable and
+   * where a held throttle must carry straight through into gameplay.
+   */
+  private previousMatchStateForGates: MatchState = "BOOT";
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -463,11 +472,19 @@ export class GameRuntime implements GameRuntimeFacade {
     modules.input.setGameplayEdgesEnabled(controlsActive);
     modules.input.setMenuEdgesEnabled(MENU_NAVIGABLE_STATES.includes(matchState));
 
-    if (controlsActive && !this.previousControlsActive) {
+    // F4: only re-arm (mask held buttons) when this activation came FROM a
+    // menu-navigable state (e.g. resuming from PAUSED) — never from
+    // COUNTDOWN_GO -> PLAYING, which isn't menu-navigable. Without this
+    // guard, holding throttle through the countdown got captured into the
+    // require-release mask and suppressed until released and re-pressed,
+    // even though no menu button was ever held down.
+    const cameFromMenuNavigable = MENU_NAVIGABLE_STATES.includes(this.previousMatchStateForGates);
+    if (controlsActive && !this.previousControlsActive && cameFromMenuNavigable) {
       modules.input.rearmGameplayInputs();
       modules.input.clearPendingEdges();
     }
     this.previousControlsActive = controlsActive;
+    this.previousMatchStateForGates = matchState;
   }
 
   /**
