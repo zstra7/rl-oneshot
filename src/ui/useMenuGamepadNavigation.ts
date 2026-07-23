@@ -70,6 +70,15 @@ export function useMenuGamepadNavigation(): void {
   const matchFlowStore = useMatchFlowStore();
   const repeatState = createRepeatState();
 
+  // F12: the pause-settings overlay opens/closes without a matchState
+  // change (matchState stays "PAUSED" throughout — see matchFlowStore's
+  // doc comment), so the matchState watcher below never fires when
+  // PauseMenu.vue's root swaps out for SettingsPanel.vue's (or back).
+  // Tracking the visible `[data-menu-root]` element itself across frames
+  // catches that swap (and any future one like it) generically, on top of
+  // the existing matchState-driven refocus.
+  let lastRootEl: Element | null = null;
+
   function moveWithin(targets: HTMLElement[], delta: 1 | -1): void {
     if (targets.length === 0) {
       return;
@@ -142,6 +151,12 @@ export function useMenuGamepadNavigation(): void {
   }
 
   function handleFrame(frame: MenuNavigationFrame): void {
+    const currentRootEl = document.querySelector("[data-menu-root]");
+    if (currentRootEl !== lastRootEl) {
+      lastRootEl = currentRootEl;
+      void nextTick(() => focusFirstTarget());
+    }
+
     const nowMs = performance.now();
     processHeld("up", frame.up, nowMs);
     processHeld("down", frame.down, nowMs);

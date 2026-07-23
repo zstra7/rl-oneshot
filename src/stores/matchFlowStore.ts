@@ -23,6 +23,14 @@ export interface MatchFlowStoreState {
   playerBallCamera: boolean;
   /** F11: most-recently-used input device, drives the HUD binding label. */
   activeInputDevice: ActiveInputDevice;
+  /**
+   * F12: pure UI state (NOT a runtime mirror) — whether the settings panel
+   * is overlaid on top of the pause menu. `matchState` deliberately stays
+   * `"PAUSED"` while this is true (switching to `"SETTINGS"` would un-pause
+   * physics via `isPaused()`'s gate in `GameRuntime`'s fixed tick), so this
+   * flag is the only signal distinguishing the two pause-time screens.
+   */
+  pauseSettingsOpen: boolean;
 }
 
 /**
@@ -39,7 +47,8 @@ export const useMatchFlowStore = defineStore("matchFlow", {
     playerBoostAmount: 0,
     playerSupersonic: false,
     playerBallCamera: false,
-    activeInputDevice: "none"
+    activeInputDevice: "none",
+    pauseSettingsOpen: false
   }),
 
   getters: {
@@ -61,6 +70,10 @@ export const useMatchFlowStore = defineStore("matchFlow", {
     },
     setActiveInputDevice(device: ActiveInputDevice): void {
       this.activeInputDevice = device;
+    },
+    /** F12: opened from the pause menu's SETTINGS button, closed via SettingsPanel's BACK. */
+    setPauseSettingsOpen(open: boolean): void {
+      this.pauseSettingsOpen = open;
     }
   }
 });

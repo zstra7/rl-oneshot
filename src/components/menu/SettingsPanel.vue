@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import {
@@ -14,11 +14,13 @@ import {
 } from "@/input/bindings/BindingLabels";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
+import { useMatchFlowStore } from "@/stores/matchFlowStore";
 import type { CelebrationIntensity, DensityLevel } from "@/stores/settingsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const runtime = useGameRuntime();
 const settingsStore = useSettingsStore();
+const matchFlowStore = useMatchFlowStore();
 
 type Category = "GAMEPLAY" | "CAMERA" | "GRAPHICS" | "AUDIO" | "CONTROLS" | "ACCESSIBILITY";
 const categories: Category[] = ["GAMEPLAY", "CAMERA", "GRAPHICS", "AUDIO", "CONTROLS", "ACCESSIBILITY"];
@@ -36,8 +38,18 @@ function selectCategory(category: Category): void {
   activeCategory.value = category;
 }
 
+/**
+ * F12: reached both from MAIN_MENU (matchState === "SETTINGS") and as a
+ * pause-menu overlay (matchState stays "PAUSED", pauseSettingsOpen true).
+ * BACK must return to whichever screen opened it rather than always going
+ * to the main menu.
+ */
 function back(): void {
   runtime.playUiSound("cancel");
+  if (matchFlowStore.pauseSettingsOpen) {
+    matchFlowStore.setPauseSettingsOpen(false);
+    return;
+  }
   runtime.openMainMenu();
 }
 
@@ -320,8 +332,29 @@ function setAirRollSensitivity(value: number): void {
   runtime.setAirRollSensitivity(value);
 }
 
+/**
+ * F12: while overlaid on the pause menu, the pause/Escape key closes the
+ * overlay (same as clicking BACK) instead of leaking through to resume the
+ * match. Skipped while a binding capture is in progress — that has its own
+ * capture-phase Escape handler (`handleCaptureKeydown`) which must win.
+ */
+function handlePauseOverlayKeydown(event: KeyboardEvent): void {
+  if (!matchFlowStore.pauseSettingsOpen || capturingDevice.value !== null) {
+    return;
+  }
+  if (event.code !== settingsStore.settings.controls.keyboardMouse.pause) {
+    return;
+  }
+  back();
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handlePauseOverlayKeydown);
+});
+
 onBeforeUnmount(() => {
   endCapture();
+  window.removeEventListener("keydown", handlePauseOverlayKeydown);
 });
 </script>
 

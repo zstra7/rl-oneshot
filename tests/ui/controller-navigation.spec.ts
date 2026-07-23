@@ -161,6 +161,9 @@ test("pause menu: pad start pauses, dpad reaches RETURN TO MENU, east resumes vi
   await expect.poll(() => matchState(page)).toBe("PAUSED");
   await expect.poll(() => activeElementText(page)).toBe("RESUME");
 
+  // F12 inserted SETTINGS between RESUME and RESTART MATCH, so RETURN TO
+  // MENU is now three dpad-down presses below RESUME.
+  await pulse(page, index, DPAD_DOWN);
   await pulse(page, index, DPAD_DOWN);
   await pulse(page, index, DPAD_DOWN);
   expect(await activeElementText(page)).toBe("RETURN TO MENU");
@@ -297,6 +300,9 @@ test("anti-double-trigger: south taps while paused never leak into a gameplay JU
   // queue, since South is quarantined as a menu edge for the whole time the
   // pause menu is up); focus lands on CANCEL, so the second South cancels
   // the confirm rather than confirming it — still no leak either way.
+  // F12 inserted SETTINGS between RESUME and RESTART MATCH, so it's now two
+  // dpad-down presses below RESUME.
+  await pulse(page, index, DPAD_DOWN);
   await pulse(page, index, DPAD_DOWN);
   expect(await activeElementText(page)).toBe("RESTART MATCH");
   await pulse(page, index, SOUTH);
@@ -306,7 +312,9 @@ test("anti-double-trigger: south taps while paused never leak into a gameplay JU
   expect(await matchState(page)).toBe("PAUSED");
   await expect(page.getByText("RESTART MATCH")).toBeVisible();
 
-  // Back to RESUME, then resume via East (back).
+  // Back to RESUME, then resume via East (back). F12 inserted SETTINGS
+  // between RESUME and RESTART MATCH, so it's now two dpad-up presses.
+  await pulse(page, index, DPAD_UP);
   await pulse(page, index, DPAD_UP);
   expect(await activeElementText(page)).toBe("RESUME");
   await pulse(page, index, EAST);

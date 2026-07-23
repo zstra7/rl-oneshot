@@ -819,3 +819,159 @@ once the fix is restored.
 `tests/ui/settings.spec.ts`, and `tests/input/rebinding.spec.ts` all
 stay green, and the full `npx vitest run` sweep (324 tests) is
 unaffected.
+
+## F12 — Settings reachable from the pause menu (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+**Overlay, not a state — physics-pause rationale.** `SettingsPanel.vue`
+is now reachable mid-match from the pause menu, but `matchState` never
+becomes `"SETTINGS"` while paused. `MatchFlowController.isPaused()` is
+literally `matchState === "PAUSED"`, and `GameRuntime.onFixedTick` uses
+that as its very first gate each tick — `isPaused()` true early-returns
+before physics steps at all. If opening the settings overlay flipped
+`matchState` to `"SETTINGS"`, that gate would go false and the very next
+tick would step Rapier again: the ball and both cars would silently
+keep moving underneath the settings screen. So the pause menu's SETTINGS
+button never touches `matchState`; instead a new `pauseSettingsOpen:
+boolean` flag on `matchFlowStore` — deliberately documented as pure UI
+state, *not* a `runtime:session-state-changed` mirror like the store's
+other fields — toggles which of `PauseMenu.vue`/`SettingsPanel.vue` is
+shown while `matchState` stays `"PAUSED"` throughout.
+
+**`App.vue`'s v-if restructuring.** `SettingsPanel` used to sit inside
+the `v-else-if` ladder rooted at `matchState === 'MAIN_MENU'`
+(MAIN_MENU/MATCH_SETUP/SETTINGS/CAR_CUSTOMISE/TOURNAMENT_BRACKET/
+TOURNAMENT_VICTORY). `PAUSED` is a completely different branch of that
+same chain — never reached by it — so `SettingsPanel` needed showing
+for `matchState === "SETTINGS"` **or** `(matchState === "PAUSED" &&
+pauseSettingsOpen)`, which a sequential `v-else-if` chained off
+`MAIN_MENU` cannot express. Pulled `SettingsPanel` out into its own
+independent `v-if="showSettingsPanel"` (a computed OR of both cases);
+the remaining MAIN_MENU-rooted ladder keeps its own mutual exclusivity
+unchanged (none of its states can be true at the same time as `PAUSED`
+or each other). `PauseMenu` gained a `&& !pauseSettingsOpen` guard.
+Both components carry `data-menu-root`, and the R11 gamepad-nav
+composable (`useMenuGamepadNavigation.ts`) assumes exactly one is ever
+mounted (`document.querySelectorAll("[data-menu-root] …")`); the two
+v-ifs are mutually exclusive by construction (`pauseSettingsOpen` can
+only be true while `matchState === "PAUSED"`, and `PauseMenu`'s `v-if`
+excludes that exact case), so the invariant holds. A `watch(matchState,
+…)` also force-clears the flag whenever `matchState` leaves `"PAUSED"`,
+defensively covering RESUME/RESTART MATCH/RETURN TO MENU in case the
+overlay was somehow still open.
+
+**Pause menu button order.** SETTINGS was inserted between RESUME and
+RESTART MATCH (`data-index="02"`), pushing RESTART MATCH to `"03"` and
+RETURN TO MENU to `"04"` — RESUME stays first with `autofocus` and
+`data-menu-back` unchanged. Clicking it calls
+`matchFlowStore.setPauseSettingsOpen(true)` + the same `"confirm"` UI
+sound RESUME already uses.
+
+**`SettingsPanel.vue`'s `back()` now branches**: reached from
+`matchState === "SETTINGS"` (the ordinary main-menu path) it still calls
+`runtime.openMainMenu()` as before; reached as the pause overlay
+(`matchFlowStore.pauseSettingsOpen`) it instead just clears the flag,
+leaving `matchState` at `"PAUSED"` so `PauseMenu` reappears. All of the
+panel's existing settings-apply logic (graphics preset, camera, audio,
+bindings) needed zero changes — it already applies live and reads/writes
+`settingsStore`/`runtime` regardless of which screen is hosting it.
+
+**R11 nav composable: per-frame root tracking.** The existing
+`watch(() => matchFlowStore.matchState, …)` in
+`useMenuGamepadNavigation.ts` only re-focuses on a `matchState` change —
+but opening/closing this overlay never changes `matchState` (it stays
+`"PAUSED"` throughout), so that watcher alone misses it, leaving focus
+sitting on whatever was focused on the just-unmounted screen (or
+nothing, once a Vue-unmounted button is garbage). Generalised: `handle
+Frame` (already invoked once per rendered frame while a menu-navigable
+state is active) now also queries the currently-visible
+`[data-menu-root]` element and compares it against the previous frame's
+via a closure-scoped `lastRootEl`; on a change it calls
+`focusFirstTarget()` the same way the `matchState` watcher does. The
+`matchState` watcher stays in place — it's harmless alongside the new
+check and still covers the normal state-transition case on its own.
+
+**Escape/pause-key resume was net-new, not a pre-existing toggle to
+guard.** Before F12, pressing the pause key while already `PAUSED` did
+nothing: `GameRuntime.onFixedTick`'s `isPaused()` branch returns before
+ever sampling `frame.system.pausePressed` (that sampling only happens in
+the non-paused branch), so the only way out of the pause menu was
+clicking RESUME (or controller East, routed to RESUME's
+`data-menu-back`). The plan's test gate ("Escape closes the overlay,
+Escape again resumes") requires a working toggle, so this had to be
+built, not just guarded. `GameRuntime`/`InputControlsModule` deliberately
+stayed untouched — that boundary is framework-agnostic and has never
+imported a Pinia store — so this lives entirely in the two Vue
+components that are already mounted for exactly one of the two pause
+screens at a time, each attaching its own `window` `keydown` listener
+(`onMounted`/`onBeforeUnmount`) gated on the *currently bound* pause key
+(`settingsStore.settings.controls.keyboardMouse.pause`, not a hardcoded
+`"Escape"`, since it's rebindable):
+- `PauseMenu.vue`: on the bound key, resumes via the same `resumeMatch()`
+  the RESUME button already calls (unless a RESTART/RETURN confirm row is
+  open, so a stray Escape there can't blow past the confirmation).
+- `SettingsPanel.vue`: on the bound key, only while
+  `matchFlowStore.pauseSettingsOpen` is true and no binding capture is in
+  progress (`capturingDevice.value === null` — Escape's existing
+  capture-cancel handler must keep winning while rebinding a key), calls
+  the same `back()` the BACK button uses.
+
+The low-level `InputControlsModule` keyboard handler still unconditionally
+queues a `"PAUSE"` edge on every physical Escape press regardless of
+match state (pre-existing behaviour, unchanged) — while paused that edge
+just sits dead in the queue since it's never sampled, and the existing
+require-release re-arm (`GameRuntime.applyMenuNavigationGates`'s
+`clearPendingEdges()` on the next menu→gameplay transition) wipes any
+such stale edges before physics ever samples input again, so a stray
+queued edge from an Escape pressed while paused cannot leak into an
+instant re-pause on resume. Deliberately did **not** extend this to the
+gamepad Start button: `InputControlsModule` gates the gamepad PAUSE edge
+behind `gameplayEdgesEnabled` (only true while controls are active,
+i.e. never while already `PAUSED`), by explicit design ("a South press
+at the pause menu can never also queue a gameplay JUMP edge" — see that
+file's R11 edge-quarantine comment). No F12 test gate requires Start to
+resume from bare `PAUSED` (only Escape is specified, and controller
+gate coverage is dpad-navigate-the-overlay + East-goes-back, both of
+which already worked through the pre-existing `data-menu-back` routing),
+so that asymmetry was left alone rather than risking the edge-quarantine
+invariant for an untested requirement.
+
+**Tests.** New `tests/ui/pause-settings.spec.ts` (4 cases, exactly the
+plan's gates): SETTINGS overlay shows the panel while `matchState` stays
+`PAUSED` and physics is frozen (car position + `regulationTimeRemaining`
+identical across a real 500ms wait); a graphics-preset change inside the
+overlay applies live (`getVisualDiagnostics().preset`) and persists to
+`localStorage`, BACK returns to the pause menu with RESUME focused, and
+RESUME reaches `PLAYING`; Escape while the overlay is open closes it
+(still `PAUSED`), a second Escape resumes to `PLAYING`; controller dpad
+navigates the overlay's category tabs and East routes to `BACK` exactly
+like `data-menu-back` elsewhere, landing back on the pause menu with
+RESUME focused. Verified test-first: `git stash` on just the five
+changed `src/` files (leaving the new spec and the updated existing
+specs in place) reproduced all 4 new cases failing with "element(s) not
+found" for `pause-settings`/`settings-panel` (the SETTINGS button and
+overlay don't exist pre-fix), then all 4 passed once the stash was
+popped.
+
+SETTINGS being inserted between RESUME and RESTART MATCH shifted every
+hard-coded dpad-step-count in the existing pause-menu suites — updated
+each with a comment explaining the new count rather than silently
+changing the number:
+`tests/ui/controller-navigation.spec.ts` ("pad start pauses, dpad
+reaches RETURN TO MENU…": 2× dpad-down → 3×; "south taps while paused
+never leak…": 1× dpad-down to RESTART MATCH → 2×, plus a second spot in
+the same test — 1× dpad-up back to RESUME → 2×, previously missed on the
+first pass through the file and caught by actually running the suite,
+not just grepping for the button labels);
+`tests/ui/focus-visibility.spec.ts` (pause-menu focus-outline test:
+inserted a SETTINGS focus-visible check between RESUME and RESTART
+MATCH, per F9's own "every menu button" intent, and renamed the test to
+list all four buttons); `tests/ui/pause-confirm.spec.ts` (pad: dpad to
+RESTART MATCH now takes 2× dpad-down, not 1×). `tests/ui/settings.spec.ts`
+(the ordinary menu-path settings flow) required zero changes and stays
+green. Full sweep run: `npx vitest run` (324 tests) and every Playwright
+spec in `tests/ui`, `tests/game-flow`, and `tests/input` (94 tests, one
+worker-scheduled run) all green, plus `tests/release/release-gate.spec.ts`
+(3 tests, `--project=chromium-preview` against the already-built `dist/`
+production artifact per that file's own intent — its real
+Escape-driven pause→RETURN TO MENU flow, its "no test hooks exposed" gate,
+and its no-external-network-request check) all green too.

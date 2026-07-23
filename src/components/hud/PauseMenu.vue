@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useGameRuntime } from "@/core/useGameRuntime";
+import { useMatchFlowStore } from "@/stores/matchFlowStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 const runtime = useGameRuntime();
+const matchFlowStore = useMatchFlowStore();
+const settingsStore = useSettingsStore();
 
 /**
  * F10: `window.confirm` is invisible to the gamepad layer (and Playwright
@@ -19,6 +23,37 @@ function resumeMatch(): void {
   runtime.playUiSound("confirm");
   runtime.resumeMatch();
 }
+
+function openSettings(): void {
+  matchFlowStore.setPauseSettingsOpen(true);
+  runtime.playUiSound("confirm");
+}
+
+/**
+ * F12: keyboard/pause-key Escape while the bare pause menu is showing
+ * resumes the match (mirrors clicking RESUME) — the low-level `pausePressed`
+ * edge sampled in `GameRuntime`'s fixed tick is never consumed while
+ * `isPaused()` early-returns, so this is a dedicated DOM listener rather
+ * than a second use of that edge. Skipped while a RESTART/RETURN confirm
+ * row is showing so a stray Escape can't blow past the confirmation.
+ */
+function handlePauseKeydown(event: KeyboardEvent): void {
+  if (confirming.value) {
+    return;
+  }
+  if (event.code !== settingsStore.settings.controls.keyboardMouse.pause) {
+    return;
+  }
+  resumeMatch();
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handlePauseKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handlePauseKeydown);
+});
 
 function requestRestart(): void {
   confirming.value = "restart";
@@ -67,10 +102,19 @@ function cancelConfirm(): void {
           RESUME
         </button>
         <button
-          ref="restartButtonEl"
           type="button"
           class="menu-item wo-item"
           data-index="02"
+          data-testid="pause-settings"
+          @click="openSettings()"
+        >
+          SETTINGS
+        </button>
+        <button
+          ref="restartButtonEl"
+          type="button"
+          class="menu-item wo-item"
+          data-index="03"
           @click="requestRestart()"
         >
           RESTART MATCH
@@ -79,7 +123,7 @@ function cancelConfirm(): void {
           ref="returnButtonEl"
           type="button"
           class="menu-item wo-item"
-          data-index="03"
+          data-index="04"
           @click="requestReturn()"
         >
           RETURN TO MENU

@@ -129,6 +129,9 @@ test("pad: dpad to RESTART, South opens the confirm row (focus on CANCEL), navig
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.pause());
   await expect(page.getByTestId("pause-menu")).toBeVisible();
 
+  // F12 inserted SETTINGS between RESUME and RESTART MATCH, so it now takes
+  // two dpad-down presses from RESUME to land on RESTART MATCH.
+  await pulse(page, index, DPAD_DOWN);
   await pulse(page, index, DPAD_DOWN);
   expect(await activeElementTestId(page)).not.toBe("pause-confirm-yes");
 

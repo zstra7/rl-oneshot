@@ -182,7 +182,7 @@ test("match setup: start-match and BACK show a visible focus outline", async ({ 
   await expectFocusVisible(page);
 });
 
-test("pause menu: RESUME, RESTART MATCH, and RETURN TO MENU each show a visible focus outline", async ({
+test("pause menu: RESUME, SETTINGS, RESTART MATCH, and RETURN TO MENU each show a visible focus outline", async ({
   page
 }) => {
   await startMatchAndReachPlaying(page);
@@ -192,6 +192,11 @@ test("pause menu: RESUME, RESTART MATCH, and RETURN TO MENU each show a visible 
   await pulse(page, index, START);
   await expect.poll(() => matchState(page)).toBe("PAUSED");
   await expect.poll(() => activeElementText(page)).toBe("RESUME");
+  await expectFocusVisible(page);
+
+  // F12 inserted SETTINGS between RESUME and RESTART MATCH.
+  await pulse(page, index, DPAD_DOWN);
+  expect(await activeElementText(page)).toBe("SETTINGS");
   await expectFocusVisible(page);
 
   await pulse(page, index, DPAD_DOWN);

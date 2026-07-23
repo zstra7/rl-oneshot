@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from "vue";
+import { computed, onBeforeUnmount, watch } from "vue";
 
 import GameCanvas from "@/components/GameCanvas.vue";
 import CountdownOverlay from "@/components/hud/CountdownOverlay.vue";
@@ -57,6 +57,34 @@ onBeforeUnmount(() => {
 
 const matchState = computed(() => matchFlowStore.matchState);
 
+// F12: pure UI flag (not a runtime mirror) — the settings panel overlaid on
+// top of the pause menu. matchState deliberately stays "PAUSED" throughout
+// (see matchFlowStore's doc comment for why), so this is the only signal
+// that distinguishes the pause menu from its settings overlay.
+const pauseSettingsOpen = computed(() => matchFlowStore.pauseSettingsOpen);
+
+// F12: SettingsPanel is reachable from two different, mutually-exclusive
+// contexts (MAIN_MENU's matchState === "SETTINGS", or as a PAUSED overlay)
+// so it can't live inside the MAIN_MENU-rooted v-else-if ladder below —
+// that ladder only evaluates sequentially off matchState === "MAIN_MENU"
+// and PAUSED is a completely different branch. Rendering it from its own
+// independent v-if keeps the R11 nav composable's single-`[data-menu-root]`
+// invariant: it's never true at the same time as PauseMenu (guarded by
+// `!pauseSettingsOpen` below) or the MAIN_MENU ladder (matchState can't be
+// both "SETTINGS"/"PAUSED" and one of the ladder's own states at once).
+const showSettingsPanel = computed(
+  () => matchState.value === "SETTINGS" || (matchState.value === "PAUSED" && pauseSettingsOpen.value)
+);
+
+// F12: defensively clear the overlay flag whenever the match leaves PAUSED
+// (RESUME, RESTART MATCH, RETURN TO MENU) in case it was somehow still set,
+// so a later pause doesn't reopen straight into the settings overlay.
+watch(matchState, (next) => {
+  if (next !== "PAUSED" && matchFlowStore.pauseSettingsOpen) {
+    matchFlowStore.setPauseSettingsOpen(false);
+  }
+});
+
 const showGameplayHud = computed(
   () =>
     ![
@@ -84,10 +112,11 @@ const showGameplayHud = computed(
 
     <MainMenu v-if="matchState === 'MAIN_MENU'" />
     <MatchSetup v-else-if="matchState === 'MATCH_SETUP'" />
-    <SettingsPanel v-else-if="matchState === 'SETTINGS'" />
     <CarCustomise v-else-if="matchState === 'CAR_CUSTOMISE'" />
     <TournamentBracket v-else-if="matchState === 'TOURNAMENT_BRACKET'" />
     <TournamentVictory v-else-if="matchState === 'TOURNAMENT_VICTORY'" />
+
+    <SettingsPanel v-if="showSettingsPanel" />
 
     <GameplayHud v-if="showGameplayHud" />
     <CountdownOverlay
@@ -95,7 +124,7 @@ const showGameplayHud = computed(
     />
     <GoalBanner v-if="['GOAL_LATCHED', 'GOAL_CELEBRATION'].includes(matchState)" />
     <OvertimeBanner v-if="matchState === 'OVERTIME_INTRO'" />
-    <PauseMenu v-if="matchState === 'PAUSED'" />
+    <PauseMenu v-if="matchState === 'PAUSED' && !pauseSettingsOpen" />
     <ResultsScreen v-if="matchState === 'MATCH_RESULTS'" />
   </div>
 </template>
