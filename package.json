@@ -1,0 +1,54 @@
+{
+  "name": "space-carball",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "type-check": "vue-tsc --noEmit",
+    "build:app": "vite build",
+    "build": "npm run validate && npm run type-check && npm run test:unit && npm run build:app",
+    "preview": "vite preview --host 127.0.0.1",
+    "validate:contracts": "node scripts/validate-contracts.mjs",
+    "validate:threejs-skills": "node scripts/validate-threejs-skills.mjs",
+    "validate:assets": "node scripts/validate-assets.mjs",
+    "validate:architecture": "node scripts/validate-architecture.mjs",
+    "validate": "npm run validate:contracts && npm run validate:threejs-skills && npm run validate:assets && npm run validate:architecture",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:dev": "playwright test --project=chromium-dev",
+    "test:e2e:preview": "playwright test --project=chromium-preview",
+    "test:physics": "playwright test tests/physics",
+    "test:input": "playwright test tests/input",
+    "test:assets": "playwright test tests/assets tests/procedural",
+    "test:game-flow": "playwright test tests/game-flow",
+    "test:ai": "playwright test tests/ai",
+    "test:visual": "playwright test tests/visual-language tests/camera",
+    "test:audio": "playwright test tests/ui/audio.spec.ts",
+    "test:ui": "playwright test tests/ui",
+    "test:integration": "playwright test tests/integration",
+    "test:release": "npm run build && playwright test --project=chromium-preview tests/smoke tests/release",
+    "report:assets": "node scripts/create-asset-report.mjs",
+    "report:build": "node scripts/create-build-report.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.19.3",
+    "pinia": "4.0.2",
+    "three": "0.160.0",
+    "vue": "3.5.40"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "22.20.1",
+    "@types/three": "0.160.0",
+    "@vitejs/plugin-vue": "6.0.8",
+    "typescript": "5.9.3",
+    "vite": "8.1.5",
+    "vitest": "4.1.10",
+    "vue-tsc": "3.3.7"
+  }
+}

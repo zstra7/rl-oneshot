@@ -1,0 +1,89 @@
+import { expect, test } from "@playwright/test";
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(() => page.evaluate(() => window.__GAME_TEST__?.gameFlow?.ready() ?? false), {
+      timeout: 15_000
+    })
+    .toBe(true);
+});
+
+test("stadium shows floor markings and structural ribs with no console errors", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (err) => pageErrors.push(err.message));
+
+  await page.waitForTimeout(800);
+  expect(pageErrors).toEqual([]);
+  await page.screenshot({ path: "test-results/stadium-art.png" });
+});
+
+test("boosting spawns pooled VFX particles that later decay back to zero", async ({ page }) => {
+  // Park the opponent far from the play area *before* the countdown
+  // ticks run, not after: post-WS2's much snappier AI driving (and,
+  // post-WS7.A, kickoff spawn spots closer to the arena centre than the
+  // old fixed far-back pose) it can hold boost while chasing the ball
+  // during the 460-tick countdown window itself, leaving its own boost-
+  // trail VFX still decaying when "before" is sampled below — this test
+  // is about the player's own boost-trail VFX lifecycle, not AI activity.
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__PHYSICS_TEST__?.setCarState("car-opponent", { position: { x: 40, y: 1, z: 40 } });
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+  });
+
+  const before = await page.evaluate(() => window.__GAME_TEST__?.runtime.getVfxActiveParticleCount());
+  expect(before).toBe(0);
+
+  const canvas = page.locator("canvas.game-canvas");
+  await page.keyboard.down("w");
+  await canvas.dispatchEvent("mousedown", { button: 0 });
+  await page.evaluate(() => window.__GAME_TEST__?.runtime.start());
+  await page.waitForTimeout(600);
+
+  const duringBoost = await page.evaluate(() =>
+    window.__GAME_TEST__?.runtime.getVfxActiveParticleCount()
+  );
+  expect(duringBoost).toBeGreaterThan(0);
+
+  await page.keyboard.up("w");
+  await canvas.dispatchEvent("mouseup", { button: 0 });
+
+  // WS7.A: kickoff spawns are farther from the arena centre than the old
+  // fixed pose, so the player's drive-in-and-hit-the-ball moment (which
+  // can itself spawn a short-lived ball-impact VFX burst) now sometimes
+  // lands later in real time — poll instead of a single fixed wait so a
+  // late-arriving burst still gets to fully decay before this asserts.
+  await expect
+    .poll(() => page.evaluate(() => window.__GAME_TEST__?.runtime.getVfxActiveParticleCount()), {
+      timeout: 5_000
+    })
+    .toBe(0);
+
+  await page.evaluate(() => window.__GAME_TEST__?.runtime.stop());
+});
+
+test("a goal spawns a celebratory VFX burst", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__GAME_TEST__?.gameFlow?.openMatchSetup();
+    window.__GAME_TEST__?.gameFlow?.startMatch();
+    window.__GAME_TEST__?.gameFlow?.advanceGameTicks(460);
+    window.__GAME_TEST__?.gameFlow?.simulateGoal("player");
+  });
+
+  const matchState = await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.getMatchState());
+  expect(matchState).toBe("GOAL_CELEBRATION");
+
+  // VfxModule is a RenderFrameModule, only stepped by the rAF loop — the
+  // fixed-tick advance above updates physics/match-flow state but not
+  // VFX, so a render frame has to actually run once before it reacts.
+  await page.evaluate(() => window.__GAME_TEST__?.runtime.start());
+  await page.waitForTimeout(150);
+  await page.evaluate(() => window.__GAME_TEST__?.runtime.stop());
+
+  const particleCount = await page.evaluate(() =>
+    window.__GAME_TEST__?.runtime.getVfxActiveParticleCount()
+  );
+  expect(particleCount).toBeGreaterThan(20);
+});
