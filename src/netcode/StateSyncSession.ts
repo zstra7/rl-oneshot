@@ -1,9 +1,11 @@
 import { RemoteCarInputSource } from "@/netcode/CarInputSource";
 import { quantizeCarInput } from "@/netcode/InputQuantize";
+import { recommendDelayTicks, stabilizeDelay } from "@/netcode/AdaptiveDelay";
 import {
   PacketType,
   decodePacket,
   encodeInputPacket,
+  encodePingPacket,
   encodePongPacket,
   encodeSnapshotPacket,
   type InputFrame,
@@ -44,6 +46,8 @@ export interface StateSyncConfig {
   readonly redundancyWindow: number;
   /** Host emits a snapshot every this many simulated ticks. */
   readonly snapshotIntervalTicks: number;
+  /** Wall-clock source (ms), injectable for tests. Defaults to performance.now/Date.now. */
+  readonly now?: () => number;
 }
 
 export const DEFAULT_STATE_SYNC_CONFIG = {
@@ -51,6 +55,17 @@ export const DEFAULT_STATE_SYNC_CONFIG = {
   redundancyWindow: 12,
   snapshotIntervalTicks: 4
 } as const;
+
+/** P1.1: send a ping every this many ticks to measure RTT/jitter. */
+const PING_INTERVAL_TICKS = 30;
+/** P1.1: only re-evaluate the adaptive delay this often (ticks), to avoid thrashing. */
+const ADAPT_INTERVAL_TICKS = 600;
+/** P1.1: EMA smoothing factor for RTT and jitter samples. */
+const RTT_EMA_ALPHA = 0.2;
+
+function defaultNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
 
 export class StateSyncSession {
   public readonly remoteSource: RemoteCarInputSource;
@@ -63,12 +78,33 @@ export class StateSyncSession {
   private pendingSnapshot: StateSyncSnapshot | null = null;
   private latestSnapshotTick = -1;
 
+  private readonly now: () => number;
+  private currentInputDelayTicks: number;
+  private lastPingTick = -PING_INTERVAL_TICKS;
+  private lastAdaptTick = -ADAPT_INTERVAL_TICKS;
+  private nextPingNonce = 1;
+  private readonly pingsSentAt = new Map<number, number>();
+  private rttEmaMs: number | null = null;
+  private jitterEmaMs = 0;
+
   public constructor(private readonly config: StateSyncConfig) {
     this.remoteSource = new RemoteCarInputSource(config.remoteCarId);
+    this.now = config.now ?? defaultNow;
+    this.currentInputDelayTicks = config.inputDelayTicks;
   }
 
   public get inputDelayTicks(): number {
-    return this.config.inputDelayTicks;
+    return this.currentInputDelayTicks;
+  }
+
+  /** EMA round-trip time in milliseconds, or null before any pong has arrived. */
+  public getRttMs(): number | null {
+    return this.rttEmaMs;
+  }
+
+  /** EMA jitter (absolute deviation from the RTT EMA) in milliseconds. */
+  public getJitterMs(): number {
+    return this.jitterEmaMs;
   }
 
   public get isHost(): boolean {
@@ -144,8 +180,21 @@ export class StateSyncSession {
         case PacketType.Ping:
           this.config.link.send(encodePongPacket(packet.nonce));
           break;
-        case PacketType.Pong:
+        case PacketType.Pong: {
+          const sentAt = this.pingsSentAt.get(packet.nonce);
+          if (sentAt !== undefined) {
+            this.pingsSentAt.delete(packet.nonce);
+            const sampleMs = Math.max(0, this.now() - sentAt);
+            if (this.rttEmaMs === null) {
+              this.rttEmaMs = sampleMs;
+              this.jitterEmaMs = 0;
+            } else {
+              this.jitterEmaMs = this.jitterEmaMs + RTT_EMA_ALPHA * (Math.abs(sampleMs - this.rttEmaMs) - this.jitterEmaMs);
+              this.rttEmaMs = this.rttEmaMs + RTT_EMA_ALPHA * (sampleMs - this.rttEmaMs);
+            }
+          }
           break;
+        }
       }
     }
   }
@@ -186,5 +235,50 @@ export class StateSyncSession {
       }
     }
     this.remoteSource.discardBefore(pruneBefore);
+  }
+
+  /**
+   * P1.1: per-tick housekeeping — send a periodic ping (for RTT/jitter
+   * measurement), re-evaluate the adaptive input delay, and prune old
+   * buffers. Call once per simulated tick from the runtime (this folds in
+   * what used to be a standalone `prune(tick)` call).
+   */
+  public onTickHousekeeping(tick: number): void {
+    if (tick - this.lastPingTick >= PING_INTERVAL_TICKS) {
+      this.lastPingTick = tick;
+      const nonce = this.nextPingNonce;
+      this.nextPingNonce = (this.nextPingNonce + 1) >>> 0;
+      this.pingsSentAt.set(nonce, this.now());
+      // Bound the pending-ping map so an entirely lost pong stream can't leak.
+      if (this.pingsSentAt.size > 32) {
+        const oldest = this.pingsSentAt.keys().next().value;
+        if (oldest !== undefined) {
+          this.pingsSentAt.delete(oldest);
+        }
+      }
+      this.config.link.send(encodePingPacket(nonce));
+    }
+    this.maybeAdaptDelay(tick);
+    this.prune(tick);
+  }
+
+  /**
+   * P1.1: adopt a new input delay only every ADAPT_INTERVAL_TICKS and only
+   * when it differs meaningfully from the current one (stabilizeDelay's
+   * hysteresis) — raising the delay is always safe mid-stream (the submit
+   * loop simply samples further ahead); lowering it just waits for the
+   * frontier to catch up. No cross-peer coordination is needed because,
+   * unlike lockstep, the delay is purely local timing under state-sync.
+   */
+  private maybeAdaptDelay(tick: number): void {
+    if (tick - this.lastAdaptTick < ADAPT_INTERVAL_TICKS) {
+      return;
+    }
+    if (this.rttEmaMs === null) {
+      return;
+    }
+    this.lastAdaptTick = tick;
+    const recommended = recommendDelayTicks(this.rttEmaMs, this.jitterEmaMs);
+    this.currentInputDelayTicks = stabilizeDelay(this.currentInputDelayTicks, recommended);
   }
 }

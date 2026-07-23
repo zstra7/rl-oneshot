@@ -843,7 +843,7 @@ export class GameRuntime implements GameRuntimeFacade {
       });
     }
     if (online) {
-      online.session.prune(tick);
+      online.session.onTickHousekeeping(tick);
     }
 
     this.dispatcher.emit("runtime:fixed-tick", {
