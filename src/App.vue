@@ -17,6 +17,7 @@ import SettingsPanel from "@/components/menu/SettingsPanel.vue";
 import TournamentBracket from "@/components/menu/TournamentBracket.vue";
 import TournamentVictory from "@/components/menu/TournamentVictory.vue";
 import { useGameRuntime } from "@/core/useGameRuntime";
+import { parseRoomFromSearch } from "@/netcode/RoomLink";
 import { useApplicationStore } from "@/stores/applicationStore";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
 import { useOnlineStore } from "@/stores/onlineStore";
@@ -35,11 +36,15 @@ const showOnlineLobby = computed(
   () => matchFlowStore.matchState === "MAIN_MENU" && onlineStore.screen !== "closed" && onlineStore.screen !== "in-match"
 );
 
-// N6: `?room=CODE` deep link — open the lobby straight into a join attempt.
-const roomParam = new URLSearchParams(window.location.search).get("room");
-if (roomParam) {
+// N6/P4.1: `?room=CODE` deep link — open the lobby straight into a join
+// attempt, then strip the param so a refresh/back-nav doesn't re-trigger it.
+const roomCodeFromLink = parseRoomFromSearch(window.location.search);
+if (roomCodeFromLink) {
   onlineStore.openHome();
-  onlineStore.joinRoom(roomParam);
+  onlineStore.joinRoom(roomCodeFromLink);
+  const url = new URL(window.location.href);
+  url.searchParams.delete("room");
+  window.history.replaceState(window.history.state, "", url);
 }
 
 // R11: console-convention gamepad menu navigation, instantiated once for
