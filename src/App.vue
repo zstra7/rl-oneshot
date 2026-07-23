@@ -12,19 +12,35 @@ import ResultsScreen from "@/components/hud/ResultsScreen.vue";
 import CarCustomise from "@/components/menu/CarCustomise.vue";
 import MainMenu from "@/components/menu/MainMenu.vue";
 import MatchSetup from "@/components/menu/MatchSetup.vue";
+import OnlineLobby from "@/components/menu/OnlineLobby.vue";
 import SettingsPanel from "@/components/menu/SettingsPanel.vue";
 import TournamentBracket from "@/components/menu/TournamentBracket.vue";
 import TournamentVictory from "@/components/menu/TournamentVictory.vue";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import { useApplicationStore } from "@/stores/applicationStore";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
+import { useOnlineStore } from "@/stores/onlineStore";
 import { useTournamentStore } from "@/stores/tournamentStore";
 import { useMenuGamepadNavigation } from "@/ui/useMenuGamepadNavigation";
 
 const applicationStore = useApplicationStore();
 const matchFlowStore = useMatchFlowStore();
 const tournamentStore = useTournamentStore();
+const onlineStore = useOnlineStore();
 const runtime = useGameRuntime();
+
+// N6: the online lobby overlays the main menu; exactly one [data-menu-root]
+// is ever visible (R11 nav invariant), so MainMenu hides while it's open.
+const showOnlineLobby = computed(
+  () => matchFlowStore.matchState === "MAIN_MENU" && onlineStore.screen !== "closed" && onlineStore.screen !== "in-match"
+);
+
+// N6: `?room=CODE` deep link — open the lobby straight into a join attempt.
+const roomParam = new URLSearchParams(window.location.search).get("room");
+if (roomParam) {
+  onlineStore.openHome();
+  onlineStore.joinRoom(roomParam);
+}
 
 // R11: console-convention gamepad menu navigation, instantiated once for
 // the whole app — owns its own runtime-event subscription/lifecycle.
@@ -110,7 +126,8 @@ const showGameplayHud = computed(
     <GameCanvas />
     <QuickChatOverlay />
 
-    <MainMenu v-if="matchState === 'MAIN_MENU'" />
+    <OnlineLobby v-if="showOnlineLobby" />
+    <MainMenu v-else-if="matchState === 'MAIN_MENU'" />
     <MatchSetup v-else-if="matchState === 'MATCH_SETUP'" />
     <CarCustomise v-else-if="matchState === 'CAR_CUSTOMISE'" />
     <TournamentBracket v-else-if="matchState === 'TOURNAMENT_BRACKET'" />

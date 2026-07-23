@@ -161,7 +161,7 @@ test("main menu: every item shows a visible focus outline while dpad-navigating"
   await expect.poll(() => activeElementText(page)).toBe("PLAY");
   await expectFocusVisible(page);
 
-  for (const label of ["CUSTOMISE CAR", "TOURNAMENT", "SETTINGS"]) {
+  for (const label of ["ONLINE", "CUSTOMISE CAR", "TOURNAMENT", "SETTINGS"]) {
     await pulse(page, index, DPAD_DOWN);
     expect(await activeElementText(page)).toBe(label);
     await expectFocusVisible(page);

@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { useGameRuntime } from "@/core/useGameRuntime";
+import { useOnlineStore } from "@/stores/onlineStore";
 
 const runtime = useGameRuntime();
+const online = useOnlineStore();
 
 function openMatchSetup(): void {
   runtime.playUiSound("confirm");
   runtime.openMatchSetup();
+}
+
+function openOnline(): void {
+  runtime.playUiSound("confirm");
+  online.openHome();
 }
 
 function openSettings(): void {
@@ -44,6 +51,15 @@ function openTournament(): void {
         type="button"
         class="menu-item wo-item"
         data-index="02"
+        data-testid="open-online"
+        @click="openOnline"
+      >
+        ONLINE
+      </button>
+      <button
+        type="button"
+        class="menu-item wo-item"
+        data-index="03"
         data-testid="customise-car"
         @click="openCarCustomise"
       >
@@ -52,13 +68,13 @@ function openTournament(): void {
       <button
         type="button"
         class="menu-item wo-item"
-        data-index="03"
+        data-index="04"
         data-testid="open-tournament"
         @click="openTournament"
       >
         TOURNAMENT
       </button>
-      <button type="button" class="menu-item wo-item" data-index="04" @click="openSettings">
+      <button type="button" class="menu-item wo-item" data-index="05" @click="openSettings">
         SETTINGS
       </button>
     </nav>
