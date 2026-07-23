@@ -37,14 +37,56 @@ async function snapshotAfterPlay(): Promise<StateSyncSnapshot> {
   };
 }
 
+/** Recursively assert every number in `actual` is within `eps` of the corresponding number in `expected`. */
+function assertCloseDeep(actual: unknown, expected: unknown, eps: number, path = "root"): void {
+  if (typeof expected === "number") {
+    expect(typeof actual, path).toBe("number");
+    expect(Math.abs((actual as number) - expected), path).toBeLessThanOrEqual(eps);
+    return;
+  }
+  if (Array.isArray(expected)) {
+    expect(Array.isArray(actual), path).toBe(true);
+    const actualArr = actual as unknown[];
+    expect(actualArr.length, path).toBe(expected.length);
+    expected.forEach((v, i) => assertCloseDeep(actualArr[i], v, eps, `${path}[${i}]`));
+    return;
+  }
+  if (expected !== null && typeof expected === "object") {
+    expect(actual !== null && typeof actual === "object", path).toBe(true);
+    for (const key of Object.keys(expected)) {
+      assertCloseDeep((actual as Record<string, unknown>)[key], (expected as Record<string, unknown>)[key], eps, `${path}.${key}`);
+    }
+    return;
+  }
+  expect(actual, path).toEqual(expected);
+}
+
 describe("S2 snapshot codec", () => {
-  it("round-trips a real snapshot losslessly through the wire", async () => {
+  it("round-trips a real snapshot through the wire (P1.4: rounded to 5 decimals, not bit-exact)", async () => {
     const snapshot = await snapshotAfterPlay();
     const decoded = decodePacket(encodeSnapshotPacket(snapshot));
     expect(decoded?.type).toBe(PacketType.Snapshot);
     if (decoded?.type !== PacketType.Snapshot) throw new Error("wrong type");
-    // JSON is lossless for the plain number/bool/string fields we carry.
-    expect(decoded.snapshot).toEqual(snapshot);
+    // P1.4 rounds wire floats to 5 decimal places (0.01mm) — every field is
+    // still within that tolerance of the original, just not bit-identical.
+    assertCloseDeep(decoded.snapshot, snapshot, 1e-4);
+  });
+
+  it("P1.4: a real captured snapshot is compact on the wire", async () => {
+    const snapshot = await snapshotAfterPlay();
+    const bytes = encodeSnapshotPacket(snapshot);
+    expect(bytes.length).toBeLessThan(4000);
+
+    // And still round-trips with every position within 1e-4 of the original.
+    const decoded = decodePacket(bytes);
+    if (decoded?.type !== PacketType.Snapshot) throw new Error("wrong type");
+    for (let i = 0; i < snapshot.world.cars.length; i += 1) {
+      const before = snapshot.world.cars[i]!.position;
+      const after = decoded.snapshot.world.cars[i]!.position;
+      expect(Math.abs(before.x - after.x)).toBeLessThan(1e-4);
+      expect(Math.abs(before.y - after.y)).toBeLessThan(1e-4);
+      expect(Math.abs(before.z - after.z)).toBeLessThan(1e-4);
+    }
   });
 
   it("rejects a malformed snapshot packet rather than crashing", () => {

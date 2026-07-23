@@ -128,8 +128,23 @@ const textDecoder = new TextDecoder();
  * per car and the whole point of state-sync is robustness, not squeezing
  * bytes — at 20-30Hz the size is trivial for a DataChannel.
  */
+const SNAPSHOT_FLOAT_PRECISION = 1e5;
+
+/**
+ * P1.4: round every float in the snapshot to 5 decimal places (0.01mm for a
+ * position in metres) before it goes on the wire — replay reconciliation on
+ * the guest already corrects any drift far coarser than this, so the extra
+ * digits are pure waste. Integers (ticks, counts) pass through untouched.
+ */
+function roundSnapshotNumber(_key: string, value: unknown): unknown {
+  if (typeof value !== "number" || !Number.isFinite(value) || Number.isInteger(value)) {
+    return value;
+  }
+  return Math.round(value * SNAPSHOT_FLOAT_PRECISION) / SNAPSHOT_FLOAT_PRECISION;
+}
+
 export function encodeSnapshotPacket(snapshot: StateSyncSnapshot): Uint8Array {
-  const json = textEncoder.encode(JSON.stringify(snapshot));
+  const json = textEncoder.encode(JSON.stringify(snapshot, roundSnapshotNumber));
   const bytes = new Uint8Array(1 + json.length);
   bytes[0] = PacketType.Snapshot;
   bytes.set(json, 1);
