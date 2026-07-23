@@ -121,3 +121,31 @@ Record deviations from `plan/retro_audio_module_spec.md`.
   meaningful checks (an explicit `active: true` emit turns the voice on,
   an explicit `active: false` emit turns it off) — the "before" state
   isn't part of what the test is actually verifying.
+
+## Post-launch polish pass — F6 (engine sound removed, plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+Per user request, the engine hum described above is removed from live
+gameplay — deleted `AudioEventAdapter.detectEngineState` (the method,
+its call site, and the `engineActive` hysteresis-latch field entirely).
+Every other sound (boost, dodge, jump, ball-hit, boost-pad pickup/
+respawn, countdown, goal, overtime, match-end, UI navigate/confirm/
+cancel) is untouched.
+
+**The underlying capability is deliberately kept, only the real-gameplay
+emitter is gone**: `audio:engine-state`'s type definition
+(`AudioTypes.ts`) and `RetroAudioModule`'s handling of it (the
+`ContinuousNoiseVoice` mapping described above) are both untouched — the
+WS7.E "engine-state continuous voice starts and stops with activity"
+test, which drives the event directly via `__AUDIO_TEST__.emit()`
+bypassing `AudioEventAdapter` entirely, still passes unmodified. Only
+the code path that would have fired it during real driving is gone.
+
+The old "driving during a live match produces the player's engine hum
+voice" Playwright test is rewritten to its inverse: drive with a real
+held key for the same real-time stretch and assert the engine voice
+never appears, while *also* holding the boost binding at the same time
+and asserting the boost voice — a real `AudioEventAdapter`-driven
+voice — still activates normally. That second assertion exists to catch
+an over-deletion (e.g. accidentally breaking `detectBoostState` while
+removing the adjacent `detectEngineState` call) that a "nothing happens"
+test alone wouldn't distinguish from a correct fix.

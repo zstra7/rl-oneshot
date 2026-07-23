@@ -41,8 +41,6 @@ export class AudioEventAdapter implements RenderFrameModule {
   private previousMatchState: MatchState | null = null;
   private previousPlayerScore = 0;
   private previousOpponentScore = 0;
-  /** WS7.E: hysteresis latch — player-car engine hum only (AI engine noise would just be mud). */
-  private engineActive = false;
 
   public constructor(
     private readonly physics: PhysicsFacade,
@@ -55,7 +53,6 @@ export class AudioEventAdapter implements RenderFrameModule {
       this.detectJumpAndDodge(carId);
       this.detectBoostState(carId);
     }
-    this.detectEngineState();
     this.detectBallHit();
     this.detectBoostPadEvents();
     this.detectMatchStateEvents();
@@ -100,28 +97,6 @@ export class AudioEventAdapter implements RenderFrameModule {
       carId,
       active: consuming,
       boostAmount: car.boostAmount
-    });
-  }
-
-  /**
-   * WS7.E (plan/POLISH_OVERHAUL_PLAN.md): a continuous, speed-scaled
-   * engine hum for the player car only. Hysteresis (activate above
-   * 0.5 m/s, deactivate only below 0.3 m/s) avoids rapid start/stop
-   * chatter right at the threshold.
-   */
-  private detectEngineState(): void {
-    const car = this.physics.getCarState(PLAYER_CAR_ID);
-    if (this.engineActive) {
-      this.engineActive = car.speed >= 0.3;
-    } else {
-      this.engineActive = car.speed > 0.5;
-    }
-
-    this.audio.consumeEvent({
-      type: "audio:engine-state",
-      carId: PLAYER_CAR_ID,
-      active: this.engineActive,
-      speed: car.speed
     });
   }
 
@@ -205,6 +180,5 @@ export class AudioEventAdapter implements RenderFrameModule {
     this.previousDodgeActive.clear();
     this.previousBoostAmount.clear();
     this.previousPadActive.clear();
-    this.engineActive = false;
   }
 }

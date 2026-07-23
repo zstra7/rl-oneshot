@@ -208,7 +208,17 @@ test("playing a live match produces scheduled audio activity without console err
   expect(pageErrors).toEqual([]);
 });
 
-test("WS7.E: driving during a live match produces the player's engine hum voice", async ({ page }) => {
+test("F6: driving during a live match produces NO engine hum voice, but boost still does", async ({ page }) => {
+  // F6 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): the engine hum was
+  // removed per user request; the underlying "engine:car-*" continuous
+  // voice capability in RetroAudioModule is untouched (see the test above,
+  // which drives it directly via __AUDIO_TEST__.emit) — only
+  // AudioEventAdapter's real-gameplay emission of `audio:engine-state`
+  // was deleted. Drive with real input for a real stretch of time and
+  // confirm no engine voice ever appears, while also confirming boost
+  // (a real AudioEventAdapter-driven voice) still activates on the same
+  // input — this guards against having over-deleted adjacent detection
+  // logic by accident.
   await page.evaluate(() => window.__AUDIO_TEST__?.resume());
 
   await page.evaluate(() => window.__GAME_TEST__?.gameFlow?.openMatchSetup());
@@ -221,15 +231,24 @@ test("WS7.E: driving during a live match produces the player's engine hum voice"
     .toBe("PLAYING");
 
   await page.keyboard.down("KeyW");
+  await page.mouse.down({ button: "left" }); // default boost binding
 
   let sawEngineVoice = false;
-  for (let i = 0; i < 40 && !sawEngineVoice; i += 1) {
+  let sawBoostVoice = false;
+  for (let i = 0; i < 40; i += 1) {
     await page.waitForTimeout(100);
     const diagnostics = await page.evaluate(() => window.__AUDIO_TEST__?.getDiagnostics());
-    sawEngineVoice = diagnostics?.activeContinuousVoices.includes("engine:car-player") ?? false;
+    if (diagnostics?.activeContinuousVoices.includes("engine:car-player")) {
+      sawEngineVoice = true;
+    }
+    if (diagnostics?.activeContinuousVoices.includes("boost:car-player")) {
+      sawBoostVoice = true;
+    }
   }
 
   await page.keyboard.up("KeyW");
+  await page.mouse.up({ button: "left" });
 
-  expect(sawEngineVoice).toBe(true);
+  expect(sawEngineVoice).toBe(false);
+  expect(sawBoostVoice).toBe(true);
 });
