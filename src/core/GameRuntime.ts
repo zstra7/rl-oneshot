@@ -39,6 +39,9 @@ import {
 } from "@/netcode/CarInputSource";
 import type { OnlineMatchContext } from "@/netcode/MultiplayerSession";
 import { LEAD_EMA_ALPHA, computeRateScale, computeTargetLeadTicks } from "@/netcode/RateAlignment";
+import { FALLBACK_NICKNAME } from "@/netcode/Nickname";
+import { parsePeerPayload } from "@/netcode/PeerCosmetics";
+import type { CarTeamId } from "@/assets/cars/CarModelTypes";
 import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
@@ -147,6 +150,8 @@ export interface GameRuntimeFacade {
   startOnlineSession(context: OnlineMatchContext, durationMinutes: MatchDurationMinutes): void;
   endOnlineSession(): void;
   isOnlineSession(): boolean;
+  /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
+  getOnlineNicknames(): { local: string; remote: string } | null;
 
   // -- Match flow (game-flow spec sections 28/35/39) --
 
@@ -335,6 +340,8 @@ export class GameRuntime implements GameRuntimeFacade {
   private localPlayerCarId: CarId = PLAYER_CAR_ID;
   /** P1.3 (guest only): EMA of the replay "lead" (guest tick ahead of the host's snapshot tick). */
   private onlineLeadEma = 4;
+  /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
+  private onlineNicknames: { local: string; remote: string } | null = null;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -668,20 +675,60 @@ export class GameRuntime implements GameRuntimeFacade {
     // The guest follows the host's authoritative match flow; the host runs it.
     modules.gameFlow.setOnlineGuest(!context.isHost);
     modules.gameFlow.startOnlineMatch({ durationMinutes, kickoffSeed: context.kickoffSeed });
+
+    // P2.3/P2.4: apply each peer's nickname + car cosmetics to the CORRECT
+    // car (offerer -> car-player, answerer -> car-opponent — the same
+    // mapping MultiplayerSession used to assign localCarId/remoteCarId).
+    this.onlineNicknames = { local: FALLBACK_NICKNAME, remote: FALLBACK_NICKNAME };
+    for (const peer of context.peers) {
+      const carId = peer.role === "offerer" ? PLAYER_CAR_ID : OPPONENT_CAR_ID;
+      const team: CarTeamId = carId === OPPONENT_CAR_ID ? "opponent" : "player";
+      const cosmetics = parsePeerPayload(peer.payload);
+      if (cosmetics.bodyColor) {
+        modules.assets.setCarColorOverride(team, cosmetics.bodyColor);
+        this.physicsRenderBinding?.rebuildCarVisual(carId);
+      }
+      if (cosmetics.boostColor) {
+        this.vfxModule?.setCarBoostColor(carId, cosmetics.boostColor);
+      }
+      if (carId === context.localCarId) {
+        this.onlineNicknames = { ...this.onlineNicknames, local: cosmetics.name };
+      } else {
+        this.onlineNicknames = { ...this.onlineNicknames, remote: cosmetics.name };
+      }
+    }
   }
 
   /** N6: leave online mode and restore single-player timing + input sources. */
   public endOnlineSession(): void {
     this.onlineSession = null;
     this.localPlayerCarId = PLAYER_CAR_ID;
+    this.onlineNicknames = null;
     this.cameraController?.setTargetCar(PLAYER_CAR_ID);
     this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
     this.requireModules().gameFlow.setOnlineGuest(false);
+
+    // P2.3: clear the online opponent's cosmetics (car-opponent restores to
+    // the fixed team-magenta default; the SP AI never customises itself),
+    // and restore the local player's own car to their Customise Car choice
+    // — which may have been overwritten if this client played as the guest
+    // (car-player then belonged to the remote host during the match).
+    const modules = this.requireModules();
+    modules.assets.setCarColorOverride("opponent", null);
+    this.vfxModule?.setCarBoostColor(OPPONENT_CAR_ID, null);
+    this.physicsRenderBinding?.rebuildCarVisual(OPPONENT_CAR_ID);
+    this.setPlayerCarColors(this.playerCarColors);
+
     this.configureSinglePlayerInputSources();
   }
 
   public isOnlineSession(): boolean {
     return this.onlineSession !== null;
+  }
+
+  /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
+  public getOnlineNicknames(): { local: string; remote: string } | null {
+    return this.onlineNicknames;
   }
 
   /**

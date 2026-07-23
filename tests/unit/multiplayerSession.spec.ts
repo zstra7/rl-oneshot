@@ -96,8 +96,8 @@ describe("N5 MultiplayerSession orchestration", () => {
       type: "match-start",
       kickoffSeed: 7,
       peers: [
-        { id: "p1", role: "offerer", payload: { name: "them" } },
-        { id: "p2", role: "answerer", payload: { name: "me" } }
+        { id: "p1", role: "offerer", payload: { name: "them", bodyColor: "#ff0000" } },
+        { id: "p2", role: "answerer", payload: { name: "me", bodyColor: "#00ff00" } }
       ]
     });
     const matchReady = h.events.find((e) => e.type === "match-ready");
@@ -111,6 +111,13 @@ describe("N5 MultiplayerSession orchestration", () => {
     expect(matchReady.context.remoteCarId).toBe("car-player");
     expect(matchReady.context.isHost).toBe(false);
     expect(matchReady.context.session.isHost).toBe(false);
+    // P2.2: the transport is payload-agnostic — peers' handshake payloads
+    // (nickname + cosmetics) surface untouched; parsing/sanitizing happens
+    // at the runtime edge (PeerCosmetics.parsePeerPayload), not here.
+    expect(matchReady.context.peers).toEqual([
+      { id: "p1", role: "offerer", payload: { name: "them", bodyColor: "#ff0000" } },
+      { id: "p2", role: "answerer", payload: { name: "me", bodyColor: "#00ff00" } }
+    ]);
   });
 
   it("assigns the offerer to car-player and makes it the authoritative host", () => {

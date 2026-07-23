@@ -2,6 +2,8 @@ import { defineStore } from "pinia";
 
 import { getGameRuntime } from "@/core/GameRuntimeFactory";
 import { MultiplayerSession, type MultiplayerEvent } from "@/netcode/MultiplayerSession";
+import { buildHandshakePayload } from "@/netcode/PeerCosmetics";
+import { useSettingsStore } from "@/stores/settingsStore";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
 
 /**
@@ -145,10 +147,19 @@ export const useOnlineStore = defineStore("online", {
     async startSession(): Promise<void> {
       session?.close();
       const iceServers = await fetchIceServers();
+      // P2.2: carry this client's nickname + Customise Car cosmetics in the
+      // handshake — relayed verbatim by the control plane, parsed (and
+      // validated) by the receiving peer's runtime on match-ready.
+      const settings = useSettingsStore();
+      const handshakePayload = buildHandshakePayload(
+        settings.settings.online.nickname,
+        settings.settings.car.bodyColor,
+        settings.settings.car.boostColor
+      );
       session = new MultiplayerSession({
         controlUrl: controlUrl(),
         buildHash: MP_BUILD_HASH,
-        handshakePayload: {},
+        handshakePayload,
         iceServers,
         onEvent: (event) => this.handleEvent(event)
       });

@@ -29,6 +29,19 @@ const ballCameraLabel = computed(() => {
 
 const session = computed(() => matchFlowStore.session);
 
+// P2.4: in an online match, show each side's nickname instead of YOU/CPU.
+// The runtime already flips score perspective for the answerer, so the
+// left column is always "the local player" and the right is always "the
+// other side" regardless of host/guest role.
+const playerLabel = computed(() => {
+  void matchFlowStore.session; // force re-check each tick, same pattern as ballCameraLabel
+  return runtime.isOnlineSession() ? (runtime.getOnlineNicknames()?.local ?? "YOU") : "YOU";
+});
+const opponentLabel = computed(() => {
+  void matchFlowStore.session;
+  return runtime.isOnlineSession() ? (runtime.getOnlineNicknames()?.remote ?? "OPPONENT") : "CPU";
+});
+
 const isOvertime = computed(
   () => session.value.matchState === "OVERTIME_PLAYING" || session.value.matchState === "OVERTIME_INTRO"
 );
@@ -57,8 +70,8 @@ function formatClock(totalSeconds: number): string {
     </div>
 
     <div class="labels">
-      <span class="label wo-label player">YOU</span>
-      <span class="label wo-label opponent">CPU</span>
+      <span class="label wo-label player" data-testid="player-label">{{ playerLabel }}</span>
+      <span class="label wo-label opponent" data-testid="opponent-label">{{ opponentLabel }}</span>
     </div>
 
     <div

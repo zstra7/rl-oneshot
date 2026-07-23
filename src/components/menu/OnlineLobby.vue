@@ -2,13 +2,26 @@
 import { computed, ref } from "vue";
 
 import { useGameRuntime } from "@/core/useGameRuntime";
+import { sanitizeNickname } from "@/netcode/Nickname";
 import { useOnlineStore } from "@/stores/onlineStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 const runtime = useGameRuntime();
 const online = useOnlineStore();
+const settings = useSettingsStore();
 
 const joinCode = ref("");
 const copied = ref(false);
+
+// P2.1: the nickname shown to the other peer instead of YOU/CPU — sanitized
+// on blur (a stray disallowed character mid-typing is fine; committing it
+// to settings is where it gets cleaned).
+const nicknameInput = ref(settings.settings.online.nickname);
+function commitNickname(): void {
+  const clean = sanitizeNickname(nicknameInput.value);
+  nicknameInput.value = clean;
+  settings.update({ online: { nickname: clean } });
+}
 
 const shareUrl = computed(() => `${window.location.origin}${window.location.pathname}?room=${online.roomCode}`);
 
@@ -58,6 +71,19 @@ async function copyCode(): Promise<void> {
 
     <!-- Home -->
     <nav v-if="online.screen === 'home'" class="menu-items">
+      <div class="nickname-row">
+        <label class="wo-label" for="online-nickname">NICKNAME</label>
+        <input
+          id="online-nickname"
+          v-model="nicknameInput"
+          class="nickname-input"
+          data-testid="online-nickname"
+          maxlength="12"
+          autocomplete="off"
+          @blur="commitNickname"
+          @keyup.enter="commitNickname"
+        />
+      </div>
       <button type="button" class="menu-item wo-item" data-index="01" data-testid="online-quick-match" autofocus @click="quickMatch">
         QUICK MATCH
       </button>
@@ -172,6 +198,23 @@ async function copyCode(): Promise<void> {
 .menu-item:hover,
 .menu-item:focus-visible {
   transform: translateX(6px);
+}
+.nickname-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+.nickname-input {
+  font-family: var(--font-ui);
+  font-size: 1.1rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  width: 10em;
+  padding: 0.35rem 0.6rem;
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid var(--ui-cyan);
+  color: var(--ui-ink);
 }
 .code-input {
   font-family: var(--font-ui);

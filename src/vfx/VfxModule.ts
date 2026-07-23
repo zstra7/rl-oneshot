@@ -110,7 +110,8 @@ export class VfxModule implements RenderFrameModule {
   private previousPlayerScore = 0;
   private previousOpponentScore = 0;
   /** R12.2: Customise Car boost-trail colour override for the player's car, boost-trail spawn path only — goal celebration always keeps team colours. */
-  private playerBoostColorOverride: THREE.ColorRepresentation | null = null;
+  /** R12.2/P2.3: per-car boost-trail colour override — the player's own Customise Car choice, or (online) either peer's. */
+  private readonly boostColorOverrides = new Map<CarId, THREE.ColorRepresentation>();
   /** R12.4: car currently showing the stationary Customise Car boost-trail preview, or null while off-screen. */
   private boostPreviewCarId: CarId | null = null;
   private boostPreviewFrameCounter = 0;
@@ -175,17 +176,27 @@ export class VfxModule implements RenderFrameModule {
     this.uploadBuffers();
   }
 
-  /** R12.2: boost-trail spawn colour for `carId` — the live override for the player's own car, team colour otherwise. Kept distinct from `teamColor`/goal-celebration's colour lookup by call site, not by sharing this function. */
+  /** R12.2: boost-trail spawn colour for `carId` — a live override if set (see `setPlayerBoostColor`/`setCarBoostColor`), team colour otherwise. Kept distinct from `teamColor`/goal-celebration's colour lookup by call site, not by sharing this function. */
   private boostTrailColor(carId: CarId): THREE.ColorRepresentation {
-    if (carId === PLAYER_CAR_ID && this.playerBoostColorOverride) {
-      return this.playerBoostColorOverride;
+    const override = this.boostColorOverrides.get(carId);
+    if (override) {
+      return override;
     }
     return teamColor(carIdToTeam(carId));
   }
 
   /** R12.2: live override applied only to the boost-trail spawn path (see `boostTrailColor`) — null restores the team-cyan default. */
   public setPlayerBoostColor(hex: string | null): void {
-    this.playerBoostColorOverride = hex;
+    this.setCarBoostColor(PLAYER_CAR_ID, hex);
+  }
+
+  /** P2.3: boost-trail colour override for ANY car — generalises `setPlayerBoostColor` so the online opponent's chosen colour applies to `car-opponent` too. */
+  public setCarBoostColor(carId: CarId, hex: string | null): void {
+    if (hex) {
+      this.boostColorOverrides.set(carId, hex);
+    } else {
+      this.boostColorOverrides.delete(carId);
+    }
   }
 
   /** R12.4: Customise Car menu preview — while set, spawns a boost-trail burst at `carId`'s rear roughly every 3rd frame, bypassing the normal boost-consumption detection (the car is stationary in the menu, so there is no real boost draw to detect). Null stops the preview. */

@@ -11,10 +11,27 @@ const tournamentStore = useTournamentStore();
 
 const session = computed(() => matchFlowStore.session);
 
+// P2.4: in an online match, the winner-perspective flip already means
+// "player" = the local human — replace VICTORY/DEFEAT with the winner's
+// actual nickname for a friendlier result.
 const resultLabel = computed(() => {
+  if (runtime.isOnlineSession()) {
+    const names = runtime.getOnlineNicknames();
+    if (session.value.winner === "player") return `${names?.local ?? "YOU"} WINS`;
+    if (session.value.winner === "opponent") return `${names?.remote ?? "OPPONENT"} WINS`;
+    return "DRAW";
+  }
   if (session.value.winner === "player") return "VICTORY";
   if (session.value.winner === "opponent") return "DEFEAT";
   return "DRAW";
+});
+
+// Styling stays keyed to the winner itself (not the display text), so the
+// online nickname variant still gets the right victory/defeat/draw colour.
+const resultClass = computed(() => {
+  if (session.value.winner === "player") return "victory";
+  if (session.value.winner === "opponent") return "defeat";
+  return "draw";
 });
 
 const wasOvertime = computed(() => session.value.overtimeElapsed > 0);
@@ -52,7 +69,7 @@ function leaveTournament(): void {
 <template>
   <div class="results-overlay" data-testid="results-screen" data-menu-root>
     <div class="results-panel wo-panel">
-      <h2 class="result wo-title" :class="resultLabel.toLowerCase()">{{ resultLabel }}</h2>
+      <h2 class="result wo-title" :class="resultClass">{{ resultLabel }}</h2>
       <div class="score wo-numeral" data-testid="final-score">
         {{ session.playerScore }} - {{ session.opponentScore }}
       </div>

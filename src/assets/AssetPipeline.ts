@@ -14,7 +14,7 @@ import {
   type AssetPipelineState
 } from "@/assets/AssetTypes";
 import { CarAssetLoader } from "@/assets/cars/CarAssetLoader";
-import { derivePlayerProfile, getCarDescriptor, getTeamVisualProfile } from "@/assets/cars/CarDescriptors";
+import { deriveTeamProfile, getCarDescriptor, getTeamVisualProfile } from "@/assets/cars/CarDescriptors";
 import type { CarAssetInspectionReport, CarTeamId, LoadedCarSource } from "@/assets/cars/CarModelTypes";
 import { createProceduralCarFallback } from "@/assets/cars/ProceduralCarFallback";
 import { validateCarAsset } from "@/assets/cars/CarValidation";
@@ -58,8 +58,8 @@ export class AssetPipeline implements GameModule {
   private readonly errors: string[] = [];
   private context: ProceduralAssetContext | null = null;
   private activePreview: ProceduralPreviewHandle | null = null;
-  /** R12.2: Customise Car body-colour override for the player's car, or null for the fixed team-cyan default. */
-  private playerCarColorOverride: string | null = null;
+  /** R12.2/P2.3: per-team body-colour override — the player's own Customise Car choice, or (online) either peer's. */
+  private readonly carColorOverrides = new Map<CarTeamId, string>();
 
   private readonly carLoader = new CarAssetLoader();
   private readonly loadedCarSources = new Map<CarTeamId, LoadedCarSource>();
@@ -226,29 +226,41 @@ export class AssetPipeline implements GameModule {
    * (`PhysicsRenderBinding`), so both show the same visual per car.
    */
   public createCarVisual(team: CarTeamId): THREE.Group {
-    const profile =
-      team === "player" && this.playerCarColorOverride
-        ? derivePlayerProfile(this.playerCarColorOverride)
-        : getTeamVisualProfile(team);
+    const override = this.carColorOverrides.get(team) ?? null;
+    const profile = override ? deriveTeamProfile(team, override) : getTeamVisualProfile(team);
 
     const source = this.loadedCarSources.get(team);
     if (source && !this.carUsesFallback.get(team)) {
       return this.carLoader.createInstance(source, profile);
     }
-    return createProceduralCarFallback(
-      this.requireContext(),
-      team,
-      team === "player" ? this.playerCarColorOverride : null
-    );
+    return createProceduralCarFallback(this.requireContext(), team, override);
   }
 
   /** R12.2: Customise Car live-preview colour override for the player's car — null restores the fixed team-cyan default. */
   public setPlayerCarColorOverride(hex: string | null): void {
-    this.playerCarColorOverride = hex;
+    this.setCarColorOverride("player", hex);
   }
 
   public getPlayerCarColorOverride(): string | null {
-    return this.playerCarColorOverride;
+    return this.getCarColorOverride("player");
+  }
+
+  /**
+   * P2.3: body-colour override for EITHER team's car — generalises
+   * `setPlayerCarColorOverride` so the online opponent's chosen colour can
+   * be applied to `car-opponent` the same way. `hex` must already be a
+   * validated `#rrggbb` string (or null to restore the team default).
+   */
+  public setCarColorOverride(team: CarTeamId, hex: string | null): void {
+    if (hex) {
+      this.carColorOverrides.set(team, hex);
+    } else {
+      this.carColorOverrides.delete(team);
+    }
+  }
+
+  public getCarColorOverride(team: CarTeamId): string | null {
+    return this.carColorOverrides.get(team) ?? null;
   }
 
   public createBallVisual(): THREE.Group {
