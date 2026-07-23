@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
+import { MatchFlowController } from "@/game-flow/MatchFlowController";
 import { DEFAULT_STATE_SYNC_CONFIG, StateSyncSession } from "@/netcode/StateSyncSession";
 import { createFakeNetwork } from "@/netcode/testing/FakeLink";
 import type { StateSyncSnapshot } from "@/netcode/stateSync";
+import { PhysicsFacade } from "@/physics/PhysicsFacade";
 import { NEUTRAL_CAR_INPUT, type CarInput } from "@/physics/PhysicsTypes";
 
 const cfg = DEFAULT_STATE_SYNC_CONFIG;
+
+function makeClock(msPerTick: number) {
+  let ticks = 0;
+  return { now: () => ticks * msPerTick, advance: (n: number) => { ticks += n; } };
+}
 
 function makeSnapshot(tick: number): StateSyncSnapshot {
   return {
@@ -126,5 +133,70 @@ describe("S3 StateSyncSession", () => {
     expect(host.shouldSnapshot(cfg.snapshotIntervalTicks)).toBe(true);
     expect(host.shouldSnapshot(1)).toBe(false);
     expect(guest.shouldSnapshot(0)).toBe(false);
+  });
+});
+
+describe("P4.2 msSinceRemoteActivity (silent-abandonment detection signal)", () => {
+  it("grows with an injected clock and resets to ~0 on any received packet", () => {
+    const clock = makeClock(50); // 50ms per tick
+    const net = createFakeNetwork({ latencyTicks: 1 }, 31);
+    const host = new StateSyncSession({
+      localCarId: PLAYER_CAR_ID, remoteCarId: OPPONENT_CAR_ID, link: net.endpointA, isHost: true, now: clock.now, ...cfg
+    });
+    const guest = new StateSyncSession({
+      localCarId: OPPONENT_CAR_ID, remoteCarId: PLAYER_CAR_ID, link: net.endpointB, isHost: false, now: clock.now, ...cfg
+    });
+
+    expect(host.msSinceRemoteActivity()).toBe(0);
+
+    // Silence: nothing arrives, the clock advances, the signal grows.
+    clock.advance(100); // 5000ms
+    expect(host.msSinceRemoteActivity()).toBe(5000);
+
+    // Any packet at all — here, an input submission from the guest — counts
+    // as proof of life and resets the signal.
+    guest.submitLocalInput(0, { ...NEUTRAL_CAR_INPUT, throttle: 0.5 });
+    net.advanceClock(3);
+    host.pump();
+    expect(host.msSinceRemoteActivity()).toBeLessThan(200);
+
+    clock.advance(40); // another 2000ms of silence
+    expect(host.msSinceRemoteActivity()).toBeGreaterThanOrEqual(2000);
+  });
+});
+
+describe("P4.2 forfeit-by-abandonment lands the flow in MATCH_RESULTS with the given winner", () => {
+  it("awards the given team and ends a live online match", async () => {
+    const physics = new PhysicsFacade();
+    await physics.initialise();
+    const flow = new MatchFlowController();
+    flow.initialise({ physics });
+    flow.openMatchSetup();
+    flow.setOnlineGuest(false);
+    flow.startOnlineMatch({ durationMinutes: 3, kickoffSeed: 1 });
+    for (let i = 0; i < 500; i += 1) {
+      flow.update();
+      physics.step();
+      flow.applyPhysicsResults();
+    }
+    expect(flow.getMatchState()).toBe("PLAYING");
+
+    flow.endOnlineMatchByForfeit("player");
+
+    expect(flow.getMatchState()).toBe("MATCH_RESULTS");
+    expect(flow.getSessionState().winner).toBe("player");
+
+    physics.dispose();
+  });
+
+  it("is a no-op outside a live/pausable online match", async () => {
+    const physics = new PhysicsFacade();
+    await physics.initialise();
+    const flow = new MatchFlowController();
+    flow.initialise({ physics });
+    // Never entered an online match — plain menu state.
+    flow.endOnlineMatchByForfeit("opponent");
+    expect(flow.getMatchState()).not.toBe("MATCH_RESULTS");
+    physics.dispose();
   });
 });

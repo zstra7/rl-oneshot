@@ -218,6 +218,12 @@ export const useOnlineStore = defineStore("online", {
           if (this.screen !== "in-match") {
             this.errorMessage = "Connection lost before the match started.";
             this.screen = "error";
+          } else {
+            // P4.2: the peer disconnected mid-match (WebRTC failed, or they
+            // left) — win by forfeit immediately rather than waiting out the
+            // silent-abandonment timeout for an already-confirmed loss of
+            // connection. No-op if the match already ended some other way.
+            getGameRuntime().forfeitOnlineMatchByAbandonment();
           }
           break;
         case "error":

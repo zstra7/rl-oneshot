@@ -79,6 +79,9 @@ const ONLINE_MAX_REPLAY_TICKS = 30;
 /** P3 (host only): while paused, send a match-flow-carrying snapshot at most every this many rendered frames. */
 const PAUSED_SNAPSHOT_EVERY_N_FRAMES = 10;
 
+/** P4.2: no packet at all from the remote peer for this long — the other side has abandoned the match; the local player wins by forfeit. */
+const ONLINE_ABANDONMENT_TIMEOUT_MS = 10_000;
+
 /**
  * P1.2: match states in which a car/ball position change is a REAL teleport
  * (kickoff spawn/reset) rather than reconciliation drift — correction
@@ -159,6 +162,8 @@ export interface GameRuntimeFacade {
   getOnlineNicknames(): { local: string; remote: string } | null;
   /** P3: LEAVE MATCH — forfeits immediately, regardless of pause state. */
   leaveOnlineMatch(): void;
+  /** P4.2: the remote peer abandoned the match — local player wins by forfeit. */
+  forfeitOnlineMatchByAbandonment(): void;
   /** P3: ESC — toggle this client's personal pause overlay (never touches match state by itself). */
   toggleOnlinePauseOverlay(): void;
   isOnlinePauseOverlayOpen(): boolean;
@@ -169,6 +174,8 @@ export interface GameRuntimeFacade {
   getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number };
   isRequestingOnlinePause(): boolean;
   isVotingOnlineContinue(): boolean;
+  /** P4.2: RTT + time-since-last-packet for the HUD ping readout, or null outside an online session. */
+  getOnlineConnectionInfo(): { rttMs: number | null; msSinceRemoteActivity: number } | null;
 
   // -- Match flow (game-flow spec sections 28/35/39) --
 
@@ -775,6 +782,21 @@ export class GameRuntime implements GameRuntimeFacade {
     this.endOnlineSession();
   }
 
+  /**
+   * P4.2: the REMOTE peer abandoned the match (silence past the timeout, or
+   * an explicit WebRTC disconnect/failure signal) — the local player wins by
+   * forfeit rather than being stuck in a match that can never finish.
+   */
+  public forfeitOnlineMatchByAbandonment(): void {
+    const context = this.onlineSession;
+    if (!context) {
+      return;
+    }
+    const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    this.requireModules().gameFlow.endOnlineMatchByForfeit(localTeam);
+    this.endOnlineSession();
+  }
+
   public isOnlineSession(): boolean {
     return this.onlineSession !== null;
   }
@@ -828,6 +850,20 @@ export class GameRuntime implements GameRuntimeFacade {
     const continueVotes =
       (session.hasLocalVote(VoteKind.ContinueYes) ? 1 : 0) + (session.getRemoteVote(VoteKind.ContinueYes) ? 1 : 0);
     return { pauseRequests, continueVotes };
+  }
+
+  /**
+   * P4.2: connection-health readout for the HUD ping display — round-trip
+   * time (null until the first ping/pong completes) and how long it's been
+   * since ANY packet was last heard from the remote peer (the same signal
+   * that drives silent-abandonment forfeit).
+   */
+  public getOnlineConnectionInfo(): { rttMs: number | null; msSinceRemoteActivity: number } | null {
+    const session = this.onlineSession?.session;
+    if (!session) {
+      return null;
+    }
+    return { rttMs: session.getRttMs(), msSinceRemoteActivity: session.msSinceRemoteActivity() };
   }
 
   /**
@@ -889,6 +925,16 @@ export class GameRuntime implements GameRuntimeFacade {
     }
 
     context.session.pump();
+
+    // P4.2: no packet at all from the remote peer in ONLINE_ABANDONMENT_TIMEOUT_MS
+    // — they've disconnected/closed the tab/lost their network entirely.
+    // `forfeitOnlineMatchByAbandonment` nulls `this.onlineSession`, so bail
+    // out of the rest of this frame's online handling immediately.
+    if (context.session.msSinceRemoteActivity() > ONLINE_ABANDONMENT_TIMEOUT_MS) {
+      this.forfeitOnlineMatchByAbandonment();
+      return;
+    }
+
     context.session.maintainVotes();
     this.driveOnlinePauseVotes(context, modules, paused);
 

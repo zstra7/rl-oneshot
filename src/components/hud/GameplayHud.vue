@@ -42,6 +42,20 @@ const opponentLabel = computed(() => {
   return runtime.isOnlineSession() ? (runtime.getOnlineNicknames()?.remote ?? "OPPONENT") : "CPU";
 });
 
+// P4.2: small connection-health readout, online only. Warning-coloured once
+// the remote has been silent past a threshold well short of the abandonment
+// forfeit timeout, so a struggling connection is visible before it costs a match.
+const PING_WARNING_MS = 2000;
+const connectionInfo = computed(() => {
+  void matchFlowStore.session;
+  return runtime.isOnlineSession() ? runtime.getOnlineConnectionInfo() : null;
+});
+const pingLabel = computed(() => {
+  const rtt = connectionInfo.value?.rttMs;
+  return rtt == null ? "-- ms" : `${Math.round(rtt)} ms`;
+});
+const pingWarning = computed(() => (connectionInfo.value?.msSinceRemoteActivity ?? 0) > PING_WARNING_MS);
+
 const isOvertime = computed(
   () => session.value.matchState === "OVERTIME_PLAYING" || session.value.matchState === "OVERTIME_INTRO"
 );
@@ -87,6 +101,10 @@ function formatClock(totalSeconds: number): string {
     <div class="ballcam-indicator" :class="{ active: ballCameraActive }" data-testid="ballcam-indicator">
       <span class="ballcam-label wo-label">BALL CAM</span>
       <span class="ballcam-key wo-numeral">{{ ballCameraLabel }}</span>
+    </div>
+
+    <div v-if="connectionInfo" class="ping-readout" :class="{ warning: pingWarning }" data-testid="ping-readout">
+      {{ pingLabel }}
     </div>
   </div>
 </template>
@@ -227,5 +245,20 @@ function formatClock(totalSeconds: number): string {
 
 .ballcam-indicator.active .ballcam-key {
   color: var(--ui-amber);
+}
+
+/* P4.2: connection-health readout, top-right, out of the way of the scoreboard. */
+.ping-readout {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+  font-size: 0.65rem;
+  color: var(--ui-ink);
+  opacity: 0.6;
+}
+
+.ping-readout.warning {
+  color: var(--ui-amber);
+  opacity: 1;
 }
 </style>

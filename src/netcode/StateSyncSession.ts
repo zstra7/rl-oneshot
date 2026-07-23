@@ -99,10 +99,15 @@ export class StateSyncSession {
   private readonly remoteVoteLastSeenMs = new Map<VoteKind, number>();
   private lastVoteSendMs = -Infinity;
 
+  /** P4.2: wall-clock time of the last packet received from the remote peer, for abandonment detection. */
+  private lastRemoteActivityMs: number;
+
   public constructor(private readonly config: StateSyncConfig) {
     this.remoteSource = new RemoteCarInputSource(config.remoteCarId);
     this.now = config.now ?? defaultNow;
     this.currentInputDelayTicks = config.inputDelayTicks;
+    // A freshly-created session hasn't been abandoned — start the clock now.
+    this.lastRemoteActivityMs = this.now();
   }
 
   public get inputDelayTicks(): number {
@@ -117,6 +122,11 @@ export class StateSyncSession {
   /** EMA jitter (absolute deviation from the RTT EMA) in milliseconds. */
   public getJitterMs(): number {
     return this.jitterEmaMs;
+  }
+
+  /** P4.2: milliseconds since ANY packet was last received from the remote peer — the abandonment-detection signal. */
+  public msSinceRemoteActivity(): number {
+    return Math.max(0, this.now() - this.lastRemoteActivityMs);
   }
 
   public get isHost(): boolean {
@@ -172,6 +182,9 @@ export class StateSyncSession {
       if (!packet) {
         continue;
       }
+      // P4.2: ANY decoded packet counts as proof of life from the remote
+      // peer — the basis for the connection-health abandonment check.
+      this.lastRemoteActivityMs = this.now();
       switch (packet.type) {
         case PacketType.Input:
           for (const frame of packet.frames) {
