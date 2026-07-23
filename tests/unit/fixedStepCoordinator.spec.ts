@@ -81,4 +81,41 @@ describe("FixedStepCoordinator", () => {
     expect(coordinator.accumulatorSeconds).toBe(0);
     expect(coordinator.droppedFixedTimeSeconds).toBe(0);
   });
+
+  it("two peers with different pre-match histories emit identical online tick sequences after reset() (online desync regression)", () => {
+    // The online desync-to-CPU bug: the two peers enter a match after
+    // spending DIFFERENT amounts of menu time, so their coordinators are at
+    // different tick counts when `match-start` arrives. The lockstep session
+    // numbers inputs and desync-hash checkpoints from 0 and compares hashes
+    // at equal absolute ticks — so if the coordinator is NOT reset at match
+    // start, the two peers' countdown/kickoff land on different ticks and the
+    // hashes split the instant play begins. `startOnlineSession` calls
+    // `reset()` for exactly this reason; here we prove that a reset makes two
+    // coordinators with unequal histories produce the same tick stream.
+    const ticksA: number[] = [];
+    const ticksB: number[] = [];
+    const peerA = new FixedStepCoordinator((t) => ticksA.push(t));
+    const peerB = new FixedStepCoordinator((t) => ticksB.push(t));
+
+    // Peer A idled in menus far longer than peer B before the match.
+    for (let i = 0; i < 743; i += 1) peerA.stepOnce();
+    for (let i = 0; i < 128; i += 1) peerB.stepOnce();
+    expect(peerA.tick).not.toBe(peerB.tick);
+
+    // Match start (what GameRuntime.startOnlineSession does).
+    peerA.reset();
+    peerB.reset();
+    ticksA.length = 0;
+    ticksB.length = 0;
+
+    // Both now simulate the first 200 match ticks.
+    for (let i = 0; i < 200; i += 1) {
+      peerA.stepOnce();
+      peerB.stepOnce();
+    }
+
+    expect(ticksA[0]).toBe(0);
+    expect(ticksB[0]).toBe(0);
+    expect(ticksA).toEqual(ticksB);
+  });
 });

@@ -59,6 +59,8 @@ export class MultiplayerSession {
   private readonly lobby: LobbyClient;
   private peer: PeerLink | null = null;
   private matchStarted = false;
+  /** This client's WebRTC role, learned from `peer-joined`; decides which car it drives. */
+  private role: PeerRole | null = null;
 
   public constructor(private readonly config: MultiplayerSessionConfig) {
     this.lobby = config.createLobbyClient
@@ -134,6 +136,7 @@ export class MultiplayerSession {
   }
 
   private startPeerLink(role: PeerRole): void {
+    this.role = role;
     this.config.onEvent({ type: "connecting" });
     const onStateChange = (state: PeerLinkState): void => {
       if (state === "connected") {
@@ -167,10 +170,17 @@ export class MultiplayerSession {
       return;
     }
     this.matchStarted = true;
-    // Local player always drives PLAYER_CAR_ID; the remote peer is OPPONENT.
+    // Both peers simulate the identical canonical world: the offerer always
+    // drives PLAYER_CAR_ID and the answerer always drives OPPONENT_CAR_ID.
+    // Each client's *local* car is whichever one matches its own role, so the
+    // two ends stay in lockstep instead of both driving car-player (which
+    // would desync every frame and collapse the match back to CPU).
+    const isOfferer = this.role !== "answerer";
+    const localCarId = isOfferer ? PLAYER_CAR_ID : OPPONENT_CAR_ID;
+    const remoteCarId = isOfferer ? OPPONENT_CAR_ID : PLAYER_CAR_ID;
     const session = new LockstepSession({
-      localCarId: PLAYER_CAR_ID,
-      remoteCarId: OPPONENT_CAR_ID,
+      localCarId,
+      remoteCarId,
       link: this.peer,
       inputDelayTicks: DEFAULT_LOCKSTEP_CONFIG.inputDelayTicks,
       redundancyWindow: DEFAULT_LOCKSTEP_CONFIG.redundancyWindow,
@@ -178,7 +188,7 @@ export class MultiplayerSession {
     });
     this.config.onEvent({
       type: "match-ready",
-      context: { session, kickoffSeed, localCarId: PLAYER_CAR_ID, remoteCarId: OPPONENT_CAR_ID, peers }
+      context: { session, kickoffSeed, localCarId, remoteCarId, peers }
     });
   }
 }

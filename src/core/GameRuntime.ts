@@ -29,6 +29,7 @@ import {
   type MatchState
 } from "@/game-flow/MatchFlowTypes";
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
+import { otherTeam } from "@/core/TeamTypes";
 import {
   AiSource,
   BufferedLocalSource,
@@ -304,6 +305,12 @@ export class GameRuntime implements GameRuntimeFacade {
   private onlineNextSubmitTick = 0;
   /** N6: last local input frame sampled in the online submit loop (for the fixed-tick input context). */
   private lastOnlineFrame: HumanGameplayInputFrame | null = null;
+  /**
+   * The car this client's human is driving, and whose HUD/camera the
+   * presentation follows. Always PLAYER_CAR_ID in single-player and for the
+   * online offerer; OPPONENT_CAR_ID for the online answerer.
+   */
+  private localPlayerCarId: CarId = PLAYER_CAR_ID;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -585,12 +592,45 @@ export class GameRuntime implements GameRuntimeFacade {
   public startOnlineSession(context: OnlineMatchContext, durationMinutes: MatchDurationMinutes): void {
     const modules = this.requireModules();
     this.onlineSession = context;
+    // Restart the fixed-step tick counter at 0 for the match. The two peers
+    // begin the online session at DIFFERENT local coordinator ticks (the
+    // `match-start` signal arrives after each has spent its own amount of
+    // menu time), but the lockstep session numbers inputs and desync-hash
+    // checkpoints from 0 (`onlineNextSubmitTick = 0` below) and compares
+    // hashes at equal absolute ticks. Without this reset the peers' match
+    // timelines would be offset by their menu-time difference, so the
+    // countdown/kickoff would land on different ticks and the state hashes
+    // would diverge the instant play began — the desync that dropped live
+    // matches back to a CPU game. Resetting here makes tick 0 == match start
+    // on both peers; the lockstep gate keeps them aligned from there.
+    this.fixedStepCoordinator.reset();
     this.onlineNextSubmitTick = 0;
     this.lastOnlineFrame = null;
+    // Follow this client's actual car (the answerer drives car-opponent) so the
+    // camera, HUD boost/supersonic/ball-cam readouts track the local player.
+    this.localPlayerCarId = context.localCarId;
+    this.cameraController?.setTargetCar(context.localCarId);
 
+    // Install both cars' sources, but in a CANONICAL car order (car-player
+    // first, car-opponent second) — never in role order. The fixed-tick loop
+    // applies inputs in `carInputSources` iteration (= insertion) order, and
+    // the deterministic-sim gate is pinned to exactly that order (see
+    // tests/netspike/inputScript.ts). If the answerer (whose local car is
+    // car-opponent) inserted its local car first, it would apply the two
+    // cars' inputs in the reverse order from the offerer and the two peers'
+    // simulations would diverge the moment controls go live — the desync that
+    // silently dropped online matches back to CPU.
+    const sourcesByCar = new Map<CarId, CarInputSource>([
+      [context.localCarId, new BufferedLocalSource(context.localCarId, context.session)],
+      [context.remoteCarId, context.session.remoteSource]
+    ]);
     this.carInputSources.clear();
-    this.carInputSources.set(context.localCarId, new BufferedLocalSource(context.localCarId, context.session));
-    this.carInputSources.set(context.remoteCarId, context.session.remoteSource);
+    for (const carId of [PLAYER_CAR_ID, OPPONENT_CAR_ID] as const) {
+      const source = sourcesByCar.get(carId);
+      if (source) {
+        this.carInputSources.set(carId, source);
+      }
+    }
 
     this.fixedStepCoordinator.setAdvanceGate({ canAdvance: (tick) => context.session.canSimulate(tick) });
     modules.gameFlow.startOnlineMatch({ durationMinutes, kickoffSeed: context.kickoffSeed });
@@ -599,6 +639,8 @@ export class GameRuntime implements GameRuntimeFacade {
   /** N6: leave online mode and restore single-player timing + input sources. */
   public endOnlineSession(): void {
     this.onlineSession = null;
+    this.localPlayerCarId = PLAYER_CAR_ID;
+    this.cameraController?.setTargetCar(PLAYER_CAR_ID);
     this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
     this.configureSinglePlayerInputSources();
   }
@@ -770,6 +812,25 @@ export class GameRuntime implements GameRuntimeFacade {
   }
 
   /**
+   * The session state oriented to this client's own car. Score and winner
+   * are stored from the canonical `player` team's perspective; the online
+   * answerer drives `car-opponent`, so its HUD must show that team's score
+   * as "YOU". Single-player and the offerer see the state unchanged.
+   */
+  private sessionStateForLocalPlayer(): GameSessionState {
+    const state = this.requireModules().gameFlow.getSessionState();
+    if (this.localPlayerCarId !== OPPONENT_CAR_ID) {
+      return state;
+    }
+    return {
+      ...state,
+      playerScore: state.opponentScore,
+      opponentScore: state.playerScore,
+      winner: state.winner === null ? null : otherTeam(state.winner)
+    };
+  }
+
+  /**
    * Emitted once per fixed tick — not once per rendered frame — so the Vue
    * UI layer stays in sync with match-flow session state whether ticks are
    * driven by the real rAF loop or by `stepFixedTicksForTesting()` (used
@@ -790,7 +851,7 @@ export class GameRuntime implements GameRuntimeFacade {
     this.syncTournamentFromMatchFlow(this.modules.gameFlow.getMatchState());
 
     this.dispatcher.emit("runtime:session-state-changed", {
-      session: this.modules.gameFlow.getSessionState(),
+      session: this.sessionStateForLocalPlayer(),
       playerBoostAmount: this.getPlayerBoostAmount(),
       playerSupersonic: this.getPlayerSupersonic(),
       playerBallCamera: this.getPlayerBallCamera(),
@@ -1106,16 +1167,16 @@ export class GameRuntime implements GameRuntimeFacade {
 
   public getPlayerBoostAmount(): number {
     const modules = this.requireModules();
-    return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
-      ? modules.physics.getCarState(PLAYER_CAR_ID).boostAmount
+    return modules.physics.getCarIds().includes(this.localPlayerCarId)
+      ? modules.physics.getCarState(this.localPlayerCarId).boostAmount
       : 0;
   }
 
   /** WS9.C: HUD supersonic feedback on the boost ring. */
   public getPlayerSupersonic(): boolean {
     const modules = this.requireModules();
-    return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
-      ? modules.physics.getCarState(PLAYER_CAR_ID).supersonic
+    return modules.physics.getCarIds().includes(this.localPlayerCarId)
+      ? modules.physics.getCarState(this.localPlayerCarId).supersonic
       : false;
   }
 
