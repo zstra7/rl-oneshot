@@ -12,11 +12,19 @@ before any public distribution of this repository or a build of it.
 Type: 3D model (GLB 2.0)
 Source file: `public/assets/cars/car.glb` (shared by both `player-car` and
 `opponent-car` descriptors — see `src/assets/cars/CarDescriptors.ts`)
-Provided by: embedded in the file's own `asset.extras` — author "spatka",
-title "PSX style Pontiac Ventura 1977's", sourced from Sketchfab.
-Licence/status: embedded as CC-BY-4.0 (Creative Commons Attribution 4.0)
-per the file's own `asset.extras.license` field — attribution to "spatka"
-required under that licence's terms if this project is distributed.
+Provided by: "PSX style Pontiac Ventura 1977's" by spatka (Sleepless) —
+https://sketchfab.com/3d-models/psx-style-pontiac-ventura-1977s-8a63069b223e4ab88bac635d886559c7
+Author profile: https://sketchfab.com/spatka
+This matches the file's own embedded `asset.extras` metadata (author
+"spatka", title "PSX style Pontiac Ventura 1977's", sourced from Sketchfab).
+Licence/status: CC-BY-4.0 (Creative Commons Attribution 4.0 International) —
+https://creativecommons.org/licenses/by/4.0/ — as declared both on the
+Sketchfab model page and in the file's own `asset.extras.license` field.
+Attribution to spatka (Sleepless), with a link to the original model and to
+the licence, is required under that licence's terms if this project is
+distributed. No changes to the model are indicated here, though the licence
+also permits distribution of modified versions provided they are marked as
+changed.
 Modification policy: loaded read-only through `CarAssetLoader` (asset
 pipeline spec section 11.4 "never overwrite supplied GLB, never bake
 runtime team colours into the source file") — the shipped `.glb` on disk

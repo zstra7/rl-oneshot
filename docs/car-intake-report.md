@@ -11,7 +11,9 @@ which descriptor requested them.
 ## Source
 
 - File: `public/assets/cars/car.glb` (78,944 bytes)
-- Author: spatka ("PSX style Pontiac Ventura 1977's", Sketchfab, CC-BY-4.0)
+- Author: spatka (Sleepless) — "PSX style Pontiac Ventura 1977's", Sketchfab,
+  CC-BY-4.0 (https://sketchfab.com/3d-models/psx-style-pontiac-ventura-1977s-8a63069b223e4ab88bac635d886559c7).
+  Full attribution: `docs/asset-attribution.md`.
 - Format: GLB 2.0, self-contained (embedded buffer + textures)
 
 ## Inspection report
