@@ -45,6 +45,34 @@ const wasOvertime = computed(() => session.value.overtimeElapsed > 0);
 // true for the whole tournament, including this results screen.
 const isTournamentMatch = computed(() => tournamentStore.active);
 
+// P4.3: MATCH_RESULTS in an online match replaces REPLAY/RETURN TO MENU with
+// a REMATCH (n/2) vote + LEAVE MATCH, mirroring PauseMenu's P3 vote UI — same
+// reasoning: neither player can unilaterally restart a shared match. Reads
+// `matchFlowStore.session` (re-emitted every frame while online, per P3) so
+// the vote count updates live without a tick-driven event.
+const isOnlineMatch = computed(() => {
+  void matchFlowStore.session;
+  return runtime.isOnlineSession();
+});
+const rematchVotes = computed(() => {
+  void matchFlowStore.session;
+  return runtime.getOnlineVoteCounts().rematchVotes;
+});
+const myRematchVoteActive = computed(() => {
+  void matchFlowStore.session;
+  return runtime.isVotingOnlineRematch();
+});
+
+function toggleOnlineRematchVote(): void {
+  runtime.playUiSound("confirm");
+  runtime.voteOnlineRematch(!myRematchVoteActive.value);
+}
+
+function leaveOnlineMatch(): void {
+  runtime.playUiSound("cancel");
+  runtime.leaveOnlineMatch();
+}
+
 function replayMatch(): void {
   runtime.playUiSound("confirm");
   runtime.replayMatch();
@@ -97,6 +125,30 @@ function leaveTournament(): void {
             @click="leaveTournament()"
           >
             LEAVE TOURNAMENT
+          </button>
+        </template>
+        <template v-else-if="isOnlineMatch">
+          <p class="wo-label vote-hint">BOTH PLAYERS MUST AGREE TO REMATCH</p>
+          <button
+            type="button"
+            class="menu-item wo-item"
+            data-index="01"
+            autofocus
+            data-testid="online-rematch-vote"
+            @click="toggleOnlineRematchVote()"
+          >
+            {{ myRematchVoteActive ? "CANCEL REMATCH VOTE" : "REMATCH" }}
+            ({{ rematchVotes }}/2)
+          </button>
+          <button
+            type="button"
+            class="menu-item wo-item"
+            data-index="02"
+            data-menu-back
+            data-testid="online-results-leave"
+            @click="leaveOnlineMatch()"
+          >
+            LEAVE MATCH
           </button>
         </template>
         <template v-else>
@@ -161,6 +213,13 @@ function leaveTournament(): void {
 .overtime-indicator,
 .duration {
   font-size: 0.85rem;
+}
+
+.vote-hint {
+  text-align: center;
+  margin: 0 0 0.25rem 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
 }
 
 .actions {

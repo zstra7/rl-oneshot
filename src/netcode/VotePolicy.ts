@@ -16,3 +16,12 @@ export function shouldPause(localRequest: boolean, remoteRequest: boolean, isPau
 export function shouldResume(localContinueYes: boolean, remoteContinueYes: boolean, isPaused: boolean): boolean {
   return isPaused && localContinueYes && remoteContinueYes;
 }
+
+/**
+ * P4.3: same shape for the results-screen REMATCH vote — only fires once
+ * both peers hold the vote AND the match has actually reached MATCH_RESULTS
+ * (guards against a stale vote from a previous match/phase deciding anything).
+ */
+export function shouldRematch(localRematchYes: boolean, remoteRematchYes: boolean, atMatchResults: boolean): boolean {
+  return atMatchResults && localRematchYes && remoteRematchYes;
+}

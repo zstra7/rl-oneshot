@@ -42,7 +42,7 @@ import { LEAD_EMA_ALPHA, computeRateScale, computeTargetLeadTicks } from "@/netc
 import { FALLBACK_NICKNAME } from "@/netcode/Nickname";
 import { parsePeerPayload } from "@/netcode/PeerCosmetics";
 import { VoteKind } from "@/netcode/protocol";
-import { shouldPause, shouldResume } from "@/netcode/VotePolicy";
+import { shouldPause, shouldRematch, shouldResume } from "@/netcode/VotePolicy";
 import type { CarTeamId } from "@/assets/cars/CarModelTypes";
 import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
@@ -171,11 +171,14 @@ export interface GameRuntimeFacade {
   requestOnlinePause(active: boolean): void;
   /** P3: hold/release this client's "yes, continue" vote. */
   voteOnlineContinue(active: boolean): void;
-  getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number };
+  getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number; rematchVotes: number };
   isRequestingOnlinePause(): boolean;
   isVotingOnlineContinue(): boolean;
   /** P4.2: RTT + time-since-last-packet for the HUD ping readout, or null outside an online session. */
   getOnlineConnectionInfo(): { rttMs: number | null; msSinceRemoteActivity: number } | null;
+  /** P4.3: hold/release this client's "rematch" vote. */
+  voteOnlineRematch(active: boolean): void;
+  isVotingOnlineRematch(): boolean;
 
   // -- Match flow (game-flow spec sections 28/35/39) --
 
@@ -376,6 +379,11 @@ export class GameRuntime implements GameRuntimeFacade {
   private onlineWasPaused = false;
   /** P3 (host only): counts frames while paused, so the low-rate paused-frame snapshot only sends every Nth frame. */
   private pausedSnapshotFrameCounter = 0;
+  /** P4.3: the match duration + next kickoff seed to use for a rematch (seed increments each time so the kickoff-variant sequence differs). */
+  private onlineDurationMinutes: MatchDurationMinutes = 3;
+  private onlineRematchSeed = 0;
+  /** P4.3: match-flow's own MATCH_RESULTS from the PREVIOUS frame, to detect the results->next-match edge and clear a stale rematch vote. */
+  private onlineWasMatchResults = false;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -689,6 +697,11 @@ export class GameRuntime implements GameRuntimeFacade {
     // P3: fresh pause/vote state for the new match.
     this.onlinePauseOverlayOpen = false;
     this.onlineWasPaused = false;
+    // P4.3: remember the duration + seed so a rematch can restart identically
+    // (same length, next kickoff-variant in the sequence).
+    this.onlineDurationMinutes = durationMinutes;
+    this.onlineRematchSeed = context.kickoffSeed;
+    this.onlineWasMatchResults = false;
     // Follow this client's actual car (the guest drives car-opponent) so the
     // camera, HUD boost/supersonic/ball-cam readouts track the local player.
     this.localPlayerCarId = context.localCarId;
@@ -839,17 +852,29 @@ export class GameRuntime implements GameRuntimeFacade {
     return this.onlineSession?.session.hasLocalVote(VoteKind.ContinueYes) ?? false;
   }
 
-  /** P3: live vote tallies for the pause-request / continue-yes phases, for the overlay's "n/2" display. */
-  public getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number } {
+  /** P3/P4.3: live vote tallies for the pause-request / continue-yes / rematch phases, for the "n/2" displays. */
+  public getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number; rematchVotes: number } {
     const session = this.onlineSession?.session;
     if (!session) {
-      return { pauseRequests: 0, continueVotes: 0 };
+      return { pauseRequests: 0, continueVotes: 0, rematchVotes: 0 };
     }
     const pauseRequests =
       (session.hasLocalVote(VoteKind.PauseRequest) ? 1 : 0) + (session.getRemoteVote(VoteKind.PauseRequest) ? 1 : 0);
     const continueVotes =
       (session.hasLocalVote(VoteKind.ContinueYes) ? 1 : 0) + (session.getRemoteVote(VoteKind.ContinueYes) ? 1 : 0);
-    return { pauseRequests, continueVotes };
+    const rematchVotes =
+      (session.hasLocalVote(VoteKind.RematchYes) ? 1 : 0) + (session.getRemoteVote(VoteKind.RematchYes) ? 1 : 0);
+    return { pauseRequests, continueVotes, rematchVotes };
+  }
+
+  /** P4.3: hold or release this client's "rematch" vote (only meaningful at MATCH_RESULTS in an online match). */
+  public voteOnlineRematch(active: boolean): void {
+    this.onlineSession?.session.setLocalVote(VoteKind.RematchYes, active);
+  }
+
+  /** P4.3: whether THIS client currently holds the rematch vote. */
+  public isVotingOnlineRematch(): boolean {
+    return this.onlineSession?.session.hasLocalVote(VoteKind.RematchYes) ?? false;
   }
 
   /**
@@ -937,6 +962,7 @@ export class GameRuntime implements GameRuntimeFacade {
 
     context.session.maintainVotes();
     this.driveOnlinePauseVotes(context, modules, paused);
+    this.driveOnlineRematchVotes(context, modules);
 
     if (!context.isHost) {
       this.applyHostSnapshot();
@@ -999,6 +1025,37 @@ export class GameRuntime implements GameRuntimeFacade {
       context.session.setLocalVote(VoteKind.ContinueYes, false);
       this.onlinePauseOverlayOpen = false;
     }
+  }
+
+  /**
+   * P4.3: REMATCH (n/2) — same symmetric-votes/host-decides shape as P3's
+   * pause votes. Once both peers hold the rematch vote at MATCH_RESULTS, the
+   * host restarts the match (next kickoff seed in the sequence, same
+   * duration); the guest needs no local call — its flow mirrors the
+   * resulting KICKOFF_SETUP/countdown transition and reset score from the
+   * host's next snapshot, exactly like every other match-flow transition.
+   * The vote clears on both sides once MATCH_RESULTS is left behind so it
+   * can't leak into the next match's own eventual rematch vote.
+   */
+  private driveOnlineRematchVotes(context: OnlineMatchContext, modules: ModuleContainer): void {
+    const nowResults = modules.gameFlow.getMatchState() === "MATCH_RESULTS";
+
+    if (context.isHost) {
+      const localRematch = context.session.hasLocalVote(VoteKind.RematchYes);
+      const remoteRematch = context.session.getRemoteVote(VoteKind.RematchYes);
+      if (shouldRematch(localRematch, remoteRematch, nowResults)) {
+        this.onlineRematchSeed += 1;
+        modules.gameFlow.startOnlineMatch({
+          durationMinutes: this.onlineDurationMinutes,
+          kickoffSeed: this.onlineRematchSeed
+        });
+      }
+    }
+
+    if (this.onlineWasMatchResults && !nowResults) {
+      context.session.setLocalVote(VoteKind.RematchYes, false);
+    }
+    this.onlineWasMatchResults = modules.gameFlow.getMatchState() === "MATCH_RESULTS";
   }
 
   /**
