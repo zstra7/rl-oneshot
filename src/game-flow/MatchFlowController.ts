@@ -306,8 +306,10 @@ export class MatchFlowController {
     }
     // S4: only the host decides goals. The guest reflects the host's score
     // from snapshots, so it never runs goal detection (which, on a predicted
-    // world, could otherwise fire a phantom goal the host never saw).
+    // world, could otherwise fire a phantom goal the host never saw). It
+    // still drains the physics event queue so it can't grow unbounded.
     if (this.guestMode) {
+      this.requirePhysics().clearGoalEvents();
       return;
     }
 

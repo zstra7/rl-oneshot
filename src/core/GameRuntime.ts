@@ -63,12 +63,12 @@ export type UiRequestedAction = { readonly kind: "noop" };
 const DEFAULT_PLAYER_CAR_COLOR = "#4ff0ff";
 
 /**
- * S5: metres the guest's locally-predicted own car may drift from the host's
- * authoritative position before it is hard-snapped instead of smoothly
- * trusted. Generous enough that normal prediction error (a few cm) never
- * snaps — only a genuinely mispredicted collision does.
+ * S5: the most ticks the guest will re-simulate to bridge a host snapshot to
+ * its current tick (replay reconciliation). 30 ticks = 250ms of one-way
+ * latency + snapshot interval; beyond that the guest adopts the host's
+ * timeline outright instead of burning CPU replaying a stale gap.
  */
-const ONLINE_HARD_CORRECTION_DISTANCE = 2.0;
+const ONLINE_MAX_REPLAY_TICKS = 30;
 
 const MENU_MATCH_STATES: readonly MatchState[] = [
   "MAIN_MENU",
@@ -691,10 +691,18 @@ export class GameRuntime implements GameRuntimeFacade {
 
   /**
    * S5 (guest only): converge onto the newest authoritative snapshot the host
-   * has sent. The opponent car, ball, boost pads and match-flow state are
-   * taken verbatim (the host is the single source of truth); the guest's OWN
-   * car keeps its local prediction for lag-free feel unless it has drifted
-   * implausibly far, so a mispredicted collision snaps rather than lingers.
+   * has sent — WITHOUT introducing perceived lag. The snapshot describes the
+   * world as of the host's tick T, which is RTT/2 + a snapshot interval in
+   * the past; applying it directly would yank the ball and cars backward a
+   * few ticks on every snapshot (a constant sawtooth that reads as lag even
+   * on a LAN). Instead the guest REWINDS to the authoritative frame and then
+   * REPLAYS its buffered inputs (its own from the local send buffer, the
+   * host's from the receive buffer, hold-last for any not yet arrived) up to
+   * the tick it had already reached. The result is always
+   * "authoritative state + everything known since" — the present stays the
+   * present, the ball responds to local hits instantly, and drift is still
+   * fully corrected. A handful of extra physics steps per snapshot is cheap
+   * (~2 cars + ball).
    */
   private applyHostSnapshot(): void {
     const context = this.onlineSession;
@@ -706,11 +714,40 @@ export class GameRuntime implements GameRuntimeFacade {
     if (!snapshot) {
       return;
     }
-    modules.physics.applyWorldSnapshot(snapshot.world, {
-      predictedLocalCarId: context.localCarId,
-      hardCorrectionDistance: ONLINE_HARD_CORRECTION_DISTANCE
-    });
+
     modules.gameFlow.applyAuthorityState(snapshot.flow);
+
+    // The world snapshot is the state AFTER the host simulated tick T; the
+    // guest's own frontier is the last tick it simulated.
+    const lastSimulated = this.fixedStepCoordinator.tick - 1;
+    const replayTicks = lastSimulated - snapshot.tick;
+
+    if (replayTicks < 0 || replayTicks > ONLINE_MAX_REPLAY_TICKS) {
+      // The guest is behind the host (slower machine / just joined) or too
+      // far ahead to replay across (an RTT spike): adopt the host's frame
+      // AND its timeline outright.
+      modules.physics.applyWorldSnapshot(snapshot.world);
+      this.fixedStepCoordinator.setTickForOnlineSync(snapshot.tick + 1);
+      this.onlineNextSubmitTick = Math.max(this.onlineNextSubmitTick, snapshot.tick + 1);
+      return;
+    }
+
+    modules.physics.applyWorldSnapshot(snapshot.world);
+    const controlsActive = modules.gameFlow.areControlsActive();
+    for (let t = snapshot.tick + 1; t <= lastSimulated; t += 1) {
+      if (controlsActive) {
+        modules.physics.setCarInput(context.localCarId, context.session.localInputForTick(t));
+        modules.physics.setCarInput(context.remoteCarId, context.session.remoteSource.inputOrHeldForTick(t));
+      } else {
+        modules.physics.clearAllInputs();
+      }
+      modules.physics.step();
+    }
+    // Replayed ticks re-fire physics events (pad pickups, goal overlaps) the
+    // presentation already reacted to when they were first simulated — drop
+    // them so sounds/VFX don't double-fire.
+    modules.physics.clearGoalEvents();
+    modules.physics.clearBoostPadEvents();
   }
 
   private onFixedTick(tick: number): void {

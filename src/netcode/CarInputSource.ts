@@ -151,6 +151,11 @@ export class RemoteCarInputSource implements CarInputSource {
     return this.buffer.get(tick);
   }
 
+  /** The exact input for a tick if it arrived, else the hold-last prediction (S5 replay). */
+  public inputOrHeldForTick(tick: number): CarInput {
+    return this.buffer.get(tick) ?? this.lastKnownInput;
+  }
+
   /**
    * State-sync prediction (S3): never stall. Use the exact input if we have
    * it; otherwise hold the last input we received (a car keeps doing what it

@@ -101,4 +101,47 @@ describe("S1 world snapshot", () => {
     host.dispose();
     guest.dispose();
   }, 60_000);
+
+  it("rewind + replay reconstructs the guest's present from an OLD snapshot (S5 anti-lag reconciliation)", async () => {
+    // The runtime never applies a snapshot as-is (that would yank the world
+    // ~RTT into the past every 33ms — perceived lag): it rewinds to the
+    // snapshot's tick and replays the buffered inputs forward. This test
+    // proves the replay path lands the guest on the host's CURRENT state,
+    // not its delayed one.
+    const host = await boot();
+    for (let t = 0; t < 300; t += 1) {
+      host.setCarInput(PLAYER_CAR_ID, drive(t));
+      host.setCarInput(OPPONENT_CAR_ID, drive(t + 13));
+      host.step();
+    }
+    const delayedSnapshot = host.getWorldSnapshot(); // host tick 300 — "the past"
+    // Host keeps simulating 8 more ticks while the snapshot is "in flight".
+    for (let t = 300; t < 308; t += 1) {
+      host.setCarInput(PLAYER_CAR_ID, drive(t));
+      host.setCarInput(OPPONENT_CAR_ID, drive(t + 13));
+      host.step();
+    }
+
+    // Guest: apply the old snapshot, then REPLAY the 8 known input ticks.
+    const guest = await boot();
+    guest.applyWorldSnapshot(delayedSnapshot);
+    for (let t = 300; t < 308; t += 1) {
+      guest.setCarInput(PLAYER_CAR_ID, drive(t));
+      guest.setCarInput(OPPONENT_CAR_ID, drive(t + 13));
+      guest.step();
+    }
+
+    // The guest's present == the host's present, even though the snapshot it
+    // received was 8 ticks stale. Tolerance is millimetres (quaternion
+    // renormalisation noise amplified through 8 contact-heavy steps, and
+    // re-corrected by the next snapshot anyway) — a broken replay would be
+    // off by metres, the full 8 ticks of motion.
+    expect(maxCarError(guest, host)).toBeLessThan(0.01);
+    const hostBall = host.getBallState().position;
+    const guestBall = guest.getBallState().position;
+    expect(Math.hypot(hostBall.x - guestBall.x, hostBall.y - guestBall.y, hostBall.z - guestBall.z)).toBeLessThan(0.01);
+
+    host.dispose();
+    guest.dispose();
+  }, 60_000);
 });

@@ -98,4 +98,15 @@ export class FixedStepCoordinator {
     this.tickCount = 0;
     this.droppedFixedTimeSecondsTotal = 0;
   }
+
+  /**
+   * S5 (online guest): adopt an authoritative timeline position. Used only
+   * when the guest's tick count has drifted too far from the host's to
+   * replay across (a huge RTT spike or a slower machine) — the guest jumps
+   * onto the host's tick instead of replaying, forward or backward.
+   */
+  public setTickForOnlineSync(tick: number): void {
+    this.tickCount = tick;
+    this.accumulator = 0;
+  }
 }

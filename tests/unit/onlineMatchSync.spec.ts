@@ -77,10 +77,13 @@ describe("S6 online state-sync stays converged (no stall, no forfeit)", () => {
       peer.session.pump();
 
       // Guest converges onto the host's newest snapshot before simulating.
+      // (The real runtime also replays buffered inputs after applying — that
+      // anti-lag path is covered by worldSnapshot.spec; here the plain apply
+      // keeps the harness simple while still proving convergence+authority.)
       if (!peer.session.isHost) {
         const snap = peer.session.consumeSnapshot();
         if (snap) {
-          peer.physics.applyWorldSnapshot(snap.world, { predictedLocalCarId: peer.localCar, hardCorrectionDistance: 2 });
+          peer.physics.applyWorldSnapshot(snap.world);
           peer.flow.applyAuthorityState(snap.flow);
         }
       }
