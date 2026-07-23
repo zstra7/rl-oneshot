@@ -60,7 +60,13 @@ const KICKOFF_VARIANTS: ReadonlyArray<{ x: number; z: number }> = [
   { x: 0, z: -24 } // far-back
 ];
 
-function kickoffSpawn(
+/**
+ * Exported (not just internal to `resetWorld`) so F13's AI stuck
+ * watchdog (`MatchFlowController.ts`) can compute the exact same
+ * kickoff-spawn pose used at a real kickoff, instead of hardcoding a
+ * separate reset position that could silently drift from this one.
+ */
+export function kickoffSpawn(
   variantIndex: number,
   isPlayerSide: boolean
 ): { transform: V.Vec3Like; rotation: QuatLike } {

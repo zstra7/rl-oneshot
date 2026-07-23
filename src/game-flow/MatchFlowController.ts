@@ -1,5 +1,5 @@
-import type { BallSerializableState } from "@/physics/PhysicsTypes";
-import type { PhysicsFacade } from "@/physics/PhysicsFacade";
+import type { BallSerializableState, Vec3Like } from "@/physics/PhysicsTypes";
+import { kickoffSpawn, type PhysicsFacade } from "@/physics/PhysicsFacade";
 import { RL_CONSTANTS } from "@/physics/PhysicsConstants";
 import { otherTeam, type TeamId } from "@/core/TeamTypes";
 import {
@@ -47,6 +47,14 @@ const MENU_STATES: readonly MatchState[] = [
 const GOAL_BLAST_RADIUS = 26;
 const GOAL_BLAST_MAX_DELTA_V = 30;
 
+// F13 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): AI stuck watchdog. The
+// window (4s) is deliberately LONGER than aiUnstuck.spec.ts's 3s no-
+// movement bound, so that test still gates the AI's own steering-based
+// escape and this watchdog only fires as a last resort when the AI
+// genuinely can't free itself (e.g. wedged in unreachable geometry).
+const AI_STUCK_WINDOW_TICKS = 480;
+const AI_STUCK_MIN_DISPLACEMENT = 1.0;
+
 const PAUSABLE_STATES: readonly MatchState[] = [
   "PLAYING",
   "ZERO_SECOND_PLAY",
@@ -86,6 +94,11 @@ export class MatchFlowController {
   private overtimeIntroTicksRemaining = 0;
   /** WS7.A-2: which of the 5 kickoff spots comes next (round-robin). */
   private kickoffCounter = 0;
+
+  /** F13: AI stuck watchdog — the opponent's position when the anchor was last reset. */
+  private aiStuckAnchor: Vec3Like | null = null;
+  /** F13: ticks since `aiStuckAnchor` was last reset (car hasn't moved AI_STUCK_MIN_DISPLACEMENT since). */
+  private aiStuckTicksSinceAnchor = 0;
 
   private readonly events: MatchFlowEvent[] = [];
 
@@ -272,6 +285,63 @@ export class MatchFlowController {
     if (this.matchState === "ZERO_SECOND_PLAY") {
       this.checkZeroSecondDeadBall(physics.getBallState());
     }
+
+    this.tickAiStuckWatchdog(physics);
+  }
+
+  /**
+   * F13 (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md): if the opponent car
+   * hasn't moved at least `AI_STUCK_MIN_DISPLACEMENT` in
+   * `AI_STUCK_WINDOW_TICKS`, teleport it back to a safe kickoff-style
+   * pose rather than leave it wedged somewhere unreachable for the rest
+   * of the match. Only runs while controls are active — the anchor is
+   * reset (not just left stale) whenever controls go inactive, so time
+   * spent paused/celebrating/counting down never counts toward the
+   * window, and a fresh kickoff always starts the watchdog clean.
+   */
+  private tickAiStuckWatchdog(physics: PhysicsFacade): void {
+    if (!this.areControlsActive()) {
+      this.aiStuckAnchor = null;
+      this.aiStuckTicksSinceAnchor = 0;
+      return;
+    }
+
+    const position = physics.getCarState(OPPONENT_CAR_ID).position;
+
+    if (!this.aiStuckAnchor) {
+      this.aiStuckAnchor = position;
+      this.aiStuckTicksSinceAnchor = 0;
+      return;
+    }
+
+    const displacement = Math.hypot(
+      position.x - this.aiStuckAnchor.x,
+      position.z - this.aiStuckAnchor.z
+    );
+
+    if (displacement >= AI_STUCK_MIN_DISPLACEMENT) {
+      this.aiStuckAnchor = position;
+      this.aiStuckTicksSinceAnchor = 0;
+      return;
+    }
+
+    this.aiStuckTicksSinceAnchor += 1;
+    if (this.aiStuckTicksSinceAnchor < AI_STUCK_WINDOW_TICKS) {
+      return;
+    }
+
+    // Reuse the exact same kickoff-spawn pose real kickoffs use (variant
+    // 0, opponent side) rather than a separately-hardcoded position, so
+    // this can never silently drift from the real kickoff data.
+    const resetPose = kickoffSpawn(0, false);
+    physics.setCarState(OPPONENT_CAR_ID, {
+      position: resetPose.transform,
+      rotation: resetPose.rotation,
+      linearVelocity: { x: 0, y: 0, z: 0 },
+      angularVelocity: { x: 0, y: 0, z: 0 }
+    });
+    this.aiStuckAnchor = resetPose.transform;
+    this.aiStuckTicksSinceAnchor = 0;
   }
 
   private tickCountdown(): void {

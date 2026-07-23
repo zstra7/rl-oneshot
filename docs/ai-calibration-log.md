@@ -99,3 +99,47 @@ ticks (0.475s), medium ≈27 ticks (0.225s), hard ≈17 ticks (0.142s),
 legend ≈11 ticks (0.092s) — strictly decreasing as intended, and legend
 is still not omniscient (`Math.min(...results.legend) > 0`, i.e. it
 never reacts on the very same tick as the surprise event).
+
+## F13 — AI stuck watchdog (plan/ARENA_FLUSH_AND_REFINEMENTS_PLAN.md)
+
+The opponent AI already has a self-recovery behaviour
+(`tests/unit/aiUnstuck.spec.ts`): if it detects no meaningful progress for
+~3s it steers itself out. That covers the common case, but it's a
+best-effort steering heuristic, not a guarantee — a car can still end up
+wedged against geometry (e.g. wall/corner seams, or pinned against
+another car) in a state the AI's own escape logic can't resolve. Left
+alone, that stalls the match indefinitely for one side.
+
+`MatchFlowController.tickAiStuckWatchdog()` is a last-resort backstop,
+independent of the AI's own logic: it tracks the opponent car's 2D
+(x/z) position against an anchor, resetting the anchor (and the tick
+counter) whenever the car has moved at least `AI_STUCK_MIN_DISPLACEMENT`
+(1.0m) since the anchor was set. If `AI_STUCK_WINDOW_TICKS` (480 ticks =
+4s at 120Hz) pass with no such movement, the opponent is teleported to
+`kickoffSpawn(0, false)` — reusing the exact pose real kickoffs use
+(now exported from `PhysicsFacade.ts` for this purpose) rather than a
+second hardcoded position that could drift from it — with velocities
+zeroed, and the anchor/counter reset.
+
+The window is deliberately **longer** than `aiUnstuck.spec.ts`'s 3s bound
+(480 ticks vs. that test's ~360-tick expectation), so the AI's own
+steering-based recovery always gets first chance to resolve a stall; the
+watchdog only fires if that already failed. The anchor is also reset
+whenever `areControlsActive()` is false (paused, countdown, celebration),
+so idle time during those states never counts toward the window, and a
+fresh kickoff always starts the watchdog's clock at zero — a car parked
+for 3s before a goal and 3s after a fresh kickoff must not sum to trigger
+a false teleport.
+
+**Tests** (`tests/unit/aiStuckWatchdog.spec.ts`): a parked opponent with
+the ball moved out of its way gets teleported after 490 ticks (>5m from
+the parked spot, <0.5 m/s residual velocity); a genuinely-driving
+opponent never sees a single-tick position jump ≥1.0m (600 ticks,
+distinguishing normal driving from a teleport reset); and parking for
+300 ticks, scoring a goal, running through celebration + a fresh
+kickoff, then parking again for another 300 ticks does not trigger a
+teleport (proving the two sub-threshold idle windows don't carry over
+across the reset). Confirmed via git-stash that the first test fails
+(distance ≈0.0001m, i.e. never moved) without the fix.
+`tests/unit/aiUnstuck.spec.ts` passes unmodified, confirming the AI's own
+3s recovery window still gates first as intended.
