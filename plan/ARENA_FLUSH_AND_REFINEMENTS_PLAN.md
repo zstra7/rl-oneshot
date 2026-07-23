@@ -139,7 +139,14 @@ Because physics and visuals share this generator, one change fixes both.
 4. Existing `wallDriving.spec.ts` climb tests (left/right/near/far) and the
    corner-smoothness test must stay green with **unchanged thresholds**.
 5. `tests/unit/arenaRampGeometry.spec.ts`'s bijection/coverage/count tests
-   stay green (counts unchanged: 150 fillet + 24 corner).
+   are expected to stay green (counts unchanged: 150 fillet + 24 corner).
+   The "no gaps" coverage test was traced during planning: its stations are
+   covered by the near-vertical TOP segments' horizontal footprint (inset
+   0.143 today → −0.094 after F1, both within its `halfExtents.x + 0.15`
+   tolerance), and its corner stations sample radius `Rc` which F2 moves the
+   fillet bases exactly onto — so it should pass unmodified. If it fails
+   anyway, the sampling model needs the tangent-placement update — fix the
+   model, never widen the `+0.15` tolerances to make it pass.
 6. Playwright `tests/visual-language/arena-ramps.spec.ts` unchanged & green.
 7. Docs: append a correction note to `docs/physics-deviations.md`'s R1
    section (the "anchor regression" preserved the legacy 0.24 m lip; fixed
@@ -452,13 +459,23 @@ Implementation notes:
   `pitchDamping: 2.8, yawDamping: 3.2, rollDamping: 4.95` (from 2/2/3),
   `dampingInputReduction: 0.65` unchanged. With full input, effective pitch
   damping ≈ 0.98 → cap-limited response, ~0.47 s to reach the 5.5 rad/s cap.
-- Check `src/ai/…computeAerialPursuitInput` (grep it): it produces pitch/yaw
-  inputs under the OLD sign convention. After the flip, its signs likely
-  need inverting too — gate: the AI aerial unit test
-  (`aiDifficulty.spec.ts` "hard-only limited aerial") plus a new assertion
-  that during aerial pursuit the car's nose actually converges toward the
-  ball (angle between forward and to-ball decreasing over 30 ticks), not
-  just "finite inputs".
+- **AI follow-up (mandatory, verified during planning)**: two AI controllers
+  produce aerial inputs tuned against the OLD (inverted, ~23× weak) physics
+  and WILL misbehave after the fix:
+  - `OpponentAiController.computeAerialPursuitInput` — pitch/yaw signs
+    likely need inverting. Gate: the `aiDifficulty.spec.ts` "hard-only
+    limited aerial" test plus a new assertion that during aerial pursuit
+    the nose actually converges toward the ball (angle between forward and
+    to-ball decreasing over 30 ticks), not just "finite inputs".
+  - `GroundManeuverController.computeRecoveryInput` — a P-D controller
+    (`recoveryGain`/`recoveryDamping` in `AI_CONSTANTS`) whose output signs
+    AND gains assume the old response; with 23× more authority it may
+    oscillate or right the car the wrong way. Gate: a new unit test —
+    airborne car on its side at y=8 with the AI's recovery input applied
+    each tick (call `computeRecoveryInput` directly in a loop) must land
+    upright (`up.y > 0.85`, grounded) within 2 s without the angular-speed
+    cap saturating endlessly (|angvel| settles below 1.0 in the last 30
+    ticks). Re-tune the two constants if needed, with in-test justification.
 - `DodgeController` is untouched: during an active dodge it `setAngvel`s
   every tick and overwrites the aerial contribution. But the **recovery**
   phase and **flip-cancel** now have ~23× stronger pitch authority — the
@@ -642,12 +659,19 @@ outline, replace with a visible focus treatment (amber outline via the
 global rule is fine; swatches aren't `.wo-item`, so add `.swatch:focus` to
 the retro-ui.css rule list or a scoped visible style).
 
+Also (found in review): the settings sliders are bare `input[type="range"]`
+inside `.slider-row` labels — not covered by ANY of the retro-ui focus
+selectors, so gamepad focus on a slider is invisible too (F12's overlay
+navigation makes this matter). Add `input[type="range"]:focus` and
+`input[type="color"]:focus` to the retro-ui.css amber-outline rule list.
+
 ### Test gates
 
 1. New Playwright `tests/ui/focus-visibility.spec.ts`: for each of —
    main-menu items, `start-match`, MatchSetup `BACK`, all three PauseMenu
    items (pause a match first), ResultsScreen buttons (finish a match),
-   tournament setup buttons, a settings tab, a CarCustomise swatch — drive
+   tournament setup buttons, a settings tab, a settings range slider, a
+   CarCustomise swatch — drive
    focus onto it via the virtual gamepad dpad (NOT `el.focus()` — test the
    real path), then assert
    `getComputedStyle(document.activeElement).outlineStyle !== "none"` and
@@ -736,7 +760,8 @@ dimmed when ball cam off, lit (amber/cyan treatment) when on.
    behaviour change there — its tests must stay green).
 3. **HUD** (`GameplayHud.vue`): `data-testid="ballcam-indicator"`, computed
    from store: device === "gamepad" → label for
-   `bindings.gamepad.ballCameraButton`, else for
+   `bindings.gamepad.ballCameraButton`, else (including the boot-time
+   `"none"` value, before any input has arrived) the keyboard label for
    `bindings.keyboardMouse.ballCamera`. Read bindings via
    `runtime.getControlBindings()` inside a computed that also depends on the
    per-tick store fields (so a rebind is picked up next tick). Class
@@ -795,7 +820,9 @@ Changing `matchState` to `SETTINGS` mid-match would un-pause physics
    - Escape/pause-key while overlay open must close the overlay, NOT
      resume: find where `pausePressed` toggles resume in
      `GameRuntime`/system-input handling and guard on the flag (grep
-     `pausePressed`). Controller East already routes to SettingsPanel's
+     `pausePressed`). The gamepad start button feeds the same
+     `pausePressed` system-input path, so one guard covers both devices.
+     Controller East already routes to SettingsPanel's
      `[data-menu-back]` BACK → new `back()` → overlay closes. Also clear
      the flag defensively whenever `matchState` leaves `PAUSED`
      (resume/return while overlay somehow open).
@@ -980,3 +1007,27 @@ possibly AI aerial-pursuit sign follow-ups.
 `tests/unit/aiUnstuck.spec.ts`, `tests/unit/autoFlip.spec.ts`,
 `release-gate.spec.ts`, `airRollSensitivity.spec.ts` (thresholds may move
 only with an in-test F5 citation).
+
+## Appendix C — Second-pass review addenda
+
+A second review pass against the code produced these amendments (already
+folded into the sections above — listed here so the implementer knows they
+were deliberate):
+
+1. **F1/F2**: the "no gaps" coverage test was traced and should survive both
+   geometry changes unmodified (top segments' horizontal footprints cover
+   the base-line stations within its `+0.15` tolerance; the corner stations
+   sample radius `Rc`, exactly where F2 moves the fillet bases). Fix the
+   sampling model — never the tolerances — if it fails anyway.
+2. **F5**: `computeRecoveryInput` (a P-D controller in
+   `GroundManeuverController.ts`) joins `computeAerialPursuitInput` on the
+   mandatory re-audit list — its gains AND signs were tuned against the
+   inverted, ~23×-weak aerial physics. New recovery-landing gate test added.
+3. **F9**: settings `input[type="range"]` sliders (and the colour inputs)
+   have no focus styling from any existing selector — added to the
+   retro-ui.css rule and the focus-visibility gate. Matters doubly because
+   F12 makes sliders gamepad-reachable from the pause overlay.
+4. **F11**: `activeDevice === "none"` (boot, before any input) shows the
+   keyboard binding label.
+5. **F12**: the gamepad start button shares the `pausePressed` system-input
+   path, so the single overlay guard covers keyboard Escape and pad start.
