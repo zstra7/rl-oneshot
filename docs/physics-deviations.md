@@ -1056,3 +1056,52 @@ empirically rather than assumed correct:
   behaviour improvement, not a bug. Fixed by re-parking the opponent every
   2 simulated seconds instead of trusting a single teleport to stick for
   a full minute (`fastForwardWithOpponentParked` helper).
+
+## Online multiplayer — N0 (deterministic Rapier build, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+Online 1v1 is peer-to-peer deterministic lockstep: the two clients
+exchange only their `CarInput`s and each simulates the whole match
+independently, so both clients' physics must produce **bit-identical**
+results on **different machines**. The standard `@dimforge/rapier3d-compat`
+build guarantees determinism only on the same machine/binary; Rapier
+ships a separate `@dimforge/rapier3d-deterministic-compat` build that
+guarantees it cross-platform (same results across machines, OSes,
+browsers).
+
+**Swap mechanism**: an exact-pinned npm alias in `package.json` —
+`"@dimforge/rapier3d-compat": "npm:@dimforge/rapier3d-deterministic-compat@0.19.3"` —
+so every `import … from "@dimforge/rapier3d-compat"` across the six
+physics modules resolves to the deterministic build with **zero source
+changes** and no Vite/Vitest config alias. `validate-contracts.mjs` was
+updated to accept the alias string as the (still exact, non-floating)
+pin. The N0 spike measured the deterministic build to be a true drop-in
+with **no measurable per-tick cost** (~0.19 ms/tick, identical to the
+standard build) and the **same** canonical-script hash `d12dfc99` on this
+machine, so the full existing physics suite (326 unit tests + the
+browser physics/visual Playwright suites) stays green with **zero
+threshold drift** — expected, since the results are bit-identical here.
+
+**Upstream packaging bug worked around**: `@dimforge/rapier3d-deterministic-compat@0.19.3`
+ships a broken `raw.d.ts` that re-exports from `./rapier_wasm3d-deterministic`,
+a `.d.ts` file the tarball never includes (it ships `rapier_wasm3d.d.ts`
+without the suffix). The *runtime* is unaffected (the `.mjs` entry targets
+the real file, which is why all tests pass), but `vue-tsc --noEmit` fails
+with dozens of "Module '../raw' has no exported member 'Raw…'" errors. A
+committed, dependency-free `postinstall` shim
+(`scripts/patch-rapier-deterministic-types.mjs`) supplies the missing
+declaration file as a one-line re-export of the shipped one. It is purely
+additive (never edits a vendored file), idempotent, and no-ops if
+upstream fixes the packaging or the standard build is in place — chosen
+over a global `skipLibCheck: true` so strict declaration checking stays
+on for every other dependency.
+
+**Permanent gate**: `tests/unit/simDeterminism.spec.ts` (promoted from the
+exploration spike, which used a separate `vitest.netspike.config.ts` that
+is now deleted since the main build *is* the deterministic one). It runs
+the canonical 3000-tick chaos script on two independent `PhysicsFacade`
+instances, asserts exact JSON equality of the final world state, and
+pins the golden hash `d12dfc99`. **Running this spec on any second
+machine is the cross-machine determinism verification** — a hash mismatch
+means the guarantee has broken for this scene and online play would
+desync; investigate rather than re-pin. An anti-vacuity test perturbs one
+input tick and requires divergence, so the gate cannot pass trivially.

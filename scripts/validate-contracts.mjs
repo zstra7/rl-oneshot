@@ -11,7 +11,13 @@ const EXPECTED_PINNED_VERSIONS = {
   three: "0.160.0",
   vue: "3.5.40",
   pinia: "4.0.2",
-  "@dimforge/rapier3d-compat": "0.19.3"
+  // N0 (plan/ONLINE_MULTIPLAYER_PLAN.md): online multiplayer is P2P
+  // deterministic lockstep, which requires the cross-platform-
+  // deterministic Rapier build. It is installed via an exact-pinned npm
+  // alias over the original specifier (so all `@dimforge/rapier3d-compat`
+  // imports resolve to it with zero source changes). The full alias
+  // string is the pin — still no floating range.
+  "@dimforge/rapier3d-compat": "npm:@dimforge/rapier3d-deterministic-compat@0.19.3"
 };
 
 const errors = [];
