@@ -34,6 +34,8 @@ export interface CarRuntimeState {
   dodgeForwardInput: number;
   /** 0 = flip at full rate, 1 = fully cancelled (WS3 flip-cancel blend). */
   dodgeCancelBlend: number;
+  /** G7.a: remaining ticks of exponential decay applied to the flip's residual non-yaw spin on entering recovery, instead of an instant snap to zero. */
+  dodgeRecoveryDampTicksRemaining: number;
 
   powerslideBlend: number;
   boostAmount: number;
@@ -70,6 +72,7 @@ export function createInitialCarRuntimeState(initialBoost: number): CarRuntimeSt
     dodgeAxis: { x: 0, y: 0, z: 0 },
     dodgeForwardInput: 0,
     dodgeCancelBlend: 0,
+    dodgeRecoveryDampTicksRemaining: 0,
 
     powerslideBlend: 0,
     boostAmount: initialBoost,

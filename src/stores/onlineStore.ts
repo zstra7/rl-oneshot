@@ -19,7 +19,7 @@ import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
  * simulation, so it is bumped together with `simDeterminism.spec.ts`'s
  * golden hash whenever the physics changes.
  */
-export const MP_BUILD_HASH = "4d896bab";
+export const MP_BUILD_HASH = "fa7287e0";
 
 export type OnlineScreen = "closed" | "home" | "join" | "connecting" | "queued" | "error" | "in-match";
 

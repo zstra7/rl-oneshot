@@ -7,6 +7,8 @@ import { COL_STEP, LINE_WIDTH, TEXTURE_SIZE } from "@/assets/procedural/HexPatte
 import { MaterialRegistry } from "@/assets/procedural/MaterialRegistry";
 import { SeededRandom } from "@/assets/procedural/SeededRandom";
 import { createStadiumBlockout, HEX_TILE_WORLD_SIZE } from "@/assets/procedural/StadiumGeometryFactory";
+import { RAMP_FILLET_RADIUS } from "@/physics/arena/ArenaRampGeometry";
+import { GOAL_HALF_WIDTH } from "@/physics/goal/GoalTypes";
 
 /**
  * R2 (plan/RAMPS_AND_FEATURES_PLAN.md): the hex glass shell was too dark
@@ -192,5 +194,72 @@ describe("R2: structural ribs are skinnier, more spaced, and visibly lit", () =>
     const ribs = stadium.getObjectByName("SideWallRibs") as THREE.InstancedMesh;
     // fieldLength 60, CORNER_RADIUS 6 -> run 48, spacing 6 -> 8 per side (16 total).
     expect(ribs.count).toBe(16);
+  });
+});
+
+describe("G7.b ramp texture world-scaling + goal-edge end caps", () => {
+  it("RampSegment geometries carry world-scaled UVs, not the box default 0..1 per face", () => {
+    const stadium = buildStadium();
+    let sawStretchedUv = false;
+    stadium.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.name === "RampSegment") {
+        const uv = object.geometry.attributes["uv"]!;
+        for (let i = 0; i < uv.count; i += 1) {
+          // A world-scaled UV on a long/tall face will exceed the box
+          // default's [0,1] range — proves rescaling actually happened
+          // (rather than merely not throwing).
+          if (uv.getX(i) > 1.01 || uv.getY(i) > 1.01) {
+            sawStretchedUv = true;
+          }
+        }
+      }
+    });
+    expect(sawStretchedUv).toBe(true);
+  });
+
+  it("exactly 4 RampEndCap meshes exist, one at each goal-mouth-side end-wall fillet boundary", () => {
+    const stadium = buildStadium();
+    const caps: THREE.Mesh[] = [];
+    stadium.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.name === "RampEndCap") {
+        caps.push(object);
+      }
+    });
+    expect(caps).toHaveLength(4);
+
+    const { fieldLength } = DEFAULT_STADIUM_DIMENSIONS;
+    const halfLength = fieldLength / 2;
+    const expectedPositions = [
+      { x: -GOAL_HALF_WIDTH, z: -halfLength },
+      { x: GOAL_HALF_WIDTH, z: -halfLength },
+      { x: -GOAL_HALF_WIDTH, z: halfLength },
+      { x: GOAL_HALF_WIDTH, z: halfLength }
+    ];
+    for (const expected of expectedPositions) {
+      const match = caps.find(
+        (cap) => Math.abs(cap.position.x - expected.x) < 1e-6 && Math.abs(cap.position.z - expected.z) < 1e-6
+      );
+      expect(match, `expected a RampEndCap at x=${expected.x}, z=${expected.z}`).toBeTruthy();
+      expect(match!.position.y).toBeCloseTo(0, 6);
+    }
+  });
+
+  it("each end cap's geometry is a filled quarter-disc of radius RAMP_FILLET_RADIUS", () => {
+    const stadium = buildStadium();
+    let cap: THREE.Mesh | null = null;
+    stadium.traverse((object) => {
+      if (!cap && object instanceof THREE.Mesh && object.name === "RampEndCap") {
+        cap = object;
+      }
+    });
+    expect(cap).toBeTruthy();
+    const geometry = (cap as unknown as THREE.Mesh).geometry;
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox!;
+    // The pie slice spans [0, R] on both local shape axes.
+    expect(box.min.x).toBeCloseTo(0, 3);
+    expect(box.min.y).toBeCloseTo(0, 3);
+    expect(box.max.x).toBeCloseTo(RAMP_FILLET_RADIUS, 2);
+    expect(box.max.y).toBeCloseTo(RAMP_FILLET_RADIUS, 2);
   });
 });
