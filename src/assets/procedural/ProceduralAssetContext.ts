@@ -24,6 +24,11 @@ export interface StadiumSurfaceTextures {
   readonly floorAccentOpponent?: THREE.Texture;
 }
 
+/** G1: the space backdrop's own textures, separate from the stadium's — currently just the moon. */
+export interface SpaceBackdropTextures {
+  readonly moon?: THREE.Texture;
+}
+
 export interface ProceduralAssetContext {
   readonly three: typeof THREE;
 
@@ -38,4 +43,5 @@ export interface ProceduralAssetContext {
   readonly physicsMetadata: ProceduralPhysicsMetadata;
 
   readonly stadiumTextures?: StadiumSurfaceTextures;
+  readonly spaceTextures?: SpaceBackdropTextures;
 }

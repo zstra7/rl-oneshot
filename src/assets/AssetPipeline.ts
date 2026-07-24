@@ -29,6 +29,7 @@ import { GeometryRegistry } from "@/assets/procedural/GeometryRegistry";
 import { MaterialRegistry } from "@/assets/procedural/MaterialRegistry";
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
 import { SeededRandom } from "@/assets/procedural/SeededRandom";
+import { createAsteroidField, createMoon } from "@/assets/procedural/SpaceBackdropFactory";
 import { createDefaultStarfield } from "@/assets/procedural/StarfieldFactory";
 import { createStadiumBlockout } from "@/assets/procedural/StadiumGeometryFactory";
 import { TextureAssetLoader } from "@/assets/textures/TextureAssetLoader";
@@ -74,6 +75,8 @@ export class AssetPipeline implements GameModule {
     floorAccentPlayer?: THREE.Texture;
     floorAccentOpponent?: THREE.Texture;
   } = {};
+  /** G1: outside the texture manifest (which only scans public/assets/textures/) — loaded directly. */
+  private spaceTextures: { moon?: THREE.Texture } = {};
 
   public async initialise(): Promise<void> {
     this.setState("VALIDATING_SKILLS");
@@ -92,6 +95,7 @@ export class AssetPipeline implements GameModule {
     this.setState("VALIDATING_AUTHORED_ASSETS");
     await this.loadAndValidateCars();
     await this.loadAndValidateStadiumTextures();
+    await this.loadSpaceTextures();
 
     this.setState("BUILDING_PROCEDURAL_RESOURCES");
     this.context = {
@@ -102,7 +106,8 @@ export class AssetPipeline implements GameModule {
       visualPreset: "clean",
       stadiumDimensions: DEFAULT_STADIUM_DIMENSIONS,
       physicsMetadata: PLACEHOLDER_PHYSICS_METADATA,
-      stadiumTextures: this.stadiumTextures
+      stadiumTextures: this.stadiumTextures,
+      spaceTextures: this.spaceTextures
     };
 
     this.setState("WARMING_SHADERS");
@@ -211,6 +216,24 @@ export class AssetPipeline implements GameModule {
     }
   }
 
+  /**
+   * G1 (plan/GAME_ENHANCEMENTS_PLAN.md): the moon texture lives outside the
+   * texture manifest (which only scans public/assets/textures/ for PNGs —
+   * see scripts/generate-texture-manifest.mjs), so it's loaded directly
+   * with a bare `THREE.TextureLoader` rather than through
+   * `loadTexture()`/`TextureAssetDescriptor`. Never fails the pipeline: a
+   * missing/failed load just means `createMoon` falls back to a flat color
+   * (same "no supplied asset -> procedural fallback" pattern as every other
+   * optional texture here).
+   */
+  private async loadSpaceTextures(): Promise<void> {
+    try {
+      this.spaceTextures.moon = await new THREE.TextureLoader().loadAsync("/assets/space/moon_1k.jpg");
+    } catch (error) {
+      this.errors.push(`[warning] moon texture failed to load: ${String(error)}`);
+    }
+  }
+
   /** Loads and validates (spec section 25) one manifest texture by descriptor, warnings recorded, never throws. */
   public async loadTexture(descriptor: TextureAssetDescriptor): Promise<THREE.Texture> {
     const texture = await this.textureLoader.load(descriptor);
@@ -292,6 +315,10 @@ export class AssetPipeline implements GameModule {
 
     root.add(createStadiumBlockout(context));
     root.add(createDefaultStarfield(context));
+    // G1/G2: moon + static asteroid field, +2 draw calls total (one mesh,
+    // one InstancedMesh), no per-frame work.
+    root.add(createMoon(context, context.spaceTextures?.moon ?? null));
+    root.add(createAsteroidField(context));
 
     // WS7.C (plan/POLISH_OVERHAUL_PLAN.md): named so GameRuntime can
     // toggle these children's visibility once a match goes live, leaving
