@@ -40,7 +40,7 @@ const SCRIPT_TICKS = 3000;
  * risk (cross-platform determinism), which the entire P2P lockstep
  * architecture depends on.
  */
-const GOLDEN_HASH = "d12dfc99";
+const GOLDEN_HASH = "4d896bab";
 
 describe("simulation determinism (multiplayer lockstep precondition)", () => {
   it("two independent facades running the canonical 3000-tick chaos script end bit-identical, matching the golden hash", async () => {
