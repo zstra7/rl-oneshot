@@ -48,8 +48,9 @@ const ASTEROID_TEMPLATE_DETAIL = 0; // IcosahedronGeometry(1, 0): 12 verts, 20 f
 const ASTEROID_COUNT = 14;
 const ASTEROID_MIN_RADIUS = 150;
 const ASTEROID_MAX_RADIUS = 300;
-const ASTEROID_MIN_SCALE = 2;
-const ASTEROID_MAX_SCALE = 7;
+// Bumped from 2-7 so the rocks actually read at 150-300m against the sky.
+const ASTEROID_MIN_SCALE = 4;
+const ASTEROID_MAX_SCALE = 11;
 const ASTEROID_SCALE_VARIANCE = 0.3;
 /** Keeps every asteroid clear of the horizon line (never behind the arena floor). */
 const ASTEROID_MIN_ABS_Y_FRACTION = 0.15;
@@ -75,11 +76,19 @@ export function createAsteroidField(context: ProceduralAssetContext): THREE.Inst
     return base;
   });
 
+  // Lit by the scene's single hemisphere + key light, so the shadow side of
+  // each rock was reading as near-black against the dusk sky (the moon, by
+  // contrast, is unlit MeshBasic and always bright). Lightened the base
+  // colour and added an emissive floor — the same trick the arena ribs use
+  // to stay visible — so the unlit faces never fall to black while flat
+  // shading still gives the rocks faceted form from the key light.
   const material = context.materialRegistry.getOrCreate(
-    "space-asteroid-material-v1",
+    "space-asteroid-material-v2",
     () =>
       new THREE.MeshStandardMaterial({
-        color: 0x6a7080,
+        color: 0x9aa2b4,
+        emissive: new THREE.Color(0x30364a),
+        emissiveIntensity: 0.6,
         flatShading: true,
         roughness: 0.95,
         metalness: 0.05

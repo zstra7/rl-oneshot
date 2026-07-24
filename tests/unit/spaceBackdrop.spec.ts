@@ -95,4 +95,17 @@ describe("G2 createAsteroidField", () => {
       expect(Math.abs(translation.y)).toBeGreaterThanOrEqual(0.15 * distance * 0.9);
     }
   });
+
+  it("the rocks are visible against the dusk sky, not near-black — an emissive floor + non-dark base", () => {
+    const field = createAsteroidField(makeContext());
+    const material = field.material as THREE.MeshStandardMaterial;
+    // They're lit by a single hemisphere + key light, so the shadow side
+    // would read near-black without an emissive floor (the moon avoids this
+    // by being unlit). The base colour must not be dark either.
+    expect(material.emissive.getHex()).not.toBe(0x000000);
+    expect(material.emissiveIntensity).toBeGreaterThan(0);
+    const c = material.color;
+    // Comfortably brighter than the old 0x6a7080 (linear sum ~0.5).
+    expect(c.r + c.g + c.b).toBeGreaterThan(0.6);
+  });
 });
