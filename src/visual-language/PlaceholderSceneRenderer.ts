@@ -9,6 +9,7 @@ import type {
 import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import { PSX_RENDER_PRESETS, type PsxRenderSettings, type VisualDiagnostics } from "@/visual-language/PsxRenderSettings";
 import { PsxRenderPipeline } from "@/visual-language/PsxRenderPipeline";
+import { VISUAL_PALETTE } from "@/visual-language/PsxVisualPalette";
 import { updateAllJitterHandles } from "@/visual-language/VertexJitter";
 
 /**
@@ -47,7 +48,10 @@ export class PlaceholderSceneRenderer
       canvas: this.canvas,
       antialias: false
     });
-    this.renderer.setClearColor(0x05010a, 1);
+    // G4 (plan/GAME_ENHANCEMENTS_PLAN.md): lifted off pure near-black to a
+    // violet-tinted dusk so the moon/asteroids/starfield read with depth
+    // separation against the sky instead of vanishing into a void.
+    this.renderer.setClearColor(parseInt(VISUAL_PALETTE.duskViolet.slice(1), 16), 1);
     this.renderer.setSize(
       this.canvas.clientWidth || 1,
       this.canvas.clientHeight || 1,

@@ -69,9 +69,13 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   // flat, unmapped base (sides/underside only — its top face sits under
   // the paneled floor below) so it no longer needs the single tiled
   // floor texture `stadiumTextures.floor` provided.
-  const floorMaterial = context.materialRegistry.getOrCreate("stadium-floor-base-v3", () => {
+  // G4 (plan/GAME_ENHANCEMENTS_PLAN.md): warmed from a near-black blue-gray
+  // (0x11131a) toward the palette's warmConcrete — the floor's base reads
+  // between/under the textured panels, and the old near-black made the
+  // whole arena floor feel colder and flatter than intended.
+  const floorMaterial = context.materialRegistry.getOrCreate("stadium-floor-base-v4", () => {
     const material = new THREE.MeshStandardMaterial({
-      color: 0x11131a,
+      color: VISUAL_PALETTE.warmConcrete,
       roughness: 0.85,
       metalness: 0.05
     });
@@ -98,7 +102,12 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   // surface. `DoubleSide` stays on the material (not the geometry) purely
   // so the single plane still renders correctly from both interior and
   // exterior camera angles.
-  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v3", () => {
+  // G4: with a warmer floor and a violet-lifted sky now carrying some of
+  // the scene's depth, the shell no longer needs to carry the whole look
+  // on its own — dialed the glow/opacity back slightly so it still reads
+  // clearly as the cyan structural identity without overpowering the
+  // warmer palette around it.
+  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v4", () => {
     const hexTexture = createHexShellTexture();
     hexTexture.repeat.set(1, 1);
     return new THREE.MeshStandardMaterial({
@@ -106,9 +115,9 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
       map: hexTexture,
       emissive: new THREE.Color(0x66d4ff),
       emissiveMap: hexTexture,
-      emissiveIntensity: 0.85,
+      emissiveIntensity: 0.7,
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.24,
       roughness: 0.15,
       metalness: 0.6,
       side: THREE.DoubleSide,
@@ -219,12 +228,14 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
   // floor rework introduced (which made the old fillets read as "really
   // dark"), with a light, never-dark fallback if no texture loaded.
   const rampTexture = context.stadiumTextures?.floorPanelSet?.[0];
+  // G4: flat fallback color warmed to match the palette shift in the floor
+  // base (0x8a929e -> 0x7d776e) — only visible when no floor texture loaded.
   const rampMaterial = context.materialRegistry.getOrCreate(
-    `stadium-ramp-v1-${rampTexture ? "textured" : "flat"}`,
+    `stadium-ramp-v2-${rampTexture ? "textured" : "flat"}`,
     () => {
       const material = new THREE.MeshStandardMaterial({
         map: rampTexture ?? null,
-        color: rampTexture ? 0xffffff : 0x8a929e,
+        color: rampTexture ? 0xffffff : 0x7d776e,
         roughness: 0.9,
         metalness: 0.05
       });
@@ -489,12 +500,15 @@ function createStructuralRibs(context: ProceduralAssetContext): THREE.Group {
   const group = new THREE.Group();
   group.name = "StructuralRibs";
 
+  // G4: emissive tint warmed from a cool blue-black to the palette's
+  // hazardAmberDim — the ribs now read as amber-lit structure (lit BY the
+  // arena) instead of adding yet more cold void to the walls.
   const ribMaterial = context.materialRegistry.getOrCreate(
-    "stadium-rib-v2",
+    "stadium-rib-v3",
     () =>
       new THREE.MeshStandardMaterial({
         color: 0x39414f,
-        emissive: new THREE.Color(0x18222e),
+        emissive: new THREE.Color(VISUAL_PALETTE.hazardAmberDim),
         emissiveIntensity: 0.6,
         roughness: 0.6,
         metalness: 0.4
