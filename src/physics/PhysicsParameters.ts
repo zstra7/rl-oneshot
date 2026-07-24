@@ -71,6 +71,17 @@ export interface PhysicsParameters {
     extraHitMinimumPunch: number;
     extraHitMaximumDeltaSpeed: number;
     recontactSeparation: number;
+    /**
+     * G6 (plan/GAME_ENHANCEMENTS_PLAN.md): how much of the CAR's own
+     * velocity change from a ball contact this tick actually sticks — 1.0
+     * keeps Rapier's raw (fully symmetric) solver result, lower values damp
+     * how much the ball shoves the car around on contact without touching
+     * the ball's own bounce. Real Rocket League's mass ratio is already
+     * matched (180:30, same as ours); this exists because Rapier resolves
+     * that ratio's contact more symmetrically than Bullet did, which reads
+     * as the ball affecting the car "a little too much" on a hit.
+     */
+    ballPushbackScale: number;
   };
 }
 
@@ -161,7 +172,8 @@ export const DEFAULT_PHYSICS_PARAMETERS: PhysicsParameters = {
     extraHitForwardScale: 0.35,
     extraHitMinimumPunch: 1.2,
     extraHitMaximumDeltaSpeed: 25,
-    recontactSeparation: 0.02
+    recontactSeparation: 0.02,
+    ballPushbackScale: 0.55
   }
 };
 

@@ -16,6 +16,11 @@ export function scale(a: Vec3Like, s: number): Vec3Like {
   return { x: a.x * s, y: a.y * s, z: a.z * s };
 }
 
+/** Linear interpolation from `a` to `b`; `t=0` returns `a`, `t=1` returns `b`. Not clamped. */
+export function lerp(a: Vec3Like, b: Vec3Like, t: number): Vec3Like {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+}
+
 export function dot(a: Vec3Like, b: Vec3Like): number {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }

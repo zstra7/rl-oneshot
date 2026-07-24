@@ -26,7 +26,7 @@ import type { GoalScoredEvent, GoalSensorDefinition } from "@/physics/goal/GoalT
 import { otherTeam, type TeamId } from "@/core/TeamTypes";
 import { CarRegistry, createCarEntity, type CarEntity } from "@/physics/entities/CarRegistry";
 import { prePhysicsTick, postPhysicsTick } from "@/physics/car/CarController";
-import { resolveCarBallContacts } from "@/physics/collision/CarBallCollision";
+import { resolveCarBallContacts, type CarVelocitySnapshot } from "@/physics/collision/CarBallCollision";
 import * as V from "@/physics/Vec3Math";
 import { BoostPadSystem } from "@/physics/boost/BoostPadSystem";
 import { createDefaultBoostPadLayout } from "@/physics/boost/BoostPadLayout";
@@ -548,6 +548,15 @@ export class PhysicsFacade implements GameModule {
       prePhysicsTick(world, car, this.parameters, dt);
     }
 
+    // G6 (plan/GAME_ENHANCEMENTS_PLAN.md): captured BEFORE world.step() so
+    // resolveCarBallContacts can blend a car's post-step velocity back
+    // toward what it was going into the solve, damping how much a ball
+    // contact shoves the car around without touching the ball's own bounce.
+    const preStepVelocities = new Map<CarId, CarVelocitySnapshot>();
+    for (const car of cars) {
+      preStepVelocities.set(car.id, { linvel: car.body.linvel(), angvel: car.body.angvel() });
+    }
+
     world.step();
 
     for (const car of cars) {
@@ -565,8 +574,17 @@ export class PhysicsFacade implements GameModule {
         this.ballBody,
         this.wasTouchingBallLastTick,
         this.parameters,
-        dt
+        dt,
+        preStepVelocities
       );
+      // G6: the pushback blend can reintroduce speed above the cap (its
+      // `preStepVelocities` snapshot is taken before this tick's own clamp
+      // runs, so an externally-set or otherwise abnormally fast pre-step
+      // velocity can partially survive the blend) — re-clamp afterward so
+      // the cap is never weaker than the no-ball-contact case.
+      for (const car of cars) {
+        clampLinearVelocity(car.body, RL_CONSTANTS.carMaxSpeed);
+      }
       clampLinearVelocity(this.ballBody, RL_CONSTANTS.ballMaxSpeed);
       this.currentBall = cloneTransform(this.ballBody.translation(), this.ballBody.rotation());
     }
