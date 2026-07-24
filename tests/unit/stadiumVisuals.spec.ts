@@ -244,7 +244,7 @@ describe("G7.b ramp texture world-scaling + goal-edge end caps", () => {
     }
   });
 
-  it("each end cap's geometry is a filled quarter-disc of radius RAMP_FILLET_RADIUS", () => {
+  it("each end cap fills the fillet's CONCAVE cross-section, not a convex quarter-disc poking past the ramp", () => {
     const stadium = buildStadium();
     let cap: THREE.Mesh | null = null;
     stadium.traverse((object) => {
@@ -254,12 +254,42 @@ describe("G7.b ramp texture world-scaling + goal-edge end caps", () => {
     });
     expect(cap).toBeTruthy();
     const geometry = (cap as unknown as THREE.Mesh).geometry;
+
+    // Same [0,R] x [0,R] bounding box as before — but that alone does NOT
+    // distinguish the correct concave curved-triangle (arc centred at (R,R),
+    // hugging the corner) from the WRONG convex quarter-disc (arc centred at
+    // the origin, bulging out past the ramp surface): both fit the same box.
     geometry.computeBoundingBox();
     const box = geometry.boundingBox!;
-    // The pie slice spans [0, R] on both local shape axes.
     expect(box.min.x).toBeCloseTo(0, 3);
     expect(box.min.y).toBeCloseTo(0, 3);
     expect(box.max.x).toBeCloseTo(RAMP_FILLET_RADIUS, 2);
     expect(box.max.y).toBeCloseTo(RAMP_FILLET_RADIUS, 2);
+
+    // The AREA is what distinguishes them: the concave curved triangle is
+    // the unit square minus the far-corner quarter-disc, area (1 - pi/4)*R^2
+    // ~= 0.86*R^2/... (~0.86 for R=2); the wrong convex quarter-disc would be
+    // (pi/4)*R^2 (~3.14 for R=2). Sum the mesh's triangle areas.
+    const position = geometry.attributes["position"]!;
+    const index = geometry.index;
+    let area = 0;
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const triCount = index ? index.count / 3 : position.count / 3;
+    for (let tri = 0; tri < triCount; tri += 1) {
+      const ia = index ? index.getX(tri * 3) : tri * 3;
+      const ib = index ? index.getX(tri * 3 + 1) : tri * 3 + 1;
+      const ic = index ? index.getX(tri * 3 + 2) : tri * 3 + 2;
+      a.fromBufferAttribute(position, ia);
+      b.fromBufferAttribute(position, ib);
+      c.fromBufferAttribute(position, ic);
+      area += b.clone().sub(a).cross(c.clone().sub(a)).length() / 2;
+    }
+    const R = RAMP_FILLET_RADIUS;
+    const concaveArea = (1 - Math.PI / 4) * R * R;
+    const convexArea = (Math.PI / 4) * R * R;
+    expect(area).toBeCloseTo(concaveArea, 1); // ~0.86 for R=2
+    expect(Math.abs(area - convexArea)).toBeGreaterThan(1); // nowhere near the wrong ~3.14
   });
 });

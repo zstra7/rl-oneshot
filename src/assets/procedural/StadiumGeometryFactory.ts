@@ -385,17 +385,27 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
   return group;
 }
 
+/** G7.b: line segments approximating the end cap's concave arc — matches the faceted ramp shell's own look. */
+const RAMP_ENDCAP_ARC_SEGMENTS = 8;
+
 /**
  * G7.b (plan/GAME_ENHANCEMENTS_PLAN.md): the two end-wall floor->wall
  * fillet runs (one on each side of the goal mouth) stop abruptly at the
  * goal post's own inner edge — the run's segments simply end there, with
  * nothing filling the open cross-section, so a camera near the goal frame
  * sees straight through the ramp to the hollow space underneath ("cuts off
- * and you can see under the ramp"). This adds a flat, filled quarter-disc
- * plate — the fillet's own cross-sectional profile: the pie-slice region
- * bounded by the floor, the wall, and the radius-`RAMP_FILLET_RADIUS` arc
- * connecting them — at that open end, plugging the hole so the ramp reads
- * as a solid form meeting the goal frame instead of a hollow shell.
+ * and you can see under the ramp"). This adds a flat, filled plate matching
+ * the fillet's own cross-sectional profile at that open end.
+ *
+ * Crucially the profile is NOT a quarter-disc centred on the floor/wall
+ * corner (that bulges OUT past the ramp surface — a quarter-circle plate
+ * sticking up into open air). The fillet's drivable surface is CONCAVE: a
+ * quarter-circle of radius `RAMP_FILLET_RADIUS` tangent to both the floor
+ * and the wall (see `filletRun`'s "tangent circle of radius R" comment), so
+ * its arc is centred at `(inset=R, height=R)` and the SOLID region behind it
+ * is the curved triangle hugging the corner — the unit square minus the
+ * quarter-disc at the far corner. The plate fills exactly that, so its arc
+ * edge lands flush on the ramp's own concave surface.
  *
  * One cap per (end, side): 2 ends x 2 sides = 4 total, each positioned at
  * the exact floor/wall corner point (`x = xSign*GOAL_HALF_WIDTH`, `y = 0`,
@@ -403,28 +413,36 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
  */
 function createRampEndCaps(context: ProceduralAssetContext): THREE.Group {
   const { halfLength } = TEST_ARENA_DIMENSIONS;
+  const R = RAMP_FILLET_RADIUS;
   const group = new THREE.Group();
   group.name = "RampEndCaps";
 
-  // Shape-local (u, v) = (inset-from-wall, height). The pie slice: corner
-  // at the origin, straight edge along the floor out to (R, 0), the
-  // quarter-circle arc from (R, 0) up to (0, R), then straight back down
-  // the wall to the origin.
+  // Shape-local (u, v) = (inset-from-wall, height). The curved triangle:
+  // corner at the origin, straight edge along the floor out to (R, 0), then
+  // the CONCAVE quarter arc (centre (R, R), radius R) back to the wall at
+  // (0, R) — bulging toward the corner, through the diagonal midpoint
+  // (R - R/sqrt2, R - R/sqrt2) ~= (0.29R, 0.29R) — then straight down the
+  // wall to the origin. Sampled as line segments (unambiguous, and matches
+  // the faceted ramp shell it abuts).
   const shape = new THREE.Shape();
   shape.moveTo(0, 0);
-  shape.lineTo(RAMP_FILLET_RADIUS, 0);
-  shape.absarc(0, 0, RAMP_FILLET_RADIUS, 0, Math.PI / 2, false);
+  shape.lineTo(R, 0);
+  for (let i = 1; i <= RAMP_ENDCAP_ARC_SEGMENTS; i += 1) {
+    // phi sweeps 3*PI/2 (at (R,0)) down to PI (at (0,R)) around centre (R,R).
+    const phi = 1.5 * Math.PI - (i / RAMP_ENDCAP_ARC_SEGMENTS) * (Math.PI / 2);
+    shape.lineTo(R + R * Math.cos(phi), R + R * Math.sin(phi));
+  }
   shape.lineTo(0, 0);
 
-  const geometry = context.geometryRegistry.getOrCreate("stadium-ramp-endcap-v1", () => {
+  const geometry = context.geometryRegistry.getOrCreate("stadium-ramp-endcap-v2", () => {
     const shapeGeometry = new THREE.ShapeGeometry(shape);
-    // ShapeGeometry's default UVs already span the shape's own local (u,v)
-    // extent 0..R on each axis in "UV units", not world units — rescale by
-    // RAMP_TEX_WORLD_SIZE so this small cap tiles at the same density as
-    // the rest of the ramp instead of stretching one tile across it.
+    // three.js ShapeGeometry writes UVs as the raw shape-space vertex
+    // coordinates ("world uvs" — already in metres, 0..R here), NOT
+    // normalised to 0..1, so dividing by RAMP_TEX_WORLD_SIZE alone tiles the
+    // cap at the same world density as the rest of the ramp.
     const uv = shapeGeometry.attributes["uv"]!;
     for (let i = 0; i < uv.count; i += 1) {
-      uv.setXY(i, (uv.getX(i) * RAMP_FILLET_RADIUS) / RAMP_TEX_WORLD_SIZE, (uv.getY(i) * RAMP_FILLET_RADIUS) / RAMP_TEX_WORLD_SIZE);
+      uv.setXY(i, uv.getX(i) / RAMP_TEX_WORLD_SIZE, uv.getY(i) / RAMP_TEX_WORLD_SIZE);
     }
     uv.needsUpdate = true;
     return shapeGeometry;
