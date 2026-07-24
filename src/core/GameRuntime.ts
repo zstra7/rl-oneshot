@@ -31,6 +31,11 @@ import {
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
 import { otherTeam, type TeamId } from "@/core/TeamTypes";
 import {
+  deriveOnlineEndReason,
+  resolveForfeit,
+  type OnlineMatchEndReason
+} from "@/core/OnlineForfeit";
+import {
   AiSource,
   BufferedLocalSource,
   LocalDeviceSource,
@@ -42,7 +47,7 @@ import { LEAD_EMA_ALPHA, computeRateScale, computeTargetLeadTicks } from "@/netc
 import { FALLBACK_NICKNAME } from "@/netcode/Nickname";
 import { parsePeerPayload } from "@/netcode/PeerCosmetics";
 import { VoteKind } from "@/netcode/protocol";
-import { shouldPause, shouldRematch, shouldResume } from "@/netcode/VotePolicy";
+import { computePauseEdge, shouldPause, shouldRematch, shouldResume } from "@/netcode/VotePolicy";
 import type { CarTeamId } from "@/assets/cars/CarModelTypes";
 import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
@@ -127,16 +132,6 @@ export interface ReadonlyApplicationSnapshot {
   readonly appState: AppState;
   readonly diagnostics: RuntimeDiagnostics;
 }
-
-/**
- * Why an online match ended, surfaced on the results screen so the player
- * knows what happened instead of a match silently jumping to results:
- *  - "opponent-left": the other player disconnected/closed their game (win by
- *    abandonment) — no rematch is possible, they're gone.
- *  - "you-left": this player used LEAVE MATCH (forfeit).
- *  - null: a natural clock/score finish, both still connected — rematch offered.
- */
-export type OnlineMatchEndReason = "opponent-left" | "you-left" | null;
 
 export interface GameRuntimeFacade {
   initialise(canvas: HTMLCanvasElement): Promise<void>;
@@ -398,12 +393,6 @@ export class GameRuntime implements GameRuntimeFacade {
   private onlineRematchSeed = 0;
   /** P4.3: match-flow's own MATCH_RESULTS from the PREVIOUS frame, to detect the results->next-match edge and clear a stale rematch vote. */
   private onlineWasMatchResults = false;
-  /**
-   * Why the online match ended, for the results screen to explain it (and to
-   * suppress REMATCH when the opponent is gone). null = a natural clock/score
-   * finish with both players still connected (rematch offered).
-   */
-  private onlineEndReason: OnlineMatchEndReason = null;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -722,7 +711,8 @@ export class GameRuntime implements GameRuntimeFacade {
     this.onlineDurationMinutes = durationMinutes;
     this.onlineRematchSeed = context.kickoffSeed;
     this.onlineWasMatchResults = false;
-    this.onlineEndReason = null;
+    // Clear any leftover forfeit/leave signal from a previous match on this session.
+    context.session.setLocalVote(VoteKind.Forfeit, false);
     // Follow this client's actual car (the guest drives car-opponent) so the
     // camera, HUD boost/supersonic/ball-cam readouts track the local player.
     this.localPlayerCarId = context.localCarId;
@@ -802,33 +792,56 @@ export class GameRuntime implements GameRuntimeFacade {
   }
 
   /**
-   * P3: LEAVE MATCH — forfeits immediately (never needs a vote), regardless
-   * of pause state. The local team is inferred from which car this client
-   * drives; the OTHER team is recorded as the winner. The session is kept
-   * alive through the results screen (so it shows the right winner/nicknames)
-   * and torn down by `leaveOnlineToMenu()` when the player leaves results.
+   * P3: LEAVE MATCH — holds this client's Forfeit signal (never needs the
+   * other player's consent). It does NOT end the match locally: only the HOST
+   * enacts the end (`driveOnlineForfeit`), so both clients agree on the
+   * outcome and the leaver isn't resurrected by a stale host snapshot. The
+   * guest's signal reaches the host over the vote channel; the host acts on
+   * its own signal directly. The session stays alive through the results
+   * screen (correct winner/nicknames) and is torn down by
+   * `leaveOnlineToMenu()`.
    */
   public leaveOnlineMatch(): void {
     const context = this.onlineSession;
     if (!context || !this.requireModules().gameFlow.isOnlineMode()) {
       return;
     }
-    const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
-    this.onlineEndReason = "you-left";
-    this.requireModules().gameFlow.endOnlineMatchByForfeit(otherTeam(localTeam));
+    context.session.setLocalVote(VoteKind.Forfeit, true);
     this.emitSessionStateChanged();
+  }
+
+  /**
+   * P3 (host only): enact a pending leave. Whichever side holds the Forfeit
+   * signal loses; the forfeiting team is recorded in the authority state and
+   * streamed, so both clients derive the right "you/opponent left" message
+   * from one source of truth.
+   */
+  private driveOnlineForfeit(context: OnlineMatchContext, modules: ModuleContainer): void {
+    if (!context.isHost || !modules.gameFlow.isOnlineMode()) {
+      return;
+    }
+    const hostTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    const outcome = resolveForfeit(
+      hostTeam,
+      context.session.hasLocalVote(VoteKind.Forfeit),
+      context.session.getRemoteVote(VoteKind.Forfeit)
+    );
+    if (outcome) {
+      modules.gameFlow.endOnlineMatchByForfeit(outcome.winner, outcome.forfeitedBy);
+    }
   }
 
   /**
    * P4.2: the REMOTE peer abandoned the match (silence past the timeout, or
    * an explicit WebRTC disconnect/failure signal) — the local player wins by
-   * forfeit rather than being stuck in a match that can never finish. The
-   * session is deliberately kept alive so the results screen still has this
-   * client's score/winner perspective and the peers' nicknames (tearing it
-   * down here would flip a winning guest's screen to "DEFEAT"); it's torn
-   * down by `leaveOnlineToMenu()` when the player leaves results. The
-   * `isOnlineMode()` guard makes this idempotent — the dead session's
-   * ever-growing silence would otherwise re-trigger it every frame.
+   * forfeit rather than being stuck in a match that can never finish. Unlike a
+   * clean LEAVE this can't be coordinated through the host (the peer is gone),
+   * so the remaining client ends locally, recording the ABSENT team as the
+   * forfeiter (→ "opponent-left" here, and the peer never sees a results
+   * screen anyway). The session is kept alive so the results screen still has
+   * this client's winner perspective + nicknames (tearing it down would flip a
+   * winning guest to "DEFEAT"); torn down by `leaveOnlineToMenu()`. The
+   * `isOnlineMode()` guard makes it idempotent.
    */
   public forfeitOnlineMatchByAbandonment(): void {
     const context = this.onlineSession;
@@ -836,8 +849,7 @@ export class GameRuntime implements GameRuntimeFacade {
       return;
     }
     const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
-    this.onlineEndReason = "opponent-left";
-    this.requireModules().gameFlow.endOnlineMatchByForfeit(localTeam);
+    this.requireModules().gameFlow.endOnlineMatchByForfeit(localTeam, otherTeam(localTeam));
     this.emitSessionStateChanged();
   }
 
@@ -847,7 +859,6 @@ export class GameRuntime implements GameRuntimeFacade {
    * is torn down separately by the online store's `close()`.
    */
   public leaveOnlineToMenu(): void {
-    this.onlineEndReason = null;
     if (this.onlineSession) {
       this.endOnlineSession();
     }
@@ -855,9 +866,20 @@ export class GameRuntime implements GameRuntimeFacade {
     this.emitSessionStateChanged();
   }
 
-  /** Why the current online match ended (for the results screen), or null for a natural finish / outside an online match. */
+  /**
+   * Why the current online match ended, for the results screen — derived from
+   * the single authoritative `forfeitedBy` (the host's own, or the guest's
+   * mirrored copy) and which car this client drives, so the two screens can
+   * never both claim "you left". null = a natural finish (rematch offered) or
+   * outside an online match.
+   */
   public getOnlineEndReason(): OnlineMatchEndReason {
-    return this.onlineEndReason;
+    const context = this.onlineSession;
+    if (!context) {
+      return null;
+    }
+    const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    return deriveOnlineEndReason(this.requireModules().gameFlow.getForfeitedBy(), localTeam);
   }
 
   public isOnlineSession(): boolean {
@@ -1013,9 +1035,14 @@ export class GameRuntime implements GameRuntimeFacade {
 
     context.session.maintainVotes();
     this.driveOnlinePauseVotes(context, modules, paused);
+    this.driveOnlineForfeit(context, modules);
     this.driveOnlineRematchVotes(context, modules);
 
     if (!context.isHost) {
+      // The guest mirrors the host's pause/resume/forfeit transitions HERE, so
+      // the pause-edge detection below MUST run after this — otherwise a guest
+      // resuming via snapshot never observes the paused->playing edge and stays
+      // stuck in its pause overlay (the bug this ordering fixes).
       this.applyHostSnapshot();
     } else if (modules.gameFlow.isPaused() && this.pausedSnapshotFrameCounter % PAUSED_SNAPSHOT_EVERY_N_FRAMES === 0) {
       // Host, while paused: onFixedTick never runs (ticks are frozen), so
@@ -1028,11 +1055,12 @@ export class GameRuntime implements GameRuntimeFacade {
         flow: modules.gameFlow.captureAuthorityState()
       });
     }
+
+    this.applyOnlinePauseEdges(context, modules);
+
     if (modules.gameFlow.isPaused()) {
       this.pausedSnapshotFrameCounter += 1;
     }
-
-    this.onlineWasPaused = modules.gameFlow.isPaused();
 
     // P3: `onFixedTick` (the normal source of `emitSessionStateChanged`)
     // never runs while the match is actually paused — the fixed-tick
@@ -1044,36 +1072,54 @@ export class GameRuntime implements GameRuntimeFacade {
   }
 
   /**
-   * P3: the host-authoritative pause/resume decision. Both peers compute the
-   * SAME vote counts symmetrically (votes are exchanged peer-to-peer, not
-   * relayed through the host) via `VotePolicy`'s pure predicates, but only
-   * the host is allowed to act — it calls `pauseMatch()`/`resumeMatch()` and
-   * the guest mirrors the resulting transition from the host's next
-   * snapshot. Whichever vote's phase just ended is auto-cleared on BOTH
-   * sides (comparing this frame's paused state to last frame's) so a held
-   * vote never leaks into the next phase.
+   * P3: the host-authoritative pause/resume DECISION. Both peers compute the
+   * same vote counts symmetrically (votes are exchanged peer-to-peer), but
+   * only the host acts — it calls pause()/resume() and the guest mirrors the
+   * transition from the host's next snapshot. The pause/resume EDGE handling
+   * (clearing the spent vote, closing the overlay) lives in
+   * `applyOnlinePauseEdges`, which runs after the guest has mirrored the
+   * transition so both peers observe the same edge.
    */
   private driveOnlinePauseVotes(context: OnlineMatchContext, modules: ModuleContainer, paused: boolean): void {
+    if (!context.isHost) {
+      return;
+    }
     const localPauseRequest = context.session.hasLocalVote(VoteKind.PauseRequest);
     const remotePauseRequest = context.session.getRemoteVote(VoteKind.PauseRequest);
     const localContinueYes = context.session.hasLocalVote(VoteKind.ContinueYes);
     const remoteContinueYes = context.session.getRemoteVote(VoteKind.ContinueYes);
 
-    if (context.isHost) {
-      if (shouldPause(localPauseRequest, remotePauseRequest, paused)) {
-        modules.gameFlow.pause();
-      } else if (shouldResume(localContinueYes, remoteContinueYes, paused)) {
-        modules.gameFlow.resume();
-      }
+    if (shouldPause(localPauseRequest, remotePauseRequest, paused)) {
+      modules.gameFlow.pause();
+    } else if (shouldResume(localContinueYes, remoteContinueYes, paused)) {
+      modules.gameFlow.resume();
     }
+  }
 
+  /**
+   * P3: react to the pause/resume EDGE on BOTH peers, comparing this frame's
+   * paused state (after the guest has mirrored any host transition) to last
+   * frame's. On the pause edge, clear the now-spent pause-request vote. On the
+   * resume edge, clear the continue vote AND close the personal pause overlay —
+   * the latter is what got missed before, leaving the guest stuck in the menu.
+   */
+  private applyOnlinePauseEdges(context: OnlineMatchContext, modules: ModuleContainer): void {
     const nowPaused = modules.gameFlow.isPaused();
-    if (!this.onlineWasPaused && nowPaused) {
+    const edge = computePauseEdge(this.onlineWasPaused, nowPaused);
+    if (edge.justPaused) {
       context.session.setLocalVote(VoteKind.PauseRequest, false);
       this.pausedSnapshotFrameCounter = 0;
     }
-    if (this.onlineWasPaused && !nowPaused) {
+    if (edge.justResumed) {
       context.session.setLocalVote(VoteKind.ContinueYes, false);
+      this.onlinePauseOverlayOpen = false;
+    }
+    this.onlineWasPaused = nowPaused;
+
+    // Once the match has ended (leave/forfeit/natural finish → MATCH_RESULTS),
+    // the personal pause overlay is meaningless — force it closed so it can't
+    // linger over the results screen.
+    if (modules.gameFlow.getMatchState() === "MATCH_RESULTS") {
       this.onlinePauseOverlayOpen = false;
     }
   }

@@ -32,7 +32,8 @@ async function snapshotAfterPlay(): Promise<StateSyncSnapshot> {
       overtimeIntroTicksRemaining: 0,
       kickoffCounter: 3,
       goalLatch: false,
-      winner: null
+      winner: null,
+      forfeitedBy: null
     }
   };
 }

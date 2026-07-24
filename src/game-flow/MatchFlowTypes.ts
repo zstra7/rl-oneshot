@@ -70,6 +70,13 @@ export interface MatchAuthorityState {
   readonly kickoffCounter: number;
   readonly goalLatch: boolean;
   readonly winner: TeamId | null;
+  /**
+   * The team that ended the match by leaving/forfeiting (not a natural clock
+   * finish), or null. Streamed so BOTH clients can show the right message —
+   * "you left" for the forfeiting side, "opponent left" for the other — from
+   * a single authoritative source of truth rather than each guessing locally.
+   */
+  readonly forfeitedBy: TeamId | null;
 }
 
 /** game-flow spec section 35. */

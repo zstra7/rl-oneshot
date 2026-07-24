@@ -31,11 +31,23 @@ export const enum PacketType {
 export const enum VoteKind {
   PauseRequest = 1,
   ContinueYes = 2,
-  RematchYes = 3
+  RematchYes = 3,
+  /**
+   * Not a mutual vote — a unilateral "I am leaving this match" signal carried
+   * on the same held/re-sent channel as the votes (so it survives the
+   * unreliable transport). The HOST enacts it: whichever side holds it
+   * forfeits, the other wins. See core/OnlineForfeit.resolveForfeit.
+   */
+  Forfeit = 4
 }
 
 function isVoteKind(value: number): value is VoteKind {
-  return value === VoteKind.PauseRequest || value === VoteKind.ContinueYes || value === VoteKind.RematchYes;
+  return (
+    value === VoteKind.PauseRequest ||
+    value === VoteKind.ContinueYes ||
+    value === VoteKind.RematchYes ||
+    value === VoteKind.Forfeit
+  );
 }
 
 /** Minimal transport contract shared by FakeLink (N2 tests) and PeerLink (N3, real WebRTC). */

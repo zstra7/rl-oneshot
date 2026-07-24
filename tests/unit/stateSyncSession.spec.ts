@@ -42,7 +42,8 @@ function makeSnapshot(tick: number): StateSyncSnapshot {
       overtimeIntroTicksRemaining: 0,
       kickoffCounter: 0,
       goalLatch: false,
-      winner: null
+      winner: null,
+      forfeitedBy: null
     }
   };
 }

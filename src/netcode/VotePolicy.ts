@@ -25,3 +25,23 @@ export function shouldResume(localContinueYes: boolean, remoteContinueYes: boole
 export function shouldRematch(localRematchYes: boolean, remoteRematchYes: boolean, atMatchResults: boolean): boolean {
   return atMatchResults && localRematchYes && remoteRematchYes;
 }
+
+export interface PauseEdge {
+  /** The match just went paused this frame (both voted pause). */
+  readonly justPaused: boolean;
+  /** The match just resumed this frame (both voted continue) — close the overlay on BOTH peers here. */
+  readonly justResumed: boolean;
+}
+
+/**
+ * P3: the pause/resume EDGE between the previous frame's paused state and the
+ * current one. The subtlety that caused a bug: on the GUEST the resume is
+ * applied by mirroring the host's snapshot, so `nowPaused` MUST be sampled
+ * AFTER that mirror — sampling it before (as the old code did, inside the
+ * host-only vote decision) meant the guest never saw `justResumed` and stayed
+ * stuck in its pause overlay. Keeping the edge pure makes that ordering
+ * explicit and testable.
+ */
+export function computePauseEdge(wasPaused: boolean, nowPaused: boolean): PauseEdge {
+  return { justPaused: !wasPaused && nowPaused, justResumed: wasPaused && !nowPaused };
+}

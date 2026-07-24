@@ -117,6 +117,11 @@ const showPauseMenu = computed(() => {
   if (matchState.value === "PAUSED") {
     return !pauseSettingsOpen.value;
   }
+  // The online personal overlay is only meaningful during a live match — never
+  // over the results screen (which owns MATCH_RESULTS and its own leave flow).
+  if (matchState.value === "MATCH_RESULTS") {
+    return false;
+  }
   return runtime.isOnlineSession() && runtime.isOnlinePauseOverlayOpen();
 });
 

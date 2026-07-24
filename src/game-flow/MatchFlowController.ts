@@ -84,6 +84,8 @@ export class MatchFlowController {
   private regulationTimeRemaining = DEFAULT_MATCH_DURATION_MINUTES * 60;
   private overtimeElapsed = 0;
   private winner: TeamId | null = null;
+  /** The team that ended an online match by leaving/forfeiting, or null for a natural finish. */
+  private forfeitedBy: TeamId | null = null;
 
   private goalLatch = false;
   private pausedFromState: MatchState | null = null;
@@ -251,6 +253,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
     this.kickoffCounter = 0;
 
@@ -580,6 +583,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
     // Seed the shared kickoff-variant sequence identically on both peers.
     this.kickoffCounter = ((config.kickoffSeed % KICKOFF_VARIANT_COUNT) + KICKOFF_VARIANT_COUNT) % KICKOFF_VARIANT_COUNT;
@@ -611,7 +615,8 @@ export class MatchFlowController {
       overtimeIntroTicksRemaining: this.overtimeIntroTicksRemaining,
       kickoffCounter: this.kickoffCounter,
       goalLatch: this.goalLatch,
-      winner: this.winner
+      winner: this.winner,
+      forfeitedBy: this.forfeitedBy
     };
   }
 
@@ -636,6 +641,7 @@ export class MatchFlowController {
     this.kickoffCounter = state.kickoffCounter;
     this.goalLatch = state.goalLatch;
     this.winner = state.winner;
+    this.forfeitedBy = state.forfeitedBy;
 
     if (state.playerScore + state.opponentScore > scoredBefore) {
       // Reflect the host's goal so the guest's audio/VFX fire. The scoring
@@ -648,11 +654,13 @@ export class MatchFlowController {
   }
 
   /**
-   * N5: end an online match immediately with a decided winner — used when
-   * the peer forfeits or the connection drops past the grace period (win
-   * by abandonment). No-op outside a live/pausable online match.
+   * N5: end an online match immediately with a decided winner — used when a
+   * player leaves (`forfeitedBy` = the leaving team) or the connection drops
+   * past the grace period (win by abandonment). `forfeitedBy` is recorded so
+   * both clients can show the right "you/opponent left" message from one
+   * authoritative source. No-op outside a live/pausable online match.
    */
-  public endOnlineMatchByForfeit(winner: TeamId): void {
+  public endOnlineMatchByForfeit(winner: TeamId, forfeitedBy: TeamId | null = null): void {
     if (!this.onlineMode) {
       return;
     }
@@ -661,9 +669,15 @@ export class MatchFlowController {
     }
     this.setMatchState("MATCH_ENDING");
     this.winner = winner;
+    this.forfeitedBy = forfeitedBy;
     this.pushEvent({ type: "match-ended", winner });
     this.setMatchState("MATCH_RESULTS");
     this.onlineMode = false;
+  }
+
+  /** The team that ended the current/last match by leaving/forfeiting, or null for a natural finish. */
+  public getForfeitedBy(): TeamId | null {
+    return this.forfeitedBy;
   }
 
   public isOnlineMode(): boolean {
@@ -680,6 +694,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.goalLatch = false;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
     this.kickoffCounter = 0;
@@ -695,6 +710,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
     this.kickoffCounter = 0;
 
@@ -708,6 +724,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.goalLatch = false;
     this.pausedFromState = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
