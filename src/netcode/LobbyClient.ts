@@ -92,8 +92,24 @@ export class LobbyClient {
   }
 
   public close(): void {
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    if (!socket) {
+      return;
+    }
+    // Detach the handlers BEFORE closing so an intentional close never emits a
+    // spurious event. This matters most on quick-match: when the server pairs
+    // us it sends `matched`, and we close the matchmaking socket to reconnect
+    // to the assigned room — without detaching, that stale socket's `onclose`
+    // would fire a "closed" → "disconnected" the UI surfaces as a lost
+    // connection, moments before the real room connects. Genuine drops still
+    // surface, because they come through the *active* socket we never
+    // deliberately closed.
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.close();
   }
 
   private open(fullUrl: string): void {

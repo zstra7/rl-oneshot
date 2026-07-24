@@ -166,4 +166,19 @@ describe("N5 MultiplayerSession orchestration", () => {
     h.getSocket()._server({ type: "queued", position: 3 });
     expect(h.events).toContainEqual({ type: "queued", position: 3 });
   });
+
+  it("does not surface a false disconnect when quick-match swaps the queue socket for the room socket", () => {
+    const h = makeSession();
+    h.session.quickMatch();
+    const queueSocket = h.getSocket();
+    h.getSocket()._server({ type: "queued", position: 1 });
+    // The server pairs us: internally we close the matchmaking socket and
+    // reconnect to the assigned room. The browser then fires the queue
+    // socket's onclose AFTER we've moved on — it must NOT surface as a lost
+    // connection (the room socket is what matters now).
+    h.getSocket()._server({ type: "matched", code: "ZZZZZ" });
+    expect(h.getSocket().url).toBe("wss://mp.example.dev/room?code=ZZZZZ");
+    queueSocket.onclose?.(null); // stale async close of the now-abandoned queue socket
+    expect(h.events).not.toContainEqual({ type: "disconnected", reason: "lobby-closed" });
+  });
 });

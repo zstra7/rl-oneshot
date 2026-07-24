@@ -128,6 +128,16 @@ export interface ReadonlyApplicationSnapshot {
   readonly diagnostics: RuntimeDiagnostics;
 }
 
+/**
+ * Why an online match ended, surfaced on the results screen so the player
+ * knows what happened instead of a match silently jumping to results:
+ *  - "opponent-left": the other player disconnected/closed their game (win by
+ *    abandonment) — no rematch is possible, they're gone.
+ *  - "you-left": this player used LEAVE MATCH (forfeit).
+ *  - null: a natural clock/score finish, both still connected — rematch offered.
+ */
+export type OnlineMatchEndReason = "opponent-left" | "you-left" | null;
+
 export interface GameRuntimeFacade {
   initialise(canvas: HTMLCanvasElement): Promise<void>;
 
@@ -162,6 +172,10 @@ export interface GameRuntimeFacade {
   getOnlineNicknames(): { local: string; remote: string } | null;
   /** P3: LEAVE MATCH — forfeits immediately, regardless of pause state. */
   leaveOnlineMatch(): void;
+  /** Clean exit from the online results screen back to the main menu (restores single-player state). */
+  leaveOnlineToMenu(): void;
+  /** Why the online match ended (opponent-left / you-left / null=natural finish), for the results screen. */
+  getOnlineEndReason(): OnlineMatchEndReason;
   /** P4.2: the remote peer abandoned the match — local player wins by forfeit. */
   forfeitOnlineMatchByAbandonment(): void;
   /** P3: ESC — toggle this client's personal pause overlay (never touches match state by itself). */
@@ -384,6 +398,12 @@ export class GameRuntime implements GameRuntimeFacade {
   private onlineRematchSeed = 0;
   /** P4.3: match-flow's own MATCH_RESULTS from the PREVIOUS frame, to detect the results->next-match edge and clear a stale rematch vote. */
   private onlineWasMatchResults = false;
+  /**
+   * Why the online match ended, for the results screen to explain it (and to
+   * suppress REMATCH when the opponent is gone). null = a natural clock/score
+   * finish with both players still connected (rematch offered).
+   */
+  private onlineEndReason: OnlineMatchEndReason = null;
 
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
@@ -702,6 +722,7 @@ export class GameRuntime implements GameRuntimeFacade {
     this.onlineDurationMinutes = durationMinutes;
     this.onlineRematchSeed = context.kickoffSeed;
     this.onlineWasMatchResults = false;
+    this.onlineEndReason = null;
     // Follow this client's actual car (the guest drives car-opponent) so the
     // camera, HUD boost/supersonic/ball-cam readouts track the local player.
     this.localPlayerCarId = context.localCarId;
@@ -783,31 +804,60 @@ export class GameRuntime implements GameRuntimeFacade {
   /**
    * P3: LEAVE MATCH — forfeits immediately (never needs a vote), regardless
    * of pause state. The local team is inferred from which car this client
-   * drives; the OTHER team is recorded as the winner.
+   * drives; the OTHER team is recorded as the winner. The session is kept
+   * alive through the results screen (so it shows the right winner/nicknames)
+   * and torn down by `leaveOnlineToMenu()` when the player leaves results.
    */
   public leaveOnlineMatch(): void {
     const context = this.onlineSession;
-    if (!context) {
+    if (!context || !this.requireModules().gameFlow.isOnlineMode()) {
       return;
     }
     const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    this.onlineEndReason = "you-left";
     this.requireModules().gameFlow.endOnlineMatchByForfeit(otherTeam(localTeam));
-    this.endOnlineSession();
+    this.emitSessionStateChanged();
   }
 
   /**
    * P4.2: the REMOTE peer abandoned the match (silence past the timeout, or
    * an explicit WebRTC disconnect/failure signal) — the local player wins by
-   * forfeit rather than being stuck in a match that can never finish.
+   * forfeit rather than being stuck in a match that can never finish. The
+   * session is deliberately kept alive so the results screen still has this
+   * client's score/winner perspective and the peers' nicknames (tearing it
+   * down here would flip a winning guest's screen to "DEFEAT"); it's torn
+   * down by `leaveOnlineToMenu()` when the player leaves results. The
+   * `isOnlineMode()` guard makes this idempotent — the dead session's
+   * ever-growing silence would otherwise re-trigger it every frame.
    */
   public forfeitOnlineMatchByAbandonment(): void {
     const context = this.onlineSession;
-    if (!context) {
+    if (!context || !this.requireModules().gameFlow.isOnlineMode()) {
       return;
     }
     const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    this.onlineEndReason = "opponent-left";
     this.requireModules().gameFlow.endOnlineMatchByForfeit(localTeam);
-    this.endOnlineSession();
+    this.emitSessionStateChanged();
+  }
+
+  /**
+   * Clean exit from an online match's results screen: restore single-player
+   * state and return to the main menu. The transport (PeerLink/lobby socket)
+   * is torn down separately by the online store's `close()`.
+   */
+  public leaveOnlineToMenu(): void {
+    this.onlineEndReason = null;
+    if (this.onlineSession) {
+      this.endOnlineSession();
+    }
+    this.requireModules().gameFlow.returnToMenu();
+    this.emitSessionStateChanged();
+  }
+
+  /** Why the current online match ended (for the results screen), or null for a natural finish / outside an online match. */
+  public getOnlineEndReason(): OnlineMatchEndReason {
+    return this.onlineEndReason;
   }
 
   public isOnlineSession(): boolean {
@@ -952,10 +1002,11 @@ export class GameRuntime implements GameRuntimeFacade {
     context.session.pump();
 
     // P4.2: no packet at all from the remote peer in ONLINE_ABANDONMENT_TIMEOUT_MS
-    // — they've disconnected/closed the tab/lost their network entirely.
-    // `forfeitOnlineMatchByAbandonment` nulls `this.onlineSession`, so bail
-    // out of the rest of this frame's online handling immediately.
-    if (context.session.msSinceRemoteActivity() > ONLINE_ABANDONMENT_TIMEOUT_MS) {
+    // — they've disconnected/closed the tab/lost their network entirely; the
+    // local player wins by forfeit. Gated on `isOnlineMode()` so it only fires
+    // during a LIVE match: once the match has already concluded (results
+    // screen), the dead session's ever-growing silence must not re-trigger it.
+    if (modules.gameFlow.isOnlineMode() && context.session.msSinceRemoteActivity() > ONLINE_ABANDONMENT_TIMEOUT_MS) {
       this.forfeitOnlineMatchByAbandonment();
       return;
     }

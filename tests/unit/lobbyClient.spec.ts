@@ -124,4 +124,20 @@ describe("N5 LobbyClient", () => {
     expect(events).toContainEqual({ type: "error", reason: "socket-error" });
     expect(events).toContainEqual({ type: "closed" });
   });
+
+  it("detaches handlers on an intentional close so a stale onclose can't emit a spurious event", () => {
+    const { client, events, getSocket } = makeClient();
+    client.connectToMatchmaking();
+    const socket = getSocket();
+    client.close();
+    expect(socket.closed).toBe(true);
+    // A real browser fires onclose asynchronously AFTER close() — with the
+    // handlers detached it's a no-op, so quick-match's queue->room socket swap
+    // no longer surfaces a false "connection lost". onerror is detached too.
+    expect(socket.onclose).toBeNull();
+    expect(socket.onerror).toBeNull();
+    socket.onclose?.(null);
+    socket.onerror?.(null);
+    expect(events).toHaveLength(0);
+  });
 });

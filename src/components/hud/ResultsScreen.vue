@@ -3,10 +3,12 @@ import { computed } from "vue";
 
 import { useGameRuntime } from "@/core/useGameRuntime";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
+import { useOnlineStore } from "@/stores/onlineStore";
 import { useTournamentStore } from "@/stores/tournamentStore";
 
 const runtime = useGameRuntime();
 const matchFlowStore = useMatchFlowStore();
+const onlineStore = useOnlineStore();
 const tournamentStore = useTournamentStore();
 
 const session = computed(() => matchFlowStore.session);
@@ -54,6 +56,26 @@ const isOnlineMatch = computed(() => {
   void matchFlowStore.session;
   return runtime.isOnlineSession();
 });
+// Why the online match ended, so the player knows what happened instead of
+// the game silently landing on a results screen. null = a natural finish
+// with both players still connected, where a rematch is offered.
+const onlineEndReason = computed(() => {
+  void matchFlowStore.session;
+  return runtime.getOnlineEndReason();
+});
+const endReasonLabel = computed(() => {
+  switch (onlineEndReason.value) {
+    case "opponent-left":
+      return "OPPONENT LEFT THE MATCH";
+    case "you-left":
+      return "YOU LEFT THE MATCH";
+    default:
+      return "";
+  }
+});
+// A rematch is only possible on a natural finish — if either side forfeited
+// or disconnected, the match is over and only RETURN TO MENU is offered.
+const canRematch = computed(() => onlineEndReason.value === null);
 const rematchVotes = computed(() => {
   void matchFlowStore.session;
   return runtime.getOnlineVoteCounts().rematchVotes;
@@ -68,9 +90,12 @@ function toggleOnlineRematchVote(): void {
   runtime.voteOnlineRematch(!myRematchVoteActive.value);
 }
 
-function leaveOnlineMatch(): void {
+// Full clean exit from an online match: tear down the transport (store) and
+// restore single-player state + return to the menu (runtime).
+function exitOnlineToMenu(): void {
   runtime.playUiSound("cancel");
-  runtime.leaveOnlineMatch();
+  onlineStore.close();
+  runtime.leaveOnlineToMenu();
 }
 
 function replayMatch(): void {
@@ -128,27 +153,42 @@ function leaveTournament(): void {
           </button>
         </template>
         <template v-else-if="isOnlineMatch">
-          <p class="wo-label vote-hint">BOTH PLAYERS MUST AGREE TO REMATCH</p>
+          <p v-if="endReasonLabel" class="wo-label end-reason" data-testid="online-end-reason">{{ endReasonLabel }}</p>
+          <template v-if="canRematch">
+            <p class="wo-label vote-hint">BOTH PLAYERS MUST AGREE TO REMATCH</p>
+            <button
+              type="button"
+              class="menu-item wo-item"
+              data-index="01"
+              autofocus
+              data-testid="online-rematch-vote"
+              @click="toggleOnlineRematchVote()"
+            >
+              {{ myRematchVoteActive ? "CANCEL REMATCH VOTE" : "REMATCH" }}
+              ({{ rematchVotes }}/2)
+            </button>
+            <button
+              type="button"
+              class="menu-item wo-item"
+              data-index="02"
+              data-menu-back
+              data-testid="online-results-leave"
+              @click="exitOnlineToMenu()"
+            >
+              LEAVE MATCH
+            </button>
+          </template>
           <button
+            v-else
             type="button"
             class="menu-item wo-item"
             data-index="01"
             autofocus
-            data-testid="online-rematch-vote"
-            @click="toggleOnlineRematchVote()"
-          >
-            {{ myRematchVoteActive ? "CANCEL REMATCH VOTE" : "REMATCH" }}
-            ({{ rematchVotes }}/2)
-          </button>
-          <button
-            type="button"
-            class="menu-item wo-item"
-            data-index="02"
             data-menu-back
             data-testid="online-results-leave"
-            @click="leaveOnlineMatch()"
+            @click="exitOnlineToMenu()"
           >
-            LEAVE MATCH
+            RETURN TO MENU
           </button>
         </template>
         <template v-else>
@@ -220,6 +260,13 @@ function leaveTournament(): void {
   margin: 0 0 0.25rem 0;
   font-size: 0.8rem;
   opacity: 0.8;
+}
+
+.end-reason {
+  text-align: center;
+  margin: 0 0 0.5rem 0;
+  font-size: 0.95rem;
+  color: var(--ui-amber);
 }
 
 .actions {
