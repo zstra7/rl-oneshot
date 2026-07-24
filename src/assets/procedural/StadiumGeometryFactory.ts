@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { createHexShellTexture } from "@/assets/procedural/HexPatternTexture";
 import type { GeometryRegistry } from "@/assets/procedural/GeometryRegistry";
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
-import { CORNER_PANEL_HALF_THICK, CORNER_RADIUS, generateArenaRamps } from "@/physics/arena/ArenaRampGeometry";
+import { CORNER_PANEL_HALF_THICK, CORNER_PANELS, CORNER_RADIUS, generateArenaRamps } from "@/physics/arena/ArenaRampGeometry";
 import { TEST_ARENA_DIMENSIONS } from "@/physics/arena/TestArenaPresets";
 import { GOAL_HALF_WIDTH } from "@/physics/goal/GoalTypes";
 import { VISUAL_PALETTE } from "@/visual-language/PsxVisualPalette";
@@ -35,17 +35,30 @@ export const HEX_TILE_WORLD_SIZE = 11.5;
  * ratio, replacing the old shared `hexTexture.repeat.set(10, 10)` that
  * stretched differently per surface.
  */
+/**
+ * G3 (plan/GAME_ENHANCEMENTS_PLAN.md): `uOffsetWorld` (world units, same
+ * scale as `worldW`/`worldH`) shifts every U coordinate before the
+ * `HEX_TILE_WORLD_SIZE` rescale — this is what lets a sequence of adjacent
+ * panels (the curved corners, below) continue the SAME hex pattern across
+ * their shared edges instead of each restarting the tile at u=0. Every
+ * other caller passes 0 (the default), so their behaviour is unchanged.
+ */
 function createShellPlaneGeometry(
   registry: GeometryRegistry,
   key: string,
   worldW: number,
-  worldH: number
+  worldH: number,
+  uOffsetWorld = 0
 ): THREE.BufferGeometry {
   return registry.getOrCreate(key, () => {
     const g = new THREE.PlaneGeometry(worldW, worldH);
     const uv = g.attributes.uv!;
     for (let i = 0; i < uv.count; i += 1) {
-      uv.setXY(i, uv.getX(i) * (worldW / HEX_TILE_WORLD_SIZE), uv.getY(i) * (worldH / HEX_TILE_WORLD_SIZE));
+      uv.setXY(
+        i,
+        (uv.getX(i) * worldW + uOffsetWorld) / HEX_TILE_WORLD_SIZE,
+        uv.getY(i) * (worldH / HEX_TILE_WORLD_SIZE)
+      );
     }
     return g;
   });
@@ -244,17 +257,36 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
     }
   );
 
+  // G3 (plan/GAME_ENHANCEMENTS_PLAN.md): every corner's 6 panels arrive in
+  // this array in ascending arc order (see `generateCorner`'s `for (let i =
+  // 0; i < CORNER_PANELS...)` loop), interleaved with floor-fillet specs but
+  // never reordered relative to each other — so counting corner-wall specs
+  // as they're encountered and taking the count modulo CORNER_PANELS
+  // recovers each panel's position (0..5) within its own corner, without
+  // needing the physics-shared RampSegmentSpec type to carry an index.
+  let cornerWallOrdinal = 0;
+
   for (const spec of specs) {
     if (spec.kind === "corner-wall") {
       // F3: single-sided plane sized off the collider's own half-extents,
       // instead of a 1m-thick box that rendered the hex pattern on both
       // parallel faces.
-      const key = `stadium-corner-panel-plane-v3-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}`;
+      // G3: every panel is the same size (chordHalf/height are constants
+      // independent of which corner/index), so the same 6 geometries (one
+      // per arc position) are shared across all 4 corners — each carries a
+      // U offset of `index * panelWidth` so the hex pattern CONTINUES across
+      // panel boundaries within a corner instead of restarting at u=0 on
+      // every panel (the reported "clipped" hexes).
+      const panelIndex = cornerWallOrdinal % CORNER_PANELS;
+      cornerWallOrdinal += 1;
+      const panelWidth = spec.halfExtents.x * 2;
+      const key = `stadium-corner-panel-plane-v4-${panelIndex}-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}`;
       const geometry = createShellPlaneGeometry(
         context.geometryRegistry,
         key,
-        spec.halfExtents.x * 2,
-        spec.halfExtents.y * 2
+        panelWidth,
+        spec.halfExtents.y * 2,
+        panelIndex * panelWidth
       );
 
       const mesh = new THREE.Mesh(geometry, cornerGlassMaterial);
