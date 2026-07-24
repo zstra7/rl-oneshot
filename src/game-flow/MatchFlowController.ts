@@ -719,6 +719,18 @@ export class MatchFlowController {
     this.beginKickoffReset("PLAYING");
   }
 
+  /**
+   * G10 (plan/GAME_ENHANCEMENTS_PLAN.md): returning to the menu used to only
+   * reset match-flow state (score/clock/etc) — the physics world (ball +
+   * cars) was left wherever the last match ended, so the menu's static
+   * ghost cars sat on top of a ball and live cars in arbitrary positions
+   * ("remnants of the last game"). The physics ball IS the menu ball (R8),
+   * so resetting it to the neutral kickoff pose here is what makes the menu
+   * read fresh again. Skipped in guestMode: an online guest's physics world
+   * is authoritative-remote, and by the time it reaches the menu the online
+   * session has already ended (guestMode is cleared with it) — this guard
+   * is just defensive.
+   */
   public returnToMenu(): void {
     this.playerScore = 0;
     this.opponentScore = 0;
@@ -728,6 +740,13 @@ export class MatchFlowController {
     this.goalLatch = false;
     this.pausedFromState = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
+    if (this.physics && !this.guestMode) {
+      this.physics.resetWorld({
+        carCreationOrder: [PLAYER_CAR_ID, OPPONENT_CAR_ID],
+        kickoffVariantIndex: 0
+      });
+    }
+    this.kickoffCounter = 0;
     this.setMatchState("MAIN_MENU");
   }
 
