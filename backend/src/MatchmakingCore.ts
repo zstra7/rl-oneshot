@@ -31,6 +31,31 @@ export class MatchmakingCore {
     return this.queue.length;
   }
 
+  /**
+   * The queued player ids, oldest first. Lets the adapter push each waiting
+   * player their CURRENT position whenever the queue shifts — without this
+   * a client only ever learned the position it had at connect time, so a
+   * queue that drained around it still displayed the original number.
+   */
+  public queuedIds(): readonly string[] {
+    return [...this.queue];
+  }
+
+  /**
+   * Drop every queued player not in `liveIds`. Belt-and-braces against a
+   * socket that died without `webSocketClose` having run yet: pairing a
+   * dead player consumes a real waiting player into a room nobody will
+   * ever join, stranding them. Cheap to re-derive from the live socket set
+   * immediately before each pairing pass.
+   */
+  public retainOnly(liveIds: ReadonlySet<string>): void {
+    for (let i = this.queue.length - 1; i >= 0; i -= 1) {
+      if (!liveIds.has(this.queue[i]!)) {
+        this.queue.splice(i, 1);
+      }
+    }
+  }
+
   /** Remove and return as many oldest-first pairs as the queue currently allows. */
   public takePairs(): [string, string][] {
     const pairs: [string, string][] = [];

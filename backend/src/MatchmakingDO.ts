@@ -35,6 +35,9 @@ export class MatchmakingDO {
     this.queue.enqueue(playerId);
     server.send(JSON.stringify({ type: "queued", position: this.queue.positionOf(playerId) }));
     this.tryPair();
+    // Whoever is still waiting has just moved up (or had someone slot in
+    // behind them) — push everyone their current position.
+    this.broadcastPositions();
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -49,6 +52,8 @@ export class MatchmakingDO {
     } catch {
       // already closing
     }
+    // A departure shifts everyone behind them up one place.
+    this.broadcastPositions();
   }
 
   public webSocketError(ws: WebSocket): void {
@@ -57,6 +62,14 @@ export class MatchmakingDO {
 
   private tryPair(): void {
     const socketsByPlayer = this.socketsByPlayer();
+    // Never pair a player whose socket has already gone away: the surviving
+    // partner would be sent to a room the ghost never joins, and (with no
+    // `peer-left` ever firing, since the ghost never took a slot) would wait
+    // there indefinitely. The client also guards this with its own pairing
+    // timeout — the two are complementary, since a socket can die in the
+    // window between the last liveness check and the send.
+    this.queue.retainOnly(new Set(socketsByPlayer.keys()));
+
     for (const [aId, bId] of this.queue.takePairs()) {
       const code = generateRoomCode(Math.random);
       for (const playerId of [aId, bId]) {
@@ -64,6 +77,23 @@ export class MatchmakingDO {
         if (ws) {
           ws.send(JSON.stringify({ type: "matched", code }));
         }
+      }
+    }
+  }
+
+  /** Push every still-waiting player their CURRENT 1-based queue position. */
+  private broadcastPositions(): void {
+    const socketsByPlayer = this.socketsByPlayer();
+    const ids = this.queue.queuedIds();
+    for (let i = 0; i < ids.length; i += 1) {
+      const ws = socketsByPlayer.get(ids[i]!);
+      if (!ws) {
+        continue;
+      }
+      try {
+        ws.send(JSON.stringify({ type: "queued", position: i + 1 }));
+      } catch {
+        // Socket is mid-close; its `webSocketClose` will evict it shortly.
       }
     }
   }

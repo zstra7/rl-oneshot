@@ -2,6 +2,12 @@ import { defineStore } from "pinia";
 
 import { getGameRuntime } from "@/core/GameRuntimeFactory";
 import { MultiplayerSession, type MultiplayerEvent } from "@/netcode/MultiplayerSession";
+import {
+  PAIRING_TIMEOUT_MS,
+  resolvePairingTimeout,
+  shouldArmPairingTimeout,
+  type OnlineIntent
+} from "@/netcode/PairingTimeout";
 import { buildHandshakePayload } from "@/netcode/PeerCosmetics";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
@@ -30,6 +36,8 @@ interface OnlineStoreState {
   queuePosition: number;
   errorMessage: string;
   isHost: boolean;
+  /** Which lobby flow the player started — decides whether a stalled pairing times out. */
+  intent: OnlineIntent | null;
 }
 
 function controlUrl(): string {
@@ -44,7 +52,17 @@ function controlUrl(): string {
 
 let session: MultiplayerSession | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
+/** Armed once a quick-match player lands in its assigned room; cleared when the peer actually arrives. */
+let pairingTimer: ReturnType<typeof setTimeout> | null = null;
+let quickMatchRequeues = 0;
 let cachedIceServers: RTCIceServer[] | null = null;
+
+function clearPairingTimer(): void {
+  if (pairingTimer) {
+    clearTimeout(pairingTimer);
+    pairingTimer = null;
+  }
+}
 
 /** If the control server never answers the initial connection, surface an error rather than hang. */
 const CONNECT_TIMEOUT_MS = 8000;
@@ -84,7 +102,8 @@ export const useOnlineStore = defineStore("online", {
     joinCodeInput: "",
     queuePosition: 0,
     errorMessage: "",
-    isHost: false
+    isHost: false,
+    intent: null
   }),
 
   actions: {
@@ -98,12 +117,15 @@ export const useOnlineStore = defineStore("online", {
         clearTimeout(connectTimer);
         connectTimer = null;
       }
+      clearPairingTimer();
+      quickMatchRequeues = 0;
       session?.close();
       session = null;
       this.screen = "closed";
       this.roomCode = "";
       this.queuePosition = 0;
       this.errorMessage = "";
+      this.intent = null;
     },
 
     openJoinEntry(): void {
@@ -113,6 +135,7 @@ export const useOnlineStore = defineStore("online", {
 
     async createRoom(): Promise<void> {
       this.isHost = true;
+      this.intent = "create";
       this.screen = "connecting";
       await this.startSession();
       session?.createRoom();
@@ -126,6 +149,7 @@ export const useOnlineStore = defineStore("online", {
         return;
       }
       this.isHost = false;
+      this.intent = "join";
       this.screen = "connecting";
       await this.startSession();
       session?.joinRoom(normalized);
@@ -133,8 +157,10 @@ export const useOnlineStore = defineStore("online", {
 
     async quickMatch(): Promise<void> {
       this.isHost = false;
+      this.intent = "quick";
       this.screen = "queued";
       this.queuePosition = 0;
+      clearPairingTimer();
       await this.startSession();
       session?.quickMatch();
     },
@@ -196,11 +222,19 @@ export const useOnlineStore = defineStore("online", {
         case "room-ready":
           this.roomCode = event.code;
           this.screen = "connecting";
+          // A quick-matched player has now landed in its assigned room. If
+          // the partner never actually takes a slot, no `peer-left` will
+          // ever fire (the room only reports a peer LEAVING, and this one
+          // never arrived) — so this is the only thing that stops the
+          // player waiting on "CONNECTING…" forever.
+          this.armPairingTimeout();
           break;
         case "connecting":
           this.screen = "connecting";
           break;
         case "match-ready": {
+          clearPairingTimer();
+          quickMatchRequeues = 0;
           this.screen = "in-match";
           // The runtime takes over from here; hand off the lockstep context.
           const duration: MatchDurationMinutes = 3;
@@ -208,6 +242,7 @@ export const useOnlineStore = defineStore("online", {
           break;
         }
         case "handshake-rejected":
+          clearPairingTimer();
           this.errorMessage =
             event.reason === "build-hash-mismatch"
               ? "Your game versions don't match. Both players need the same build."
@@ -215,6 +250,7 @@ export const useOnlineStore = defineStore("online", {
           this.screen = "error";
           break;
         case "disconnected":
+          clearPairingTimer();
           if (this.screen !== "in-match") {
             this.errorMessage = "Connection lost before the match started.";
             this.screen = "error";
@@ -227,10 +263,40 @@ export const useOnlineStore = defineStore("online", {
           }
           break;
         case "error":
+          clearPairingTimer();
           this.errorMessage = "Couldn't reach the matchmaking server.";
           this.screen = "error";
           break;
       }
+    },
+
+    /**
+     * Arm the matched -> peer-arrives guard. Only quick match gets one:
+     * CREATE ROOM legitimately holds a room open for a friend indefinitely,
+     * and JOIN BY CODE may legitimately arrive before the creator does.
+     * See `netcode/PairingTimeout.ts` for the full reasoning.
+     */
+    armPairingTimeout(): void {
+      clearPairingTimer();
+      if (!shouldArmPairingTimeout(this.intent)) {
+        return;
+      }
+      pairingTimer = setTimeout(() => {
+        pairingTimer = null;
+        const action = resolvePairingTimeout(this.intent ?? "quick", quickMatchRequeues);
+        if (!action) {
+          return;
+        }
+        if (action.kind === "requeue") {
+          quickMatchRequeues = action.attempt;
+          // The partner ghosted between being matched and joining the room.
+          // Silently go back to the queue rather than stranding the player.
+          void this.quickMatch();
+          return;
+        }
+        this.errorMessage = "Couldn't find an opponent. Please try again.";
+        this.screen = "error";
+      }, PAIRING_TIMEOUT_MS);
     }
   }
 });
