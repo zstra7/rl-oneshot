@@ -1,0 +1,17 @@
+{
+  "name": "space-carball-mp-backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "N4 control plane for Space Carball online multiplayer (Cloudflare Workers + Durable Objects).",
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260101.0",
+    "typescript": "5.9.3",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -7,6 +7,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-rapier-deterministic-types.mjs",
     "dev": "vite",
     "type-check": "vue-tsc --noEmit",
     "build:app": "vite build",
@@ -36,7 +37,7 @@
     "report:build": "node scripts/create-build-report.mjs"
   },
   "dependencies": {
-    "@dimforge/rapier3d-compat": "0.19.3",
+    "@dimforge/rapier3d-compat": "npm:@dimforge/rapier3d-deterministic-compat@0.19.3",
     "pinia": "4.0.2",
     "three": "0.160.0",
     "vue": "3.5.40"

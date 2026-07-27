@@ -74,10 +74,18 @@ export class ChaseCameraController implements RenderFrameModule {
     private readonly gameFlow: MatchFlowController,
     private readonly camera: THREE.PerspectiveCamera,
     private readonly getAlpha: () => number,
-    private readonly playerCarId: CarId
+    private playerCarId: CarId
   ) {
     this.camera.fov = CAM.fov;
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Point the chase camera at a different car. Online matches follow the
+   * local player's actual car, which is `car-opponent` for the answerer.
+   */
+  public setTargetCar(carId: CarId): void {
+    this.playerCarId = carId;
   }
 
   /**

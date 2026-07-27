@@ -778,9 +778,10 @@ onBeforeUnmount(() => {
   inset: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: flex-start;
   padding-left: 8vw;
+  padding-top: 10vh;
   pointer-events: none;
 }
 
@@ -819,6 +820,11 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   min-width: 22rem;
   max-width: 30rem;
+  /* G9: matches .controls-rows' own max-height cap — the tallest tab
+     (CONTROLS) never grows past that, so reserving the same space here
+     means switching tabs no longer moves the heading/tabs above it or the
+     BACK button below it. */
+  min-height: 60vh;
   margin-bottom: 1.5rem;
 }
 

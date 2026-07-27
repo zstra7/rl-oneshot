@@ -4,6 +4,7 @@ import type { VisualPreset } from "@/assets/procedural/ProceduralAssetContext";
 import { DEFAULT_CONTROL_BINDINGS, type GamepadBindings, type KeyOrMouseBinding, type KeyboardMouseBindings } from "@/input/bindings/BindingsConfig";
 import { DEFAULT_AIR_ROLL_SENSITIVITY } from "@/input/InputTypes";
 import type { MatchDurationMinutes } from "@/game-flow/MatchFlowTypes";
+import { FALLBACK_NICKNAME, sanitizeNickname } from "@/netcode/Nickname";
 
 const STORAGE_KEY = "space-carball-settings-v1";
 const SCHEMA_VERSION = 1;
@@ -59,6 +60,9 @@ export interface AppSettings {
     readonly bodyColor: string;
     readonly boostColor: string;
   };
+  readonly online: {
+    readonly nickname: string;
+  };
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -112,6 +116,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // R12.2: matches the built-in player cyan (VISUAL_PALETTE.playerCyan / GameRuntime's DEFAULT_PLAYER_CAR_COLOR).
     bodyColor: "#4ff0ff",
     boostColor: "#4ff0ff"
+  },
+  online: {
+    nickname: FALLBACK_NICKNAME
   }
 };
 
@@ -230,6 +237,7 @@ export function validateSettings(raw: unknown): AppSettings {
   const accessibility = (input["accessibility"] ?? {}) as Record<string, unknown>;
   const controls = (input["controls"] ?? {}) as Record<string, unknown>;
   const car = (input["car"] ?? {}) as Record<string, unknown>;
+  const online = (input["online"] ?? {}) as Record<string, unknown>;
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -311,6 +319,9 @@ export function validateSettings(raw: unknown): AppSettings {
     car: {
       bodyColor: pickHexColor(car["bodyColor"], DEFAULT_SETTINGS.car.bodyColor),
       boostColor: pickHexColor(car["boostColor"], DEFAULT_SETTINGS.car.boostColor)
+    },
+    online: {
+      nickname: sanitizeNickname(online["nickname"] ?? DEFAULT_SETTINGS.online.nickname)
     }
   };
 }
@@ -361,6 +372,7 @@ export const useSettingsStore = defineStore("settings", {
         airRollSensitivity?: number;
       };
       car?: Partial<AppSettings["car"]>;
+      online?: Partial<AppSettings["online"]>;
     }): void {
       this.settings = validateSettings({
         ...this.settings,
@@ -374,7 +386,8 @@ export const useSettingsStore = defineStore("settings", {
           gamepad: { ...this.settings.controls.gamepad, ...patch.controls?.gamepad },
           airRollSensitivity: patch.controls?.airRollSensitivity ?? this.settings.controls.airRollSensitivity
         },
-        car: { ...this.settings.car, ...patch.car }
+        car: { ...this.settings.car, ...patch.car },
+        online: { ...this.settings.online, ...patch.online }
       });
       saveToStorage(this.settings);
     },

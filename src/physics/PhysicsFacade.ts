@@ -26,7 +26,7 @@ import type { GoalScoredEvent, GoalSensorDefinition } from "@/physics/goal/GoalT
 import { otherTeam, type TeamId } from "@/core/TeamTypes";
 import { CarRegistry, createCarEntity, type CarEntity } from "@/physics/entities/CarRegistry";
 import { prePhysicsTick, postPhysicsTick } from "@/physics/car/CarController";
-import { resolveCarBallContacts } from "@/physics/collision/CarBallCollision";
+import { resolveCarBallContacts, type CarVelocitySnapshot } from "@/physics/collision/CarBallCollision";
 import * as V from "@/physics/Vec3Math";
 import { BoostPadSystem } from "@/physics/boost/BoostPadSystem";
 import { createDefaultBoostPadLayout } from "@/physics/boost/BoostPadLayout";
@@ -36,6 +36,7 @@ import type {
   BoostPadObservation,
   BoostPadRuntimeState
 } from "@/physics/boost/BoostPadTypes";
+import type { WorldNetSnapshot } from "@/physics/WorldSnapshot";
 
 export const PHYSICS_MODULE_CONTRACT_VERSION = "2.1";
 
@@ -547,6 +548,15 @@ export class PhysicsFacade implements GameModule {
       prePhysicsTick(world, car, this.parameters, dt);
     }
 
+    // G6 (plan/GAME_ENHANCEMENTS_PLAN.md): captured BEFORE world.step() so
+    // resolveCarBallContacts can blend a car's post-step velocity back
+    // toward what it was going into the solve, damping how much a ball
+    // contact shoves the car around without touching the ball's own bounce.
+    const preStepVelocities = new Map<CarId, CarVelocitySnapshot>();
+    for (const car of cars) {
+      preStepVelocities.set(car.id, { linvel: car.body.linvel(), angvel: car.body.angvel() });
+    }
+
     world.step();
 
     for (const car of cars) {
@@ -564,8 +574,17 @@ export class PhysicsFacade implements GameModule {
         this.ballBody,
         this.wasTouchingBallLastTick,
         this.parameters,
-        dt
+        dt,
+        preStepVelocities
       );
+      // G6: the pushback blend can reintroduce speed above the cap (its
+      // `preStepVelocities` snapshot is taken before this tick's own clamp
+      // runs, so an externally-set or otherwise abnormally fast pre-step
+      // velocity can partially survive the blend) — re-clamp afterward so
+      // the cap is never weaker than the no-ball-contact case.
+      for (const car of cars) {
+        clampLinearVelocity(car.body, RL_CONSTANTS.carMaxSpeed);
+      }
       clampLinearVelocity(this.ballBody, RL_CONSTANTS.ballMaxSpeed);
       this.currentBall = cloneTransform(this.ballBody.translation(), this.ballBody.rotation());
     }
@@ -656,6 +675,111 @@ export class PhysicsFacade implements GameModule {
 
   public getBoostPadStates(): BoostPadObservation[] {
     return this.boostPadSystem.getObservations();
+  }
+
+  /**
+   * S1 (online state-sync): capture the COMPLETE mutable simulation state so
+   * a peer can restore it verbatim. This is the host's authoritative frame;
+   * everything `step()` reads is included (bodies, per-car controller
+   * runtime, previous input, ball-contact + goal-sensor bookkeeping, pad
+   * timers), so a guest that applies it and replays inputs stays converged.
+   */
+  public getWorldSnapshot(): WorldNetSnapshot {
+    const vec = (v: RAPIER.Vector): V.Vec3Like => ({ x: v.x, y: v.y, z: v.z });
+    const quat = (q: RAPIER.Rotation): QuatLike => ({ x: q.x, y: q.y, z: q.z, w: q.w });
+
+    const cars = this.carRegistry.getAllStable().map((car) => ({
+      id: car.id,
+      position: vec(car.body.translation()),
+      rotation: quat(car.body.rotation()),
+      linearVelocity: vec(car.body.linvel()),
+      angularVelocity: vec(car.body.angvel()),
+      runtime: structuredCloneOf(car.runtime),
+      previousInput: { ...car.previousInput },
+      touchingBall: this.wasTouchingBallLastTick.get(car.id) ?? false
+    }));
+
+    if (!this.ballBody) {
+      throw new Error("Ball has not been spawned.");
+    }
+    const ballBody = this.ballBody;
+    const goalOverlap = {} as Record<TeamId, boolean>;
+    for (const [team, overlapping] of this.goalSensorOverlapping) {
+      goalOverlap[team] = overlapping;
+    }
+
+    return {
+      tick: this.tick,
+      simulationTime: this.simulationTime,
+      cars,
+      ball: {
+        position: vec(ballBody.translation()),
+        rotation: quat(ballBody.rotation()),
+        linearVelocity: vec(ballBody.linvel()),
+        angularVelocity: vec(ballBody.angvel())
+      },
+      pads: this.boostPadSystem.registry.getAllStable().map((pad) => ({
+        active: pad.active,
+        collectedAtTick: pad.collectedAtTick,
+        respawnAtTick: pad.respawnAtTick,
+        respawnTicksRemaining: pad.respawnTicksRemaining,
+        lastCollectedByCarId: pad.lastCollectedByCarId
+      })),
+      goalOverlap
+    };
+  }
+
+  /**
+   * S1: overwrite this world with an authoritative snapshot. The guest calls
+   * this to converge onto the host's state, then replays its own buffered
+   * inputs forward from `snapshot.tick`. Pads are matched by stable order.
+   * Missing cars/pads are tolerated (a guest that hasn't spawned everything
+   * yet just skips them). Render smoothing is re-primed so the correction
+   * does not produce a one-frame interpolation streak.
+   */
+  public applyWorldSnapshot(snapshot: WorldNetSnapshot): void {
+    this.tick = snapshot.tick;
+    this.simulationTime = snapshot.simulationTime;
+
+    for (const carSnap of snapshot.cars) {
+      const car = this.carRegistry.tryGet(carSnap.id);
+      if (!car) {
+        continue;
+      }
+      car.body.setTranslation(carSnap.position, true);
+      car.body.setRotation(carSnap.rotation, true);
+      car.body.setLinvel(carSnap.linearVelocity, true);
+      car.body.setAngvel(carSnap.angularVelocity, true);
+      const sample = cloneTransform(car.body.translation(), car.body.rotation());
+      this.previousSnapshot.set(carSnap.id, sample);
+      this.currentSnapshot.set(carSnap.id, sample);
+
+      Object.assign(car.runtime, structuredCloneOf(carSnap.runtime));
+      car.previousInput = { ...carSnap.previousInput };
+      this.wasTouchingBallLastTick.set(carSnap.id, carSnap.touchingBall);
+    }
+
+    if (this.ballBody) {
+      this.ballBody.setTranslation(snapshot.ball.position, true);
+      this.ballBody.setRotation(snapshot.ball.rotation, true);
+      this.ballBody.setLinvel(snapshot.ball.linearVelocity, true);
+      this.ballBody.setAngvel(snapshot.ball.angularVelocity, true);
+      const ballSample = cloneTransform(this.ballBody.translation(), this.ballBody.rotation());
+      this.previousBall = ballSample;
+      this.currentBall = ballSample;
+    }
+
+    const pads = this.boostPadSystem.registry.getAllStable();
+    snapshot.pads.forEach((padSnap, index) => {
+      const pad = pads[index];
+      if (pad) {
+        Object.assign(pad, padSnap);
+      }
+    });
+
+    for (const [team, overlapping] of Object.entries(snapshot.goalOverlap) as [TeamId, boolean][]) {
+      this.goalSensorOverlapping.set(team, overlapping);
+    }
   }
 
   /** Test-only: force a pad's runtime state (e.g. simulate a mid-cooldown pad). */

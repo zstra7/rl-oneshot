@@ -4,11 +4,31 @@ import type { PhysicsParameters } from "@/physics/PhysicsParameters";
 import * as V from "@/physics/Vec3Math";
 import type { CarEntity } from "@/physics/entities/CarRegistry";
 
+/** A car's linear+angular velocity snapshot, for G6's pre/post-step pushback blend. */
+export interface CarVelocitySnapshot {
+  readonly linvel: V.Vec3Like;
+  readonly angvel: V.Vec3Like;
+}
+
 /**
  * physics spec section 27, "phase one" implementation: Rapier solves base
  * contact; this adds one one-sided extra impulse per car-ball pair,
  * applied only on new-contact onset (simplified from the spec's
  * separation-distance re-contact tracking — see docs/physics-deviations.md).
+ *
+ * G6 (plan/GAME_ENHANCEMENTS_PLAN.md): also damps how much the CAR's own
+ * velocity changed this tick from touching the ball — real Rocket League
+ * barely moves the car on contact; Rapier resolves our matched 180:30 mass
+ * ratio more symmetrically than that, which reads as the ball shoving the
+ * car around a little too much. `preStepVelocities` (captured by
+ * `PhysicsFacade.step()` immediately before `world.step()`) is the car's
+ * velocity BEFORE the Rapier contact solve; on any tick the car is
+ * currently touching the ball (not just onset — a car resting against the
+ * ball should stay damped every tick, not just the first), its post-step
+ * velocity is blended back toward that pre-step value by
+ * `1 - ballPushbackScale`. This only touches the CAR — the ball's own
+ * bounce (and the extra-hit contribution above) is untouched, so the hit
+ * still feels physical, just doesn't fling the car.
  */
 export function resolveCarBallContacts(
   world: RAPIER.World,
@@ -16,7 +36,8 @@ export function resolveCarBallContacts(
   ballBody: RAPIER.RigidBody,
   wasTouchingLastTick: Map<string, boolean>,
   parameters: PhysicsParameters,
-  dt: number
+  dt: number,
+  preStepVelocities?: ReadonlyMap<string, CarVelocitySnapshot>
 ): void {
   const ballPosition = ballBody.translation();
   const ballVelocity = ballBody.linvel();
@@ -40,6 +61,17 @@ export function resolveCarBallContacts(
       const contribution = computeExtraHitContribution(car, ballPosition, ballVelocity, parameters);
       combinedContribution = V.add(combinedContribution, contribution);
       anyContribution = true;
+    }
+
+    if (touchingNow) {
+      const preStep = preStepVelocities?.get(car.id);
+      if (preStep) {
+        const scale = parameters.carBall.ballPushbackScale;
+        const postLinvel = car.body.linvel();
+        const postAngvel = car.body.angvel();
+        car.body.setLinvel(V.lerp(preStep.linvel, postLinvel, scale), true);
+        car.body.setAngvel(V.lerp(preStep.angvel, postAngvel, scale), true);
+      }
     }
 
     wasTouchingLastTick.set(car.id, touchingNow);

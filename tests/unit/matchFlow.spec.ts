@@ -226,4 +226,46 @@ describe("MatchFlowController (game-flow spec sections 28-33)", () => {
     expect(gameFlow.getMatchState()).toBe("MAIN_MENU");
     expect(gameFlow.getSessionState().playerScore).toBe(0);
   });
+
+  it("G10: returnToMenu resets the physics world so no remnants of the last match remain", () => {
+    // Capture the canonical kickoff-variant-0 pose directly from
+    // resetWorld() itself, rather than asserting on assumed coordinates —
+    // this is exactly what returnToMenu is expected to reproduce.
+    physics.resetWorld({ carCreationOrder: ["car-player", "car-opponent"], kickoffVariantIndex: 0 });
+    const expectedBall = physics.getBallState();
+    const expectedPlayer = physics.getCarState("car-player");
+    const expectedOpponent = physics.getCarState("car-opponent");
+
+    gameFlow.openMatchSetup();
+    gameFlow.selectMatchDuration(1);
+    gameFlow.startMatch();
+    for (let i = 0; i < COUNTDOWN_TOTAL_TICKS; i += 1) tick(physics, gameFlow);
+
+    // Drive the ball and both cars away from any kickoff pose.
+    physics.setBallState({ position: { x: 12, y: 3, z: 18 }, linearVelocity: { x: 5, y: 0, z: -5 } });
+    physics.setCarState("car-player", {
+      position: { x: 15, y: 1, z: 22 },
+      linearVelocity: { x: 3, y: 0, z: 0 }
+    });
+    physics.setCarState("car-opponent", {
+      position: { x: -15, y: 1, z: -22 },
+      linearVelocity: { x: -3, y: 0, z: 0 }
+    });
+    tick(physics, gameFlow);
+
+    gameFlow.returnToMenu();
+
+    const ball = physics.getBallState();
+    expect(ball.position.x).toBeCloseTo(expectedBall.position.x, 1);
+    expect(ball.position.z).toBeCloseTo(expectedBall.position.z, 1);
+    expect(ball.linearVelocity.x).toBeCloseTo(0, 1);
+    expect(ball.linearVelocity.z).toBeCloseTo(0, 1);
+
+    const playerCar = physics.getCarState("car-player");
+    const opponentCar = physics.getCarState("car-opponent");
+    expect(playerCar.position.x).toBeCloseTo(expectedPlayer.position.x, 1);
+    expect(playerCar.position.z).toBeCloseTo(expectedPlayer.position.z, 1);
+    expect(opponentCar.position.x).toBeCloseTo(expectedOpponent.position.x, 1);
+    expect(opponentCar.position.z).toBeCloseTo(expectedOpponent.position.z, 1);
+  });
 });

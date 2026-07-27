@@ -61,27 +61,44 @@ function buildGoalEnd(zSign: -1 | 1, defendingTeam: TeamId): {
   const sidePostWidth = (halfWidth - GOAL_HALF_WIDTH) / 2;
   const sidePostCentre = GOAL_HALF_WIDTH + sidePostWidth;
 
-  // WS5.B seam fix: widen the goal-box side walls/roof by 0.5 in z (and
-  // shift their centre correspondingly) so they overlap *inside* the end
-  // wall's plane instead of meeting it edge-to-edge, and widen the
-  // side-post segments by 0.25 toward the goal centreline for the same
-  // reason — overlapping static colliders are harmless in Rapier, and
-  // this closes a seam cars/balls could otherwise phase through at speed.
+  // WS5.B seam fix: widen the goal-box side walls/roof and the side-post
+  // segments so they overlap the end wall's own thickness instead of
+  // meeting it edge-to-edge — overlapping static colliders are harmless in
+  // Rapier, and this closes a seam cars/balls could otherwise phase
+  // through at speed.
+  //
+  // G5 (plan/GAME_ENHANCEMENTS_PLAN.md): the ORIGINAL overlap direction was
+  // the bug — both overlaps grew INTO the goal mouth instead of away from
+  // it:
+  //  - POST_OVERLAP shifted each post's centre toward the goal centreline,
+  //    landing its inner edge at GOAL_HALF_WIDTH - 2*POST_OVERLAP (6.5, not
+  //    7) — an invisible 0.5m lip inside each side of the goal mouth.
+  //  - SEAM_OVERLAP shifted the goal-box side walls/roof 0.5m INTO the
+  //    field (their near face at halfLength - SEAM_OVERLAP = 29, a full
+  //    metre inside the end wall's z=30 plane) — the roof piece is exactly
+  //    "the invisible wall above the goal": y in [GOAL_HEIGHT,
+  //    GOAL_HEIGHT+WALL_HALF_THICKNESS], z in [29, 30], spanning the goal
+  //    mouth's width.
+  // Both are now widened OUTWARD/BEHIND the wall plane instead: posts grow
+  // away from the goal centreline (inner edge lands exactly on
+  // GOAL_HALF_WIDTH), and the goal-box side/roof pieces grow further behind
+  // the end wall (never in front of it) while still overlapping the wall's
+  // own thickness at the join.
   const SEAM_OVERLAP = 0.5;
   const POST_OVERLAP = 0.25;
-  const boxSideZHalfExtent = GOAL_DEPTH / 2 + SEAM_OVERLAP;
-  const boxSideZCentre = zSign * (halfLength + GOAL_DEPTH / 2 - SEAM_OVERLAP);
+  const boxSideZHalfExtent = GOAL_DEPTH / 2 + SEAM_OVERLAP / 2;
+  const boxSideZCentre = zSign * (halfLength + GOAL_DEPTH / 2 + SEAM_OVERLAP / 2);
 
   const colliders: ArenaColliderSpec[] = [
     // Left goal post wall segment.
     {
       halfExtents: { x: sidePostWidth + POST_OVERLAP, y: height / 2, z: WALL_HALF_THICKNESS },
-      translation: { x: -sidePostCentre + POST_OVERLAP, y: height / 2, z: wallZ }
+      translation: { x: -(sidePostCentre + POST_OVERLAP), y: height / 2, z: wallZ }
     },
     // Right goal post wall segment.
     {
       halfExtents: { x: sidePostWidth + POST_OVERLAP, y: height / 2, z: WALL_HALF_THICKNESS },
-      translation: { x: sidePostCentre - POST_OVERLAP, y: height / 2, z: wallZ }
+      translation: { x: sidePostCentre + POST_OVERLAP, y: height / 2, z: wallZ }
     },
     // Header above the goal mouth.
     {

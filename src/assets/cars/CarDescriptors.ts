@@ -141,12 +141,23 @@ export function darkenHex(hex: string, factor: number): string {
  * without constructing a pipeline/WebGL context.
  */
 export function derivePlayerProfile(hex: string): TeamVisualProfile {
+  return deriveTeamProfile("player", hex);
+}
+
+/**
+ * P2.3 (plan/ONLINE_POLISH_PLAN.md): generalises `derivePlayerProfile` to
+ * either team, so an online opponent's chosen body colour can be applied to
+ * `car-opponent` the same way a local player's Customise Car choice is
+ * applied to `car-player`. Keeps that team's own pattern (chevron-a for
+ * player, chevron-b for opponent) so silhouettes stay distinguishable.
+ */
+export function deriveTeamProfile(team: CarTeamId, hex: string): TeamVisualProfile {
   return {
-    teamId: "player",
+    teamId: team,
     primary: hex,
     secondary: darkenHex(hex, 0.55),
     emissive: hex,
-    patternId: "chevron-a"
+    patternId: TEAM_VISUAL_PROFILES[team].patternId
   };
 }
 

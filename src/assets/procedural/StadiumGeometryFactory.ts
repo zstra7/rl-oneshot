@@ -3,7 +3,13 @@ import * as THREE from "three";
 import { createHexShellTexture } from "@/assets/procedural/HexPatternTexture";
 import type { GeometryRegistry } from "@/assets/procedural/GeometryRegistry";
 import type { ProceduralAssetContext } from "@/assets/procedural/ProceduralAssetContext";
-import { CORNER_PANEL_HALF_THICK, CORNER_RADIUS, generateArenaRamps } from "@/physics/arena/ArenaRampGeometry";
+import {
+  CORNER_PANEL_HALF_THICK,
+  CORNER_PANELS,
+  CORNER_RADIUS,
+  RAMP_FILLET_RADIUS,
+  generateArenaRamps
+} from "@/physics/arena/ArenaRampGeometry";
 import { TEST_ARENA_DIMENSIONS } from "@/physics/arena/TestArenaPresets";
 import { GOAL_HALF_WIDTH } from "@/physics/goal/GoalTypes";
 import { VISUAL_PALETTE } from "@/visual-language/PsxVisualPalette";
@@ -35,17 +41,30 @@ export const HEX_TILE_WORLD_SIZE = 11.5;
  * ratio, replacing the old shared `hexTexture.repeat.set(10, 10)` that
  * stretched differently per surface.
  */
+/**
+ * G3 (plan/GAME_ENHANCEMENTS_PLAN.md): `uOffsetWorld` (world units, same
+ * scale as `worldW`/`worldH`) shifts every U coordinate before the
+ * `HEX_TILE_WORLD_SIZE` rescale — this is what lets a sequence of adjacent
+ * panels (the curved corners, below) continue the SAME hex pattern across
+ * their shared edges instead of each restarting the tile at u=0. Every
+ * other caller passes 0 (the default), so their behaviour is unchanged.
+ */
 function createShellPlaneGeometry(
   registry: GeometryRegistry,
   key: string,
   worldW: number,
-  worldH: number
+  worldH: number,
+  uOffsetWorld = 0
 ): THREE.BufferGeometry {
   return registry.getOrCreate(key, () => {
     const g = new THREE.PlaneGeometry(worldW, worldH);
     const uv = g.attributes.uv!;
     for (let i = 0; i < uv.count; i += 1) {
-      uv.setXY(i, uv.getX(i) * (worldW / HEX_TILE_WORLD_SIZE), uv.getY(i) * (worldH / HEX_TILE_WORLD_SIZE));
+      uv.setXY(
+        i,
+        (uv.getX(i) * worldW + uOffsetWorld) / HEX_TILE_WORLD_SIZE,
+        uv.getY(i) * (worldH / HEX_TILE_WORLD_SIZE)
+      );
     }
     return g;
   });
@@ -69,9 +88,13 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   // flat, unmapped base (sides/underside only — its top face sits under
   // the paneled floor below) so it no longer needs the single tiled
   // floor texture `stadiumTextures.floor` provided.
-  const floorMaterial = context.materialRegistry.getOrCreate("stadium-floor-base-v3", () => {
+  // G4 (plan/GAME_ENHANCEMENTS_PLAN.md): warmed from a near-black blue-gray
+  // (0x11131a) toward the palette's warmConcrete — the floor's base reads
+  // between/under the textured panels, and the old near-black made the
+  // whole arena floor feel colder and flatter than intended.
+  const floorMaterial = context.materialRegistry.getOrCreate("stadium-floor-base-v4", () => {
     const material = new THREE.MeshStandardMaterial({
-      color: 0x11131a,
+      color: VISUAL_PALETTE.warmConcrete,
       roughness: 0.85,
       metalness: 0.05
     });
@@ -98,7 +121,12 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
   // surface. `DoubleSide` stays on the material (not the geometry) purely
   // so the single plane still renders correctly from both interior and
   // exterior camera angles.
-  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v3", () => {
+  // G4: with a warmer floor and a violet-lifted sky now carrying some of
+  // the scene's depth, the shell no longer needs to carry the whole look
+  // on its own — dialed the glow/opacity back slightly so it still reads
+  // clearly as the cyan structural identity without overpowering the
+  // warmer palette around it.
+  const glassMaterial = context.materialRegistry.getOrCreate("stadium-glass-shell-v4", () => {
     const hexTexture = createHexShellTexture();
     hexTexture.repeat.set(1, 1);
     return new THREE.MeshStandardMaterial({
@@ -106,9 +134,9 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
       map: hexTexture,
       emissive: new THREE.Color(0x66d4ff),
       emissiveMap: hexTexture,
-      emissiveIntensity: 0.85,
+      emissiveIntensity: 0.7,
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.24,
       roughness: 0.15,
       metalness: 0.6,
       side: THREE.DoubleSide,
@@ -207,6 +235,41 @@ export function createStadiumBlockout(context: ProceduralAssetContext): THREE.Gr
  * from the physics-authoritative constants, not `context.stadiumDimensions`
  * — see the dims-consistency unit test pinning the two in sync.
  */
+/** G7.b: world units per full texture tile on a ramp box — matches the floor panels' own tiling density. */
+const RAMP_TEX_WORLD_SIZE = 4;
+
+/**
+ * G7.b (plan/GAME_ENHANCEMENTS_PLAN.md): `BoxGeometry`'s default UVs run
+ * 0..1 per face regardless of that face's actual size, so a shared ramp box
+ * geometry (reused across many differently-shaped ramp segments) stretched
+ * the floor texture differently on every segment. Rescales each of the 6
+ * faces' UVs by that face's own world dimensions (three.js's BoxGeometry
+ * face order/orientation: +x/-x span (depth,height), +y/-y span
+ * (width,depth), +z/-z span (width,height) — 4 vertices per face, 24
+ * total), so the texture reads at a consistent world-space tile size on
+ * every ramp segment, however large or small.
+ */
+function scaleBoxUvs(geometry: THREE.BoxGeometry, width: number, height: number, depth: number, worldPerTile: number): THREE.BoxGeometry {
+  const uv = geometry.attributes["uv"]!;
+  const faceSpans: ReadonlyArray<readonly [number, number]> = [
+    [depth, height], // +x
+    [depth, height], // -x
+    [width, depth], // +y
+    [width, depth], // -y
+    [width, height], // +z
+    [width, height] // -z
+  ];
+  for (let face = 0; face < faceSpans.length; face += 1) {
+    const [faceW, faceH] = faceSpans[face]!;
+    for (let vertex = 0; vertex < 4; vertex += 1) {
+      const i = face * 4 + vertex;
+      uv.setXY(i, uv.getX(i) * (faceW / worldPerTile), uv.getY(i) * (faceH / worldPerTile));
+    }
+  }
+  uv.needsUpdate = true;
+  return geometry;
+}
+
 function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: THREE.Material): THREE.Group {
   const group = new THREE.Group();
   group.name = "ArenaRamps";
@@ -219,12 +282,21 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
   // floor rework introduced (which made the old fillets read as "really
   // dark"), with a light, never-dark fallback if no texture loaded.
   const rampTexture = context.stadiumTextures?.floorPanelSet?.[0];
+  if (rampTexture) {
+    // G7.b: defensive — createPaneledFloor also sets this on the same
+    // shared texture object, but a repeat-wrapped ramp texture must never
+    // depend on that unrelated call having already run first.
+    rampTexture.wrapS = THREE.RepeatWrapping;
+    rampTexture.wrapT = THREE.RepeatWrapping;
+  }
+  // G4: flat fallback color warmed to match the palette shift in the floor
+  // base (0x8a929e -> 0x7d776e) — only visible when no floor texture loaded.
   const rampMaterial = context.materialRegistry.getOrCreate(
-    `stadium-ramp-v1-${rampTexture ? "textured" : "flat"}`,
+    `stadium-ramp-v2-${rampTexture ? "textured" : "flat"}`,
     () => {
       const material = new THREE.MeshStandardMaterial({
         map: rampTexture ?? null,
-        color: rampTexture ? 0xffffff : 0x8a929e,
+        color: rampTexture ? 0xffffff : 0x7d776e,
         roughness: 0.9,
         metalness: 0.05
       });
@@ -233,17 +305,36 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
     }
   );
 
+  // G3 (plan/GAME_ENHANCEMENTS_PLAN.md): every corner's 6 panels arrive in
+  // this array in ascending arc order (see `generateCorner`'s `for (let i =
+  // 0; i < CORNER_PANELS...)` loop), interleaved with floor-fillet specs but
+  // never reordered relative to each other — so counting corner-wall specs
+  // as they're encountered and taking the count modulo CORNER_PANELS
+  // recovers each panel's position (0..5) within its own corner, without
+  // needing the physics-shared RampSegmentSpec type to carry an index.
+  let cornerWallOrdinal = 0;
+
   for (const spec of specs) {
     if (spec.kind === "corner-wall") {
       // F3: single-sided plane sized off the collider's own half-extents,
       // instead of a 1m-thick box that rendered the hex pattern on both
       // parallel faces.
-      const key = `stadium-corner-panel-plane-v3-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}`;
+      // G3: every panel is the same size (chordHalf/height are constants
+      // independent of which corner/index), so the same 6 geometries (one
+      // per arc position) are shared across all 4 corners — each carries a
+      // U offset of `index * panelWidth` so the hex pattern CONTINUES across
+      // panel boundaries within a corner instead of restarting at u=0 on
+      // every panel (the reported "clipped" hexes).
+      const panelIndex = cornerWallOrdinal % CORNER_PANELS;
+      cornerWallOrdinal += 1;
+      const panelWidth = spec.halfExtents.x * 2;
+      const key = `stadium-corner-panel-plane-v4-${panelIndex}-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}`;
       const geometry = createShellPlaneGeometry(
         context.geometryRegistry,
         key,
-        spec.halfExtents.x * 2,
-        spec.halfExtents.y * 2
+        panelWidth,
+        spec.halfExtents.y * 2,
+        panelIndex * panelWidth
       );
 
       const mesh = new THREE.Mesh(geometry, cornerGlassMaterial);
@@ -269,17 +360,128 @@ function createArenaRamps(context: ProceduralAssetContext, cornerGlassMaterial: 
       continue;
     }
 
-    const key = `stadium-ramp-box-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}-${spec.halfExtents.z.toFixed(3)}`;
-    const geometry = context.geometryRegistry.getOrCreate(
-      key,
-      () => new THREE.BoxGeometry(spec.halfExtents.x * 2, spec.halfExtents.y * 2, spec.halfExtents.z * 2)
-    );
+    // G7.b: world-scaled UVs (not the box's default 0..1-per-face) so the
+    // floor texture tiles at a consistent world size on every ramp segment
+    // regardless of that segment's own dimensions — the previously
+    // reported "stretched" ramp texture.
+    const key = `stadium-ramp-box-v2-${spec.halfExtents.x.toFixed(3)}-${spec.halfExtents.y.toFixed(3)}-${spec.halfExtents.z.toFixed(3)}`;
+    const geometry = context.geometryRegistry.getOrCreate(key, () => {
+      const width = spec.halfExtents.x * 2;
+      const boxHeight = spec.halfExtents.y * 2;
+      const depth = spec.halfExtents.z * 2;
+      const box = new THREE.BoxGeometry(width, boxHeight, depth);
+      return scaleBoxUvs(box, width, boxHeight, depth, RAMP_TEX_WORLD_SIZE);
+    });
 
     const mesh = new THREE.Mesh(geometry, rampMaterial);
     mesh.name = "RampSegment";
     mesh.position.set(spec.translation.x, spec.translation.y, spec.translation.z);
     mesh.quaternion.set(spec.rotation.x, spec.rotation.y, spec.rotation.z, spec.rotation.w);
     group.add(mesh);
+  }
+
+  group.add(createRampEndCaps(context));
+
+  return group;
+}
+
+/** G7.b: line segments approximating the end cap's concave arc — matches the faceted ramp shell's own look. */
+const RAMP_ENDCAP_ARC_SEGMENTS = 8;
+
+/**
+ * G7.b (plan/GAME_ENHANCEMENTS_PLAN.md): the two end-wall floor->wall
+ * fillet runs (one on each side of the goal mouth) stop abruptly at the
+ * goal post's own inner edge — the run's segments simply end there, with
+ * nothing filling the open cross-section, so a camera near the goal frame
+ * sees straight through the ramp to the hollow space underneath ("cuts off
+ * and you can see under the ramp"). This adds a flat, filled plate matching
+ * the fillet's own cross-sectional profile at that open end.
+ *
+ * Crucially the profile is NOT a quarter-disc centred on the floor/wall
+ * corner (that bulges OUT past the ramp surface — a quarter-circle plate
+ * sticking up into open air). The fillet's drivable surface is CONCAVE: a
+ * quarter-circle of radius `RAMP_FILLET_RADIUS` tangent to both the floor
+ * and the wall (see `filletRun`'s "tangent circle of radius R" comment), so
+ * its arc is centred at `(inset=R, height=R)` and the SOLID region behind it
+ * is the curved triangle hugging the corner — the unit square minus the
+ * quarter-disc at the far corner. The plate fills exactly that, so its arc
+ * edge lands flush on the ramp's own concave surface.
+ *
+ * One cap per (end, side): 2 ends x 2 sides = 4 total, each positioned at
+ * the exact floor/wall corner point (`x = xSign*GOAL_HALF_WIDTH`, `y = 0`,
+ * `z = zSign*halfLength`) that `filletRun`'s theta=0 segment starts from.
+ */
+function createRampEndCaps(context: ProceduralAssetContext): THREE.Group {
+  const { halfLength } = TEST_ARENA_DIMENSIONS;
+  const R = RAMP_FILLET_RADIUS;
+  const group = new THREE.Group();
+  group.name = "RampEndCaps";
+
+  // Shape-local (u, v) = (inset-from-wall, height). The curved triangle:
+  // corner at the origin, straight edge along the floor out to (R, 0), then
+  // the CONCAVE quarter arc (centre (R, R), radius R) back to the wall at
+  // (0, R) — bulging toward the corner, through the diagonal midpoint
+  // (R - R/sqrt2, R - R/sqrt2) ~= (0.29R, 0.29R) — then straight down the
+  // wall to the origin. Sampled as line segments (unambiguous, and matches
+  // the faceted ramp shell it abuts).
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0);
+  shape.lineTo(R, 0);
+  for (let i = 1; i <= RAMP_ENDCAP_ARC_SEGMENTS; i += 1) {
+    // phi sweeps 3*PI/2 (at (R,0)) down to PI (at (0,R)) around centre (R,R).
+    const phi = 1.5 * Math.PI - (i / RAMP_ENDCAP_ARC_SEGMENTS) * (Math.PI / 2);
+    shape.lineTo(R + R * Math.cos(phi), R + R * Math.sin(phi));
+  }
+  shape.lineTo(0, 0);
+
+  const geometry = context.geometryRegistry.getOrCreate("stadium-ramp-endcap-v2", () => {
+    const shapeGeometry = new THREE.ShapeGeometry(shape);
+    // three.js ShapeGeometry writes UVs as the raw shape-space vertex
+    // coordinates ("world uvs" — already in metres, 0..R here), NOT
+    // normalised to 0..1, so dividing by RAMP_TEX_WORLD_SIZE alone tiles the
+    // cap at the same world density as the rest of the ramp.
+    const uv = shapeGeometry.attributes["uv"]!;
+    for (let i = 0; i < uv.count; i += 1) {
+      uv.setXY(i, uv.getX(i) / RAMP_TEX_WORLD_SIZE, uv.getY(i) / RAMP_TEX_WORLD_SIZE);
+    }
+    uv.needsUpdate = true;
+    return shapeGeometry;
+  });
+
+  // Double-sided so the cap reads correctly from either the interior
+  // (driving toward the goal) or exterior camera angle without depending
+  // on getting the local-axis winding exactly right by inspection alone —
+  // this is a thin visual plug, not a drivable collider.
+  const capMaterial = context.materialRegistry.getOrCreate("stadium-ramp-endcap-material-v1", () => {
+    const rampTexture = context.stadiumTextures?.floorPanelSet?.[0];
+    const material = new THREE.MeshStandardMaterial({
+      map: rampTexture ?? null,
+      color: rampTexture ? 0xffffff : 0x7d776e,
+      roughness: 0.9,
+      metalness: 0.05,
+      side: THREE.DoubleSide
+    });
+    applyVertexJitter(material, "arenaMetal");
+    return material;
+  });
+
+  for (const zSign of [-1, 1] as const) {
+    for (const xSign of [-1, 1] as const) {
+      const mesh = new THREE.Mesh(geometry, capMaterial);
+      mesh.name = "RampEndCap";
+
+      // Local shape X (inset) -> world (0, 0, -zSign); local shape Y
+      // (height) -> world (0, 1, 0) — matches `filletRun`'s own inward
+      // direction for this end wall (`{ x: 0, y: 0, z: -zSign }`).
+      const localX = new THREE.Vector3(0, 0, -zSign);
+      const localY = new THREE.Vector3(0, 1, 0);
+      const localZ = new THREE.Vector3().crossVectors(localX, localY);
+      const basis = new THREE.Matrix4().makeBasis(localX, localY, localZ);
+      mesh.quaternion.setFromRotationMatrix(basis);
+
+      mesh.position.set(xSign * GOAL_HALF_WIDTH, 0, zSign * halfLength);
+      group.add(mesh);
+    }
   }
 
   return group;
@@ -489,12 +691,15 @@ function createStructuralRibs(context: ProceduralAssetContext): THREE.Group {
   const group = new THREE.Group();
   group.name = "StructuralRibs";
 
+  // G4: emissive tint warmed from a cool blue-black to the palette's
+  // hazardAmberDim — the ribs now read as amber-lit structure (lit BY the
+  // arena) instead of adding yet more cold void to the walls.
   const ribMaterial = context.materialRegistry.getOrCreate(
-    "stadium-rib-v2",
+    "stadium-rib-v3",
     () =>
       new THREE.MeshStandardMaterial({
         color: 0x39414f,
-        emissive: new THREE.Color(0x18222e),
+        emissive: new THREE.Color(VISUAL_PALETTE.hazardAmberDim),
         emissiveIntensity: 0.6,
         roughness: 0.6,
         metalness: 0.4

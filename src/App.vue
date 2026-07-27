@@ -12,19 +12,40 @@ import ResultsScreen from "@/components/hud/ResultsScreen.vue";
 import CarCustomise from "@/components/menu/CarCustomise.vue";
 import MainMenu from "@/components/menu/MainMenu.vue";
 import MatchSetup from "@/components/menu/MatchSetup.vue";
+import OnlineLobby from "@/components/menu/OnlineLobby.vue";
 import SettingsPanel from "@/components/menu/SettingsPanel.vue";
 import TournamentBracket from "@/components/menu/TournamentBracket.vue";
 import TournamentVictory from "@/components/menu/TournamentVictory.vue";
 import { useGameRuntime } from "@/core/useGameRuntime";
+import { parseRoomFromSearch } from "@/netcode/RoomLink";
 import { useApplicationStore } from "@/stores/applicationStore";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
+import { useOnlineStore } from "@/stores/onlineStore";
 import { useTournamentStore } from "@/stores/tournamentStore";
 import { useMenuGamepadNavigation } from "@/ui/useMenuGamepadNavigation";
 
 const applicationStore = useApplicationStore();
 const matchFlowStore = useMatchFlowStore();
 const tournamentStore = useTournamentStore();
+const onlineStore = useOnlineStore();
 const runtime = useGameRuntime();
+
+// N6: the online lobby overlays the main menu; exactly one [data-menu-root]
+// is ever visible (R11 nav invariant), so MainMenu hides while it's open.
+const showOnlineLobby = computed(
+  () => matchFlowStore.matchState === "MAIN_MENU" && onlineStore.screen !== "closed" && onlineStore.screen !== "in-match"
+);
+
+// N6/P4.1: `?room=CODE` deep link — open the lobby straight into a join
+// attempt, then strip the param so a refresh/back-nav doesn't re-trigger it.
+const roomCodeFromLink = parseRoomFromSearch(window.location.search);
+if (roomCodeFromLink) {
+  onlineStore.openHome();
+  onlineStore.joinRoom(roomCodeFromLink);
+  const url = new URL(window.location.href);
+  url.searchParams.delete("room");
+  window.history.replaceState(window.history.state, "", url);
+}
 
 // R11: console-convention gamepad menu navigation, instantiated once for
 // the whole app — owns its own runtime-event subscription/lifecycle.
@@ -85,6 +106,25 @@ watch(matchState, (next) => {
   }
 });
 
+// P3: online has a SECOND way into PauseMenu besides matchState === "PAUSED"
+// (the actually-paused state, once both peers vote) — pressing ESC opens a
+// personal overlay that never touches matchState by itself (the sim keeps
+// running). `matchFlowStore.session` is re-emitted every rendered frame
+// while online (even while actually paused — see GameRuntime.driveOnlineSubmit),
+// so reading it here forces this to stay live in both cases.
+const showPauseMenu = computed(() => {
+  void matchFlowStore.session;
+  if (matchState.value === "PAUSED") {
+    return !pauseSettingsOpen.value;
+  }
+  // The online personal overlay is only meaningful during a live match — never
+  // over the results screen (which owns MATCH_RESULTS and its own leave flow).
+  if (matchState.value === "MATCH_RESULTS") {
+    return false;
+  }
+  return runtime.isOnlineSession() && runtime.isOnlinePauseOverlayOpen();
+});
+
 const showGameplayHud = computed(
   () =>
     ![
@@ -110,7 +150,8 @@ const showGameplayHud = computed(
     <GameCanvas />
     <QuickChatOverlay />
 
-    <MainMenu v-if="matchState === 'MAIN_MENU'" />
+    <OnlineLobby v-if="showOnlineLobby" />
+    <MainMenu v-else-if="matchState === 'MAIN_MENU'" />
     <MatchSetup v-else-if="matchState === 'MATCH_SETUP'" />
     <CarCustomise v-else-if="matchState === 'CAR_CUSTOMISE'" />
     <TournamentBracket v-else-if="matchState === 'TOURNAMENT_BRACKET'" />
@@ -124,7 +165,7 @@ const showGameplayHud = computed(
     />
     <GoalBanner v-if="['GOAL_LATCHED', 'GOAL_CELEBRATION'].includes(matchState)" />
     <OvertimeBanner v-if="matchState === 'OVERTIME_INTRO'" />
-    <PauseMenu v-if="matchState === 'PAUSED' && !pauseSettingsOpen" />
+    <PauseMenu v-if="showPauseMenu" />
     <ResultsScreen v-if="matchState === 'MATCH_RESULTS'" />
   </div>
 </template>

@@ -15,6 +15,7 @@ import {
 } from "@/game-flow/MatchFlowConstants";
 import type {
   GameSessionState,
+  MatchAuthorityState,
   MatchConfig,
   MatchDurationMinutes,
   MatchFlowEvent,
@@ -83,6 +84,8 @@ export class MatchFlowController {
   private regulationTimeRemaining = DEFAULT_MATCH_DURATION_MINUTES * 60;
   private overtimeElapsed = 0;
   private winner: TeamId | null = null;
+  /** The team that ended an online match by leaving/forfeiting, or null for a natural finish. */
+  private forfeitedBy: TeamId | null = null;
 
   private goalLatch = false;
   private pausedFromState: MatchState | null = null;
@@ -99,6 +102,25 @@ export class MatchFlowController {
   private aiStuckAnchor: Vec3Like | null = null;
   /** F13: ticks since `aiStuckAnchor` was last reset (car hasn't moved AI_STUCK_MIN_DISPLACEMENT since). */
   private aiStuckTicksSinceAnchor = 0;
+  /**
+   * N1 (plan/ONLINE_MULTIPLAYER_PLAN.md): whether OPPONENT_CAR_ID is AI-
+   * controlled. The F13 stuck-watchdog teleports the opponent car, which
+   * is correct for an AI that got wedged but WRONG for a remote human
+   * (it would rubber-band a live player and, worse, diverge the two
+   * peers' simulations). Defaults true (single-player); online mode
+   * (N5) sets it false.
+   */
+  private opponentIsAi = true;
+  /** N5: true while an online 1v1 session is active (disables SP-only behaviours like pause-freeze). */
+  private onlineMode = false;
+  /**
+   * S4 (online state-sync): true on the GUEST peer. The host is authoritative
+   * for all match-flow decisions (score, clock, phase, goals) and streams them
+   * in every snapshot; the guest applies those verbatim and runs NO local
+   * countdown, clock, or goal detection of its own — that is what guarantees
+   * the two screens can never disagree about a goal or the time left.
+   */
+  private guestMode = false;
 
   private readonly events: MatchFlowEvent[] = [];
 
@@ -143,6 +165,19 @@ export class MatchFlowController {
 
   public areControlsActive(): boolean {
     return CONTROLS_ACTIVE_STATES.includes(this.matchState);
+  }
+
+  /**
+   * N1: set whether the opponent car is AI-controlled (true, the
+   * default) or a remote human (false, online mode). Gates the F13
+   * stuck-watchdog, which must never teleport a live remote player.
+   */
+  public setOpponentIsAi(isAi: boolean): void {
+    this.opponentIsAi = isAi;
+    if (!isAi) {
+      this.aiStuckAnchor = null;
+      this.aiStuckTicksSinceAnchor = 0;
+    }
   }
 
   public getMatchFlowEvents(): readonly MatchFlowEvent[] {
@@ -218,6 +253,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
     this.kickoffCounter = 0;
 
@@ -234,6 +270,11 @@ export class MatchFlowController {
   /** Called once per fixed tick, before `physics.step()` (spec section 34). */
   public update(): void {
     if (this.isPaused()) {
+      return;
+    }
+    // S4: the guest's flow state comes entirely from host snapshots — it must
+    // not advance its own countdown/clock or it would fight the authority.
+    if (this.guestMode) {
       return;
     }
 
@@ -264,6 +305,14 @@ export class MatchFlowController {
   /** Called once per fixed tick, after `physics.step()` (spec section 34). */
   public applyPhysicsResults(): void {
     if (this.isPaused()) {
+      return;
+    }
+    // S4: only the host decides goals. The guest reflects the host's score
+    // from snapshots, so it never runs goal detection (which, on a predicted
+    // world, could otherwise fire a phantom goal the host never saw). It
+    // still drains the physics event queue so it can't grow unbounded.
+    if (this.guestMode) {
+      this.requirePhysics().clearGoalEvents();
       return;
     }
 
@@ -300,6 +349,11 @@ export class MatchFlowController {
    * window, and a fresh kickoff always starts the watchdog clean.
    */
   private tickAiStuckWatchdog(physics: PhysicsFacade): void {
+    // N1: never teleport a remote human opponent — the watchdog is an
+    // AI-only backstop.
+    if (!this.opponentIsAi) {
+      return;
+    }
     if (!this.areControlsActive()) {
       this.aiStuckAnchor = null;
       this.aiStuckTicksSinceAnchor = 0;
@@ -511,6 +565,125 @@ export class MatchFlowController {
   }
 
   /** Pause menu "RESTART MATCH": same duration, fresh scores/clock, immediate kickoff. */
+  /**
+   * N5 (plan/ONLINE_MULTIPLAYER_PLAN.md): start an online 1v1 match. Both
+   * peers call this with the SAME `kickoffSeed` (from the RoomDO handshake)
+   * so the deterministic kickoff-variant sequence starts identically on
+   * both, and the F13 watchdog is turned off (never teleport a remote
+   * human). Everything downstream — countdown, goals, celebration,
+   * kickoffs — is already tick-deterministic, so the two peers stay in
+   * lockstep by construction.
+   */
+  public startOnlineMatch(config: { durationMinutes: MatchDurationMinutes; kickoffSeed: number }): void {
+    this.onlineMode = true;
+    this.setOpponentIsAi(false);
+    this.selectedDurationMinutes = config.durationMinutes;
+
+    this.playerScore = 0;
+    this.opponentScore = 0;
+    this.overtimeElapsed = 0;
+    this.winner = null;
+    this.forfeitedBy = null;
+    this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
+    // Seed the shared kickoff-variant sequence identically on both peers.
+    this.kickoffCounter = ((config.kickoffSeed % KICKOFF_VARIANT_COUNT) + KICKOFF_VARIANT_COUNT) % KICKOFF_VARIANT_COUNT;
+
+    this.setMatchState("MATCH_LOADING");
+    this.setMatchState("KICKOFF_SETUP");
+    this.beginKickoffReset("PLAYING");
+  }
+
+  /**
+   * S4: mark this controller as the online GUEST (or clear it). The guest
+   * follows host authority via `applyAuthorityState`; the host leaves this
+   * false and runs the match normally, capturing its state each snapshot.
+   */
+  public setOnlineGuest(isGuest: boolean): void {
+    this.guestMode = isGuest;
+  }
+
+  /** S4: the host captures its authoritative flow state to put in a snapshot. */
+  public captureAuthorityState(): MatchAuthorityState {
+    return {
+      matchState: this.matchState,
+      playerScore: this.playerScore,
+      opponentScore: this.opponentScore,
+      regulationTimeRemaining: this.regulationTimeRemaining,
+      overtimeElapsed: this.overtimeElapsed,
+      countdownTicksRemaining: this.countdownTicksRemaining,
+      celebrationTicksRemaining: this.celebrationTicksRemaining,
+      overtimeIntroTicksRemaining: this.overtimeIntroTicksRemaining,
+      kickoffCounter: this.kickoffCounter,
+      goalLatch: this.goalLatch,
+      winner: this.winner,
+      forfeitedBy: this.forfeitedBy
+    };
+  }
+
+  /**
+   * S4: the guest overwrites its flow state with the host's authoritative one
+   * from a snapshot. Emits the state-change edges the UI/audio layers listen
+   * for (goal fanfare, countdown beeps, results screen) so the guest's
+   * presentation still reacts even though it never ran the logic itself.
+   */
+  public applyAuthorityState(state: MatchAuthorityState): void {
+    const previousState = this.matchState;
+    const scoredBefore = this.playerScore + this.opponentScore;
+    const playerScoredMore = state.playerScore > this.playerScore;
+
+    this.playerScore = state.playerScore;
+    this.opponentScore = state.opponentScore;
+    this.regulationTimeRemaining = state.regulationTimeRemaining;
+    this.overtimeElapsed = state.overtimeElapsed;
+    this.countdownTicksRemaining = state.countdownTicksRemaining;
+    this.celebrationTicksRemaining = state.celebrationTicksRemaining;
+    this.overtimeIntroTicksRemaining = state.overtimeIntroTicksRemaining;
+    this.kickoffCounter = state.kickoffCounter;
+    this.goalLatch = state.goalLatch;
+    this.winner = state.winner;
+    this.forfeitedBy = state.forfeitedBy;
+
+    if (state.playerScore + state.opponentScore > scoredBefore) {
+      // Reflect the host's goal so the guest's audio/VFX fire. The scoring
+      // team is inferred from which side's tally went up.
+      this.pushEvent({ type: "goal-awarded", team: playerScoredMore ? "player" : "opponent" });
+    }
+    if (state.matchState !== previousState) {
+      this.setMatchState(state.matchState);
+    }
+  }
+
+  /**
+   * N5: end an online match immediately with a decided winner — used when a
+   * player leaves (`forfeitedBy` = the leaving team) or the connection drops
+   * past the grace period (win by abandonment). `forfeitedBy` is recorded so
+   * both clients can show the right "you/opponent left" message from one
+   * authoritative source. No-op outside a live/pausable online match.
+   */
+  public endOnlineMatchByForfeit(winner: TeamId, forfeitedBy: TeamId | null = null): void {
+    if (!this.onlineMode) {
+      return;
+    }
+    if (this.matchState !== "PAUSED" && !PAUSABLE_STATES.includes(this.matchState)) {
+      return;
+    }
+    this.setMatchState("MATCH_ENDING");
+    this.winner = winner;
+    this.forfeitedBy = forfeitedBy;
+    this.pushEvent({ type: "match-ended", winner });
+    this.setMatchState("MATCH_RESULTS");
+    this.onlineMode = false;
+  }
+
+  /** The team that ended the current/last match by leaving/forfeiting, or null for a natural finish. */
+  public getForfeitedBy(): TeamId | null {
+    return this.forfeitedBy;
+  }
+
+  public isOnlineMode(): boolean {
+    return this.onlineMode;
+  }
+
   public restartMatch(): void {
     if (this.matchState !== "PAUSED" && !PAUSABLE_STATES.includes(this.matchState)) {
       return;
@@ -521,6 +694,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.goalLatch = false;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
     this.kickoffCounter = 0;
@@ -536,6 +710,7 @@ export class MatchFlowController {
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
     this.kickoffCounter = 0;
 
@@ -544,14 +719,34 @@ export class MatchFlowController {
     this.beginKickoffReset("PLAYING");
   }
 
+  /**
+   * G10 (plan/GAME_ENHANCEMENTS_PLAN.md): returning to the menu used to only
+   * reset match-flow state (score/clock/etc) — the physics world (ball +
+   * cars) was left wherever the last match ended, so the menu's static
+   * ghost cars sat on top of a ball and live cars in arbitrary positions
+   * ("remnants of the last game"). The physics ball IS the menu ball (R8),
+   * so resetting it to the neutral kickoff pose here is what makes the menu
+   * read fresh again. Skipped in guestMode: an online guest's physics world
+   * is authoritative-remote, and by the time it reaches the menu the online
+   * session has already ended (guestMode is cleared with it) — this guard
+   * is just defensive.
+   */
   public returnToMenu(): void {
     this.playerScore = 0;
     this.opponentScore = 0;
     this.overtimeElapsed = 0;
     this.winner = null;
+    this.forfeitedBy = null;
     this.goalLatch = false;
     this.pausedFromState = null;
     this.regulationTimeRemaining = this.selectedDurationMinutes * 60;
+    if (this.physics && !this.guestMode) {
+      this.physics.resetWorld({
+        carCreationOrder: [PLAYER_CAR_ID, OPPONENT_CAR_ID],
+        kickoffVariantIndex: 0
+      });
+    }
+    this.kickoffCounter = 0;
     this.setMatchState("MAIN_MENU");
   }
 

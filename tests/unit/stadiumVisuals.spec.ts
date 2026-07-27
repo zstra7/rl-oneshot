@@ -7,6 +7,8 @@ import { COL_STEP, LINE_WIDTH, TEXTURE_SIZE } from "@/assets/procedural/HexPatte
 import { MaterialRegistry } from "@/assets/procedural/MaterialRegistry";
 import { SeededRandom } from "@/assets/procedural/SeededRandom";
 import { createStadiumBlockout, HEX_TILE_WORLD_SIZE } from "@/assets/procedural/StadiumGeometryFactory";
+import { RAMP_FILLET_RADIUS } from "@/physics/arena/ArenaRampGeometry";
+import { GOAL_HALF_WIDTH } from "@/physics/goal/GoalTypes";
 
 /**
  * R2 (plan/RAMPS_AND_FEATURES_PLAN.md): the hex glass shell was too dark
@@ -192,5 +194,102 @@ describe("R2: structural ribs are skinnier, more spaced, and visibly lit", () =>
     const ribs = stadium.getObjectByName("SideWallRibs") as THREE.InstancedMesh;
     // fieldLength 60, CORNER_RADIUS 6 -> run 48, spacing 6 -> 8 per side (16 total).
     expect(ribs.count).toBe(16);
+  });
+});
+
+describe("G7.b ramp texture world-scaling + goal-edge end caps", () => {
+  it("RampSegment geometries carry world-scaled UVs, not the box default 0..1 per face", () => {
+    const stadium = buildStadium();
+    let sawStretchedUv = false;
+    stadium.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.name === "RampSegment") {
+        const uv = object.geometry.attributes["uv"]!;
+        for (let i = 0; i < uv.count; i += 1) {
+          // A world-scaled UV on a long/tall face will exceed the box
+          // default's [0,1] range — proves rescaling actually happened
+          // (rather than merely not throwing).
+          if (uv.getX(i) > 1.01 || uv.getY(i) > 1.01) {
+            sawStretchedUv = true;
+          }
+        }
+      }
+    });
+    expect(sawStretchedUv).toBe(true);
+  });
+
+  it("exactly 4 RampEndCap meshes exist, one at each goal-mouth-side end-wall fillet boundary", () => {
+    const stadium = buildStadium();
+    const caps: THREE.Mesh[] = [];
+    stadium.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.name === "RampEndCap") {
+        caps.push(object);
+      }
+    });
+    expect(caps).toHaveLength(4);
+
+    const { fieldLength } = DEFAULT_STADIUM_DIMENSIONS;
+    const halfLength = fieldLength / 2;
+    const expectedPositions = [
+      { x: -GOAL_HALF_WIDTH, z: -halfLength },
+      { x: GOAL_HALF_WIDTH, z: -halfLength },
+      { x: -GOAL_HALF_WIDTH, z: halfLength },
+      { x: GOAL_HALF_WIDTH, z: halfLength }
+    ];
+    for (const expected of expectedPositions) {
+      const match = caps.find(
+        (cap) => Math.abs(cap.position.x - expected.x) < 1e-6 && Math.abs(cap.position.z - expected.z) < 1e-6
+      );
+      expect(match, `expected a RampEndCap at x=${expected.x}, z=${expected.z}`).toBeTruthy();
+      expect(match!.position.y).toBeCloseTo(0, 6);
+    }
+  });
+
+  it("each end cap fills the fillet's CONCAVE cross-section, not a convex quarter-disc poking past the ramp", () => {
+    const stadium = buildStadium();
+    let cap: THREE.Mesh | null = null;
+    stadium.traverse((object) => {
+      if (!cap && object instanceof THREE.Mesh && object.name === "RampEndCap") {
+        cap = object;
+      }
+    });
+    expect(cap).toBeTruthy();
+    const geometry = (cap as unknown as THREE.Mesh).geometry;
+
+    // Same [0,R] x [0,R] bounding box as before — but that alone does NOT
+    // distinguish the correct concave curved-triangle (arc centred at (R,R),
+    // hugging the corner) from the WRONG convex quarter-disc (arc centred at
+    // the origin, bulging out past the ramp surface): both fit the same box.
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox!;
+    expect(box.min.x).toBeCloseTo(0, 3);
+    expect(box.min.y).toBeCloseTo(0, 3);
+    expect(box.max.x).toBeCloseTo(RAMP_FILLET_RADIUS, 2);
+    expect(box.max.y).toBeCloseTo(RAMP_FILLET_RADIUS, 2);
+
+    // The AREA is what distinguishes them: the concave curved triangle is
+    // the unit square minus the far-corner quarter-disc, area (1 - pi/4)*R^2
+    // ~= 0.86*R^2/... (~0.86 for R=2); the wrong convex quarter-disc would be
+    // (pi/4)*R^2 (~3.14 for R=2). Sum the mesh's triangle areas.
+    const position = geometry.attributes["position"]!;
+    const index = geometry.index;
+    let area = 0;
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const triCount = index ? index.count / 3 : position.count / 3;
+    for (let tri = 0; tri < triCount; tri += 1) {
+      const ia = index ? index.getX(tri * 3) : tri * 3;
+      const ib = index ? index.getX(tri * 3 + 1) : tri * 3 + 1;
+      const ic = index ? index.getX(tri * 3 + 2) : tri * 3 + 2;
+      a.fromBufferAttribute(position, ia);
+      b.fromBufferAttribute(position, ib);
+      c.fromBufferAttribute(position, ic);
+      area += b.clone().sub(a).cross(c.clone().sub(a)).length() / 2;
+    }
+    const R = RAMP_FILLET_RADIUS;
+    const concaveArea = (1 - Math.PI / 4) * R * R;
+    const convexArea = (Math.PI / 4) * R * R;
+    expect(area).toBeCloseTo(concaveArea, 1); // ~0.86 for R=2
+    expect(Math.abs(area - convexArea)).toBeGreaterThan(1); // nowhere near the wrong ~3.14
   });
 });

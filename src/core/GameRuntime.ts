@@ -5,7 +5,7 @@ import { validateModuleContracts } from "@/core/ContractRegistry";
 import { DefaultErrorReporter, type ErrorReporter } from "@/core/ErrorReporter";
 import { EventDispatcher, type Unsubscribe } from "@/core/EventDispatcher";
 import type { TypedEventMap } from "@/core/EventTypes";
-import { FixedStepCoordinator, FIXED_DT_SECONDS } from "@/core/FixedStepCoordinator";
+import { ALWAYS_ADVANCE, FixedStepCoordinator, FIXED_DT_SECONDS } from "@/core/FixedStepCoordinator";
 import { FrameCoordinator } from "@/core/FrameCoordinator";
 import type { ModuleStatus } from "@/core/GameModule";
 import type { RuntimeDiagnostics } from "@/core/RuntimeDiagnostics";
@@ -15,7 +15,7 @@ import {
   type ModuleContainer
 } from "@/integration/ModuleContainer";
 import { BoostPadRenderBinding } from "@/integration/BoostPadRenderBinding";
-import { PhysicsRenderBinding } from "@/integration/PhysicsRenderBinding";
+import { PhysicsRenderBinding, type CorrectionTargetId } from "@/integration/PhysicsRenderBinding";
 import { installAssetTestApi } from "@/assets/testing/BrowserAssetTestApi";
 import { installInputTestApi } from "@/input/testing/BrowserInputTestApi";
 import { installPhysicsTestApi } from "@/physics/testing/BrowserPhysicsTestApi";
@@ -29,6 +29,27 @@ import {
   type MatchState
 } from "@/game-flow/MatchFlowTypes";
 import { PLAYER_CAR_ID, OPPONENT_CAR_ID } from "@/game-flow/MatchFlowConstants";
+import { otherTeam, type TeamId } from "@/core/TeamTypes";
+import {
+  deriveOnlineEndReason,
+  resolveForfeit,
+  type OnlineMatchEndReason
+} from "@/core/OnlineForfeit";
+import {
+  AiSource,
+  BufferedLocalSource,
+  LocalDeviceSource,
+  type CarInputContext,
+  type CarInputSource
+} from "@/netcode/CarInputSource";
+import type { OnlineMatchContext } from "@/netcode/MultiplayerSession";
+import { LEAD_EMA_ALPHA, computeRateScale, computeTargetLeadTicks } from "@/netcode/RateAlignment";
+import { FALLBACK_NICKNAME } from "@/netcode/Nickname";
+import { parsePeerPayload } from "@/netcode/PeerCosmetics";
+import { VoteKind } from "@/netcode/protocol";
+import { computePauseEdge, shouldPause, shouldRematch, shouldResume } from "@/netcode/VotePolicy";
+import type { CarTeamId } from "@/assets/cars/CarModelTypes";
+import type { CarId, Vec3Like } from "@/physics/PhysicsTypes";
 import { TournamentController, type TournamentPublicState } from "@/game-flow/TournamentController";
 import { ChaseCameraController } from "@/camera/ChaseCameraController";
 import type { CameraDiagnostics } from "@/camera/ChaseCameraController";
@@ -45,12 +66,40 @@ import { AudioEventAdapter } from "@/integration/AudioEventAdapter";
 import { DEFAULT_AUDIO_SETTINGS, type AudioDiagnostics, type AudioSettings } from "@/audio/AudioTypes";
 import type { ControlBindings } from "@/input/bindings/BindingsConfig";
 import type { CapturedBinding } from "@/input/InputControlsModule";
-import type { ActiveInputDevice } from "@/input/InputTypes";
+import type { ActiveInputDevice, HumanGameplayInputFrame } from "@/input/InputTypes";
 
 export type UiRequestedAction = { readonly kind: "noop" };
 
 /** R12.2: matches settingsStore's `car.bodyColor`/`car.boostColor` default (`#4ff0ff`, the built-in player cyan). */
 const DEFAULT_PLAYER_CAR_COLOR = "#4ff0ff";
+
+/**
+ * S5: the most ticks the guest will re-simulate to bridge a host snapshot to
+ * its current tick (replay reconciliation). 30 ticks = 250ms of one-way
+ * latency + snapshot interval; beyond that the guest adopts the host's
+ * timeline outright instead of burning CPU replaying a stale gap.
+ */
+const ONLINE_MAX_REPLAY_TICKS = 30;
+
+/** P3 (host only): while paused, send a match-flow-carrying snapshot at most every this many rendered frames. */
+const PAUSED_SNAPSHOT_EVERY_N_FRAMES = 10;
+
+/** P4.2: no packet at all from the remote peer for this long — the other side has abandoned the match; the local player wins by forfeit. */
+const ONLINE_ABANDONMENT_TIMEOUT_MS = 10_000;
+
+/**
+ * P1.2: match states in which a car/ball position change is a REAL teleport
+ * (kickoff spawn/reset) rather than reconciliation drift — correction
+ * smoothing must be suppressed here so a kickoff snaps instantly.
+ */
+const KICKOFF_PHASE_STATES: readonly MatchState[] = [
+  "KICKOFF_SETUP",
+  "KICKOFF_RESET",
+  "COUNTDOWN_3",
+  "COUNTDOWN_2",
+  "COUNTDOWN_1",
+  "COUNTDOWN_GO"
+];
 
 const MENU_MATCH_STATES: readonly MatchState[] = [
   "MAIN_MENU",
@@ -108,6 +157,37 @@ export interface GameRuntimeFacade {
     type: K,
     listener: (event: TypedEventMap[K]) => void
   ): Unsubscribe;
+
+  // -- Online multiplayer (plan/ONLINE_MULTIPLAYER_PLAN.md, N5/N6) --
+
+  startOnlineSession(context: OnlineMatchContext, durationMinutes: MatchDurationMinutes): void;
+  endOnlineSession(): void;
+  isOnlineSession(): boolean;
+  /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
+  getOnlineNicknames(): { local: string; remote: string } | null;
+  /** P3: LEAVE MATCH — forfeits immediately, regardless of pause state. */
+  leaveOnlineMatch(): void;
+  /** Clean exit from the online results screen back to the main menu (restores single-player state). */
+  leaveOnlineToMenu(): void;
+  /** Why the online match ended (opponent-left / you-left / null=natural finish), for the results screen. */
+  getOnlineEndReason(): OnlineMatchEndReason;
+  /** P4.2: the remote peer abandoned the match — local player wins by forfeit. */
+  forfeitOnlineMatchByAbandonment(): void;
+  /** P3: ESC — toggle this client's personal pause overlay (never touches match state by itself). */
+  toggleOnlinePauseOverlay(): void;
+  isOnlinePauseOverlayOpen(): boolean;
+  /** P3: hold/release this client's "please pause" vote. */
+  requestOnlinePause(active: boolean): void;
+  /** P3: hold/release this client's "yes, continue" vote. */
+  voteOnlineContinue(active: boolean): void;
+  getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number; rematchVotes: number };
+  isRequestingOnlinePause(): boolean;
+  isVotingOnlineContinue(): boolean;
+  /** P4.2: RTT + time-since-last-packet for the HUD ping readout, or null outside an online session. */
+  getOnlineConnectionInfo(): { rttMs: number | null; msSinceRemoteActivity: number } | null;
+  /** P4.3: hold/release this client's "rematch" vote. */
+  voteOnlineRematch(active: boolean): void;
+  isVotingOnlineRematch(): boolean;
 
   // -- Match flow (game-flow spec sections 28/35/39) --
 
@@ -273,6 +353,47 @@ export class GameRuntime implements GameRuntimeFacade {
    */
   private previousMatchStateForGates: MatchState = "BOOT";
 
+  /**
+   * N1 (plan/ONLINE_MULTIPLAYER_PLAN.md): every simulated car's per-tick
+   * input origin, keyed by CarId. Single-player installs
+   * `{ player: local device, opponent: AI }`; online 1v1 (N5) swaps the
+   * opponent for a remote source. `onFixedTick` iterates this map instead
+   * of hard-coding "the player" and "the AI".
+   */
+  private readonly carInputSources = new Map<CarId, CarInputSource>();
+
+  /** N6: the active online 1v1 session, or null in single-player. */
+  private onlineSession: OnlineMatchContext | null = null;
+  /** N6: the next tick whose local input the online submit-ahead loop should sample and send. */
+  private onlineNextSubmitTick = 0;
+  /** N6: last local input frame sampled in the online submit loop (for the fixed-tick input context). */
+  private lastOnlineFrame: HumanGameplayInputFrame | null = null;
+  /**
+   * The car this client's human is driving, and whose HUD/camera the
+   * presentation follows. Always PLAYER_CAR_ID in single-player and for the
+   * online offerer; OPPONENT_CAR_ID for the online answerer.
+   */
+  private localPlayerCarId: CarId = PLAYER_CAR_ID;
+  /** P1.3 (guest only): EMA of the replay "lead" (guest tick ahead of the host's snapshot tick). */
+  private onlineLeadEma = 4;
+  /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
+  private onlineNicknames: { local: string; remote: string } | null = null;
+  /**
+   * P3: whether THIS client's pause overlay is open. Purely local UI state —
+   * opening it never touches match state (the sim keeps running); only when
+   * both peers hold a pause-request vote does the match actually pause.
+   */
+  private onlinePauseOverlayOpen = false;
+  /** P3: match-flow's own isPaused() from the PREVIOUS frame, to detect the pause/resume edge and auto-clear the vote whose phase just ended. */
+  private onlineWasPaused = false;
+  /** P3 (host only): counts frames while paused, so the low-rate paused-frame snapshot only sends every Nth frame. */
+  private pausedSnapshotFrameCounter = 0;
+  /** P4.3: the match duration + next kickoff seed to use for a rematch (seed increments each time so the kickoff-variant sequence differs). */
+  private onlineDurationMinutes: MatchDurationMinutes = 3;
+  private onlineRematchSeed = 0;
+  /** P4.3: match-flow's own MATCH_RESULTS from the PREVIOUS frame, to detect the results->next-match edge and clear a stale rematch vote. */
+  private onlineWasMatchResults = false;
+
   public async initialise(canvas: HTMLCanvasElement): Promise<void> {
     if (this.modules) {
       throw new Error("GameRuntime is already initialised.");
@@ -285,6 +406,7 @@ export class GameRuntime implements GameRuntimeFacade {
     validateModuleContracts([]);
 
     this.modules = createNullModuleContainer();
+    this.configureSinglePlayerInputSources();
 
     const { input, gameFlow, ...modulesWithGenericInit } = this.modules;
 
@@ -438,7 +560,31 @@ export class GameRuntime implements GameRuntimeFacade {
 
       this.modules?.input.updateBrowserFrame(timestampMs);
 
-      const frameDelta = this.clock.computeFrameDelta(timestampMs);
+      // N6: in online mode, sample the local input ahead of the simulation
+      // and hand it to the lockstep session BEFORE the gated advance, so
+      // the advance-gate can actually let ticks through (a tick can't run
+      // until its local input is submitted).
+      this.driveOnlineSubmit();
+
+      // P1.2: a kickoff/countdown reset is a REAL teleport, not
+      // reconciliation drift — suppress correction smoothing for it so it
+      // snaps instantly rather than gliding.
+      if (this.modules) {
+        this.physicsRenderBinding?.setKickoffPhaseActive(
+          KICKOFF_PHASE_STATES.includes(this.modules.gameFlow.getMatchState())
+        );
+      }
+
+      let frameDelta = this.clock.computeFrameDelta(timestampMs);
+      // P1.3 (guest only): nudge the frame clock by at most ±3% so the
+      // guest's replay lead over the host's snapshot tick gently converges
+      // to an RTT-derived target instead of drifting unbounded over a long
+      // match. The host is unaffected (its clock is the authority).
+      const onlineGuestSession = this.onlineSession && !this.onlineSession.isHost ? this.onlineSession : null;
+      if (onlineGuestSession) {
+        const targetLead = computeTargetLeadTicks(onlineGuestSession.session.getRttMs());
+        frameDelta *= computeRateScale(this.onlineLeadEma, targetLead);
+      }
       this.fixedStepsLastFrame = this.fixedStepCoordinator.advance(frameDelta);
 
       this.frameCoordinator.updateFrame({
@@ -515,6 +661,628 @@ export class GameRuntime implements GameRuntimeFacade {
     }
   }
 
+  /**
+   * N1: the single-player car-input wiring — the local player's device
+   * drives PLAYER_CAR_ID, the AI drives OPPONENT_CAR_ID (targeting the
+   * player, defending the opponent net). Behaviour-identical to the
+   * pre-N1 inline branches. Online 1v1 (N5) installs a different map with
+   * a remote source for the opponent.
+   */
+  private configureSinglePlayerInputSources(): void {
+    if (!this.modules) {
+      return;
+    }
+    this.carInputSources.clear();
+    this.carInputSources.set(PLAYER_CAR_ID, new LocalDeviceSource(PLAYER_CAR_ID));
+    this.carInputSources.set(
+      OPPONENT_CAR_ID,
+      new AiSource(OPPONENT_CAR_ID, this.modules.ai, PLAYER_CAR_ID, "opponent", "player")
+    );
+  }
+
+  /**
+   * N6 (plan/ONLINE_MULTIPLAYER_PLAN.md): enter online 1v1 mode. Installs
+   * the buffered local source + the remote peer's source, gates the
+   * fixed-step advance on the lockstep session (a tick can't run until both
+   * cars' inputs for it are in hand), and starts the synchronized match
+   * with the shared kickoff seed. The `MultiplayerSession` orchestrator
+   * (N5) produces the `context`; the lobby UI (N6) calls this on
+   * `match-ready`.
+   */
+  public startOnlineSession(context: OnlineMatchContext, durationMinutes: MatchDurationMinutes): void {
+    const modules = this.requireModules();
+    this.onlineSession = context;
+    // Restart the fixed-step tick counter at 0 so the input stream numbers
+    // from match start on both peers. State-sync never STALLS on a missing
+    // remote input (predicted) and never FORFEITS on drift (the host's
+    // snapshots correct it) — the only thing that can halt the shared
+    // timeline is a P3 both-players pause vote, via the gate installed below.
+    this.fixedStepCoordinator.reset();
+    this.onlineNextSubmitTick = 0;
+    this.lastOnlineFrame = null;
+    // P1.3: start the lead EMA at the fallback target; it converges to the
+    // measured-RTT target within a few snapshots.
+    this.onlineLeadEma = 4;
+    // P3: fresh pause/vote state for the new match.
+    this.onlinePauseOverlayOpen = false;
+    this.onlineWasPaused = false;
+    // P4.3: remember the duration + seed so a rematch can restart identically
+    // (same length, next kickoff-variant in the sequence).
+    this.onlineDurationMinutes = durationMinutes;
+    this.onlineRematchSeed = context.kickoffSeed;
+    this.onlineWasMatchResults = false;
+    // Clear any leftover forfeit/leave signal from a previous match on this session.
+    context.session.setLocalVote(VoteKind.Forfeit, false);
+    // Follow this client's actual car (the guest drives car-opponent) so the
+    // camera, HUD boost/supersonic/ball-cam readouts track the local player.
+    this.localPlayerCarId = context.localCarId;
+    this.cameraController?.setTargetCar(context.localCarId);
+
+    // Install both cars' sources in a CANONICAL car order (car-player first)
+    // so both peers apply inputs in the same order — cheap insurance that
+    // keeps the host and guest sims as close as possible between snapshots.
+    const sourcesByCar = new Map<CarId, CarInputSource>([
+      [context.localCarId, new BufferedLocalSource(context.localCarId, context.session)],
+      [context.remoteCarId, context.session.remoteSource]
+    ]);
+    this.carInputSources.clear();
+    for (const carId of [PLAYER_CAR_ID, OPPONENT_CAR_ID] as const) {
+      const source = sourcesByCar.get(carId);
+      if (source) {
+        this.carInputSources.set(carId, source);
+      }
+    }
+
+    // P3: freeze the shared timeline itself (both peers' tick counters)
+    // while the match is actually paused — the ONLY thing besides the clock
+    // that can halt online play. `isPaused()` only goes true once BOTH
+    // players hold a pause-request vote (see driveOnlineSubmit); opening the
+    // personal pause overlay alone never touches this.
+    this.fixedStepCoordinator.setAdvanceGate({ canAdvance: () => !modules.gameFlow.isPaused() });
+    // The guest follows the host's authoritative match flow; the host runs it.
+    modules.gameFlow.setOnlineGuest(!context.isHost);
+    modules.gameFlow.startOnlineMatch({ durationMinutes, kickoffSeed: context.kickoffSeed });
+
+    // P2.3/P2.4: apply each peer's nickname + car cosmetics to the CORRECT
+    // car (offerer -> car-player, answerer -> car-opponent — the same
+    // mapping MultiplayerSession used to assign localCarId/remoteCarId).
+    this.onlineNicknames = { local: FALLBACK_NICKNAME, remote: FALLBACK_NICKNAME };
+    for (const peer of context.peers) {
+      const carId = peer.role === "offerer" ? PLAYER_CAR_ID : OPPONENT_CAR_ID;
+      const team: CarTeamId = carId === OPPONENT_CAR_ID ? "opponent" : "player";
+      const cosmetics = parsePeerPayload(peer.payload);
+      if (cosmetics.bodyColor) {
+        modules.assets.setCarColorOverride(team, cosmetics.bodyColor);
+        this.physicsRenderBinding?.rebuildCarVisual(carId);
+      }
+      if (cosmetics.boostColor) {
+        this.vfxModule?.setCarBoostColor(carId, cosmetics.boostColor);
+      }
+      if (carId === context.localCarId) {
+        this.onlineNicknames = { ...this.onlineNicknames, local: cosmetics.name };
+      } else {
+        this.onlineNicknames = { ...this.onlineNicknames, remote: cosmetics.name };
+      }
+    }
+  }
+
+  /** N6: leave online mode and restore single-player timing + input sources. */
+  public endOnlineSession(): void {
+    this.onlineSession = null;
+    this.localPlayerCarId = PLAYER_CAR_ID;
+    this.onlineNicknames = null;
+    this.onlinePauseOverlayOpen = false;
+    this.onlineWasPaused = false;
+    this.cameraController?.setTargetCar(PLAYER_CAR_ID);
+    this.fixedStepCoordinator.setAdvanceGate(ALWAYS_ADVANCE);
+    this.requireModules().gameFlow.setOnlineGuest(false);
+
+    // P2.3: clear the online opponent's cosmetics (car-opponent restores to
+    // the fixed team-magenta default; the SP AI never customises itself),
+    // and restore the local player's own car to their Customise Car choice
+    // — which may have been overwritten if this client played as the guest
+    // (car-player then belonged to the remote host during the match).
+    const modules = this.requireModules();
+    modules.assets.setCarColorOverride("opponent", null);
+    this.vfxModule?.setCarBoostColor(OPPONENT_CAR_ID, null);
+    this.physicsRenderBinding?.rebuildCarVisual(OPPONENT_CAR_ID);
+    this.setPlayerCarColors(this.playerCarColors);
+
+    this.configureSinglePlayerInputSources();
+  }
+
+  /**
+   * P3: LEAVE MATCH — holds this client's Forfeit signal (never needs the
+   * other player's consent). It does NOT end the match locally: only the HOST
+   * enacts the end (`driveOnlineForfeit`), so both clients agree on the
+   * outcome and the leaver isn't resurrected by a stale host snapshot. The
+   * guest's signal reaches the host over the vote channel; the host acts on
+   * its own signal directly. The session stays alive through the results
+   * screen (correct winner/nicknames) and is torn down by
+   * `leaveOnlineToMenu()`.
+   */
+  public leaveOnlineMatch(): void {
+    const context = this.onlineSession;
+    if (!context || !this.requireModules().gameFlow.isOnlineMode()) {
+      return;
+    }
+    context.session.setLocalVote(VoteKind.Forfeit, true);
+    this.emitSessionStateChanged();
+  }
+
+  /**
+   * P3 (host only): enact a pending leave. Whichever side holds the Forfeit
+   * signal loses; the forfeiting team is recorded in the authority state and
+   * streamed, so both clients derive the right "you/opponent left" message
+   * from one source of truth.
+   */
+  private driveOnlineForfeit(context: OnlineMatchContext, modules: ModuleContainer): void {
+    if (!context.isHost || !modules.gameFlow.isOnlineMode()) {
+      return;
+    }
+    const hostTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    const outcome = resolveForfeit(
+      hostTeam,
+      context.session.hasLocalVote(VoteKind.Forfeit),
+      context.session.getRemoteVote(VoteKind.Forfeit)
+    );
+    if (outcome) {
+      modules.gameFlow.endOnlineMatchByForfeit(outcome.winner, outcome.forfeitedBy);
+    }
+  }
+
+  /**
+   * P4.2: the REMOTE peer abandoned the match (silence past the timeout, or
+   * an explicit WebRTC disconnect/failure signal) — the local player wins by
+   * forfeit rather than being stuck in a match that can never finish. Unlike a
+   * clean LEAVE this can't be coordinated through the host (the peer is gone),
+   * so the remaining client ends locally, recording the ABSENT team as the
+   * forfeiter (→ "opponent-left" here, and the peer never sees a results
+   * screen anyway). The session is kept alive so the results screen still has
+   * this client's winner perspective + nicknames (tearing it down would flip a
+   * winning guest to "DEFEAT"); torn down by `leaveOnlineToMenu()`. The
+   * `isOnlineMode()` guard makes it idempotent.
+   */
+  public forfeitOnlineMatchByAbandonment(): void {
+    const context = this.onlineSession;
+    if (!context || !this.requireModules().gameFlow.isOnlineMode()) {
+      return;
+    }
+    const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    this.requireModules().gameFlow.endOnlineMatchByForfeit(localTeam, otherTeam(localTeam));
+    this.emitSessionStateChanged();
+  }
+
+  /**
+   * Clean exit from an online match's results screen: restore single-player
+   * state and return to the main menu. The transport (PeerLink/lobby socket)
+   * is torn down separately by the online store's `close()`.
+   */
+  public leaveOnlineToMenu(): void {
+    if (this.onlineSession) {
+      this.endOnlineSession();
+    }
+    this.requireModules().gameFlow.returnToMenu();
+    this.emitSessionStateChanged();
+  }
+
+  /**
+   * Why the current online match ended, for the results screen — derived from
+   * the single authoritative `forfeitedBy` (the host's own, or the guest's
+   * mirrored copy) and which car this client drives, so the two screens can
+   * never both claim "you left". null = a natural finish (rematch offered) or
+   * outside an online match.
+   */
+  public getOnlineEndReason(): OnlineMatchEndReason {
+    const context = this.onlineSession;
+    if (!context) {
+      return null;
+    }
+    const localTeam: TeamId = context.localCarId === OPPONENT_CAR_ID ? "opponent" : "player";
+    return deriveOnlineEndReason(this.requireModules().gameFlow.getForfeitedBy(), localTeam);
+  }
+
+  public isOnlineSession(): boolean {
+    return this.onlineSession !== null;
+  }
+
+  /** P2.4: the two peers' sanitized nicknames for the active online match, or null outside one. */
+  public getOnlineNicknames(): { local: string; remote: string } | null {
+    return this.onlineNicknames;
+  }
+
+  /**
+   * P3: ESC/pause in an online match — purely local UI state. Opening it
+   * never touches match state (the sim keeps running); it's the surface the
+   * REQUEST MATCH PAUSE / VOTE TO CONTINUE buttons live behind.
+   */
+  public toggleOnlinePauseOverlay(): void {
+    this.onlinePauseOverlayOpen = !this.onlinePauseOverlayOpen;
+  }
+
+  public isOnlinePauseOverlayOpen(): boolean {
+    return this.onlinePauseOverlayOpen;
+  }
+
+  /** P3: hold or release this client's "please pause the match" vote. No-op outside an online session. */
+  public requestOnlinePause(active: boolean): void {
+    this.onlineSession?.session.setLocalVote(VoteKind.PauseRequest, active);
+  }
+
+  /** P3: hold or release this client's "yes, continue" vote (only meaningful while actually paused). */
+  public voteOnlineContinue(active: boolean): void {
+    this.onlineSession?.session.setLocalVote(VoteKind.ContinueYes, active);
+  }
+
+  /** P3: whether THIS client currently holds the pause-request vote. */
+  public isRequestingOnlinePause(): boolean {
+    return this.onlineSession?.session.hasLocalVote(VoteKind.PauseRequest) ?? false;
+  }
+
+  /** P3: whether THIS client currently holds the continue-yes vote. */
+  public isVotingOnlineContinue(): boolean {
+    return this.onlineSession?.session.hasLocalVote(VoteKind.ContinueYes) ?? false;
+  }
+
+  /** P3/P4.3: live vote tallies for the pause-request / continue-yes / rematch phases, for the "n/2" displays. */
+  public getOnlineVoteCounts(): { pauseRequests: number; continueVotes: number; rematchVotes: number } {
+    const session = this.onlineSession?.session;
+    if (!session) {
+      return { pauseRequests: 0, continueVotes: 0, rematchVotes: 0 };
+    }
+    const pauseRequests =
+      (session.hasLocalVote(VoteKind.PauseRequest) ? 1 : 0) + (session.getRemoteVote(VoteKind.PauseRequest) ? 1 : 0);
+    const continueVotes =
+      (session.hasLocalVote(VoteKind.ContinueYes) ? 1 : 0) + (session.getRemoteVote(VoteKind.ContinueYes) ? 1 : 0);
+    const rematchVotes =
+      (session.hasLocalVote(VoteKind.RematchYes) ? 1 : 0) + (session.getRemoteVote(VoteKind.RematchYes) ? 1 : 0);
+    return { pauseRequests, continueVotes, rematchVotes };
+  }
+
+  /** P4.3: hold or release this client's "rematch" vote (only meaningful at MATCH_RESULTS in an online match). */
+  public voteOnlineRematch(active: boolean): void {
+    this.onlineSession?.session.setLocalVote(VoteKind.RematchYes, active);
+  }
+
+  /** P4.3: whether THIS client currently holds the rematch vote. */
+  public isVotingOnlineRematch(): boolean {
+    return this.onlineSession?.session.hasLocalVote(VoteKind.RematchYes) ?? false;
+  }
+
+  /**
+   * P4.2: connection-health readout for the HUD ping display — round-trip
+   * time (null until the first ping/pong completes) and how long it's been
+   * since ANY packet was last heard from the remote peer (the same signal
+   * that drives silent-abandonment forfeit).
+   */
+  public getOnlineConnectionInfo(): { rttMs: number | null; msSinceRemoteActivity: number } | null {
+    const session = this.onlineSession?.session;
+    if (!session) {
+      return null;
+    }
+    return { rttMs: session.getRttMs(), msSinceRemoteActivity: session.msSinceRemoteActivity() };
+  }
+
+  /**
+   * S5: online submit-ahead + convergence. Each rendered frame, sample the
+   * local input for every tick up to `currentTick + inputDelay` not yet sent,
+   * hand it to the state-sync session (which quantizes, buffers, transmits),
+   * and pump incoming packets. On the GUEST, apply the newest authoritative
+   * host snapshot so the world converges before the next simulated tick.
+   * Nothing here can stall or forfeit the match.
+   */
+  private driveOnlineSubmit(): void {
+    const context = this.onlineSession;
+    const modules = this.modules;
+    if (!context || !modules) {
+      return;
+    }
+
+    const paused = modules.gameFlow.isPaused();
+
+    // P3: while the match is actually paused (both players voted), the tick
+    // counter is frozen by the advance gate — don't keep sampling/submitting
+    // input for a tick that will never simulate. Network traffic (pump,
+    // votes, and the host's paused-frame snapshots below) keeps flowing so
+    // the two peers can still reach "both voted continue" and resume.
+    if (!paused) {
+      // Sample only a small delay ahead so the local player's OWN car stays
+      // near-instant (inputDelayTicks ≈ a couple of ticks of latency). A hitchy
+      // frame can still advance several ticks past this in one go; those few
+      // ticks fall back to hold-last prediction (StateSyncSession.localInputForTick)
+      // rather than stalling or crashing — invisible for a brief catch-up burst.
+      const targetTick = this.fixedStepCoordinator.tick + context.session.inputDelayTicks;
+      const grounded = modules.physics.getCarIds().includes(context.localCarId)
+        ? modules.physics.getCarState(context.localCarId).grounded
+        : true;
+
+      let submits = 0;
+      const maxSubmitsPerFrame = 32;
+      while (this.onlineNextSubmitTick <= targetTick && submits < maxSubmitsPerFrame) {
+        const frame = modules.input.sampleGameplayInputForTick(this.onlineNextSubmitTick, { grounded });
+        this.lastOnlineFrame = frame;
+        this.cameraController?.consumeCameraInput(frame.camera);
+        // P3: ESC opens/closes the personal pause overlay — never touches
+        // match state directly (that only happens once both peers vote).
+        if (frame.system.pausePressed) {
+          this.toggleOnlinePauseOverlay();
+        }
+        context.session.submitLocalInput(this.onlineNextSubmitTick, frame.car);
+        this.onlineNextSubmitTick += 1;
+        submits += 1;
+      }
+    } else {
+      // P3: while actually paused, no tick is being submitted, but ESC must
+      // still work (to close the overlay or change a vote) — sample once at
+      // the frame level purely to consume the pause-key edge.
+      const frame = modules.input.sampleGameplayInputForTick(this.fixedStepCoordinator.tick, { grounded: true });
+      if (frame.system.pausePressed) {
+        this.toggleOnlinePauseOverlay();
+      }
+    }
+
+    context.session.pump();
+
+    // P4.2: no packet at all from the remote peer in ONLINE_ABANDONMENT_TIMEOUT_MS
+    // — they've disconnected/closed the tab/lost their network entirely; the
+    // local player wins by forfeit. Gated on `isOnlineMode()` so it only fires
+    // during a LIVE match: once the match has already concluded (results
+    // screen), the dead session's ever-growing silence must not re-trigger it.
+    if (modules.gameFlow.isOnlineMode() && context.session.msSinceRemoteActivity() > ONLINE_ABANDONMENT_TIMEOUT_MS) {
+      this.forfeitOnlineMatchByAbandonment();
+      return;
+    }
+
+    context.session.maintainVotes();
+    this.driveOnlinePauseVotes(context, modules, paused);
+    this.driveOnlineForfeit(context, modules);
+    this.driveOnlineRematchVotes(context, modules);
+
+    if (!context.isHost) {
+      // The guest mirrors the host's pause/resume/forfeit transitions HERE, so
+      // the pause-edge detection below MUST run after this — otherwise a guest
+      // resuming via snapshot never observes the paused->playing edge and stays
+      // stuck in its pause overlay (the bug this ordering fixes).
+      this.applyHostSnapshot();
+    } else if (modules.gameFlow.isPaused() && this.pausedSnapshotFrameCounter % PAUSED_SNAPSHOT_EVERY_N_FRAMES === 0) {
+      // Host, while paused: onFixedTick never runs (ticks are frozen), so
+      // this is the only place left to keep the guest's mirrored match state
+      // (and the vote counts it renders) fresh — a low-rate frame-driven
+      // snapshot rather than the normal per-tick one.
+      context.session.sendSnapshot({
+        tick: this.fixedStepCoordinator.tick,
+        world: modules.physics.getWorldSnapshot(),
+        flow: modules.gameFlow.captureAuthorityState()
+      });
+    }
+
+    this.applyOnlinePauseEdges(context, modules);
+
+    if (modules.gameFlow.isPaused()) {
+      this.pausedSnapshotFrameCounter += 1;
+    }
+
+    // P3: `onFixedTick` (the normal source of `emitSessionStateChanged`)
+    // never runs while the match is actually paused — the fixed-tick
+    // counter itself is frozen. This frame-level call is the only thing
+    // that keeps the Vue HUD (vote counts, the pause/resume transition
+    // itself) live while frozen; it's cheap and explicitly designed to be
+    // safe from outside the tick loop (see its own doc comment).
+    this.emitSessionStateChanged();
+  }
+
+  /**
+   * P3: the host-authoritative pause/resume DECISION. Both peers compute the
+   * same vote counts symmetrically (votes are exchanged peer-to-peer), but
+   * only the host acts — it calls pause()/resume() and the guest mirrors the
+   * transition from the host's next snapshot. The pause/resume EDGE handling
+   * (clearing the spent vote, closing the overlay) lives in
+   * `applyOnlinePauseEdges`, which runs after the guest has mirrored the
+   * transition so both peers observe the same edge.
+   */
+  private driveOnlinePauseVotes(context: OnlineMatchContext, modules: ModuleContainer, paused: boolean): void {
+    if (!context.isHost) {
+      return;
+    }
+    const localPauseRequest = context.session.hasLocalVote(VoteKind.PauseRequest);
+    const remotePauseRequest = context.session.getRemoteVote(VoteKind.PauseRequest);
+    const localContinueYes = context.session.hasLocalVote(VoteKind.ContinueYes);
+    const remoteContinueYes = context.session.getRemoteVote(VoteKind.ContinueYes);
+
+    if (shouldPause(localPauseRequest, remotePauseRequest, paused)) {
+      modules.gameFlow.pause();
+    } else if (shouldResume(localContinueYes, remoteContinueYes, paused)) {
+      modules.gameFlow.resume();
+    }
+  }
+
+  /**
+   * P3: react to the pause/resume EDGE on BOTH peers, comparing this frame's
+   * paused state (after the guest has mirrored any host transition) to last
+   * frame's. On the pause edge, clear the now-spent pause-request vote. On the
+   * resume edge, clear the continue vote AND close the personal pause overlay —
+   * the latter is what got missed before, leaving the guest stuck in the menu.
+   */
+  private applyOnlinePauseEdges(context: OnlineMatchContext, modules: ModuleContainer): void {
+    const nowPaused = modules.gameFlow.isPaused();
+    const edge = computePauseEdge(this.onlineWasPaused, nowPaused);
+    if (edge.justPaused) {
+      context.session.setLocalVote(VoteKind.PauseRequest, false);
+      this.pausedSnapshotFrameCounter = 0;
+    }
+    if (edge.justResumed) {
+      context.session.setLocalVote(VoteKind.ContinueYes, false);
+      this.onlinePauseOverlayOpen = false;
+    }
+    this.onlineWasPaused = nowPaused;
+
+    // Once the match has ended (leave/forfeit/natural finish → MATCH_RESULTS),
+    // the personal pause overlay is meaningless — force it closed so it can't
+    // linger over the results screen.
+    if (modules.gameFlow.getMatchState() === "MATCH_RESULTS") {
+      this.onlinePauseOverlayOpen = false;
+    }
+  }
+
+  /**
+   * P4.3: REMATCH (n/2) — same symmetric-votes/host-decides shape as P3's
+   * pause votes. Once both peers hold the rematch vote at MATCH_RESULTS, the
+   * host restarts the match (next kickoff seed in the sequence, same
+   * duration); the guest needs no local call — its flow mirrors the
+   * resulting KICKOFF_SETUP/countdown transition and reset score from the
+   * host's next snapshot, exactly like every other match-flow transition.
+   * The vote clears on both sides once MATCH_RESULTS is left behind so it
+   * can't leak into the next match's own eventual rematch vote.
+   */
+  private driveOnlineRematchVotes(context: OnlineMatchContext, modules: ModuleContainer): void {
+    const nowResults = modules.gameFlow.getMatchState() === "MATCH_RESULTS";
+
+    if (context.isHost) {
+      const localRematch = context.session.hasLocalVote(VoteKind.RematchYes);
+      const remoteRematch = context.session.getRemoteVote(VoteKind.RematchYes);
+      if (shouldRematch(localRematch, remoteRematch, nowResults)) {
+        this.onlineRematchSeed += 1;
+        modules.gameFlow.startOnlineMatch({
+          durationMinutes: this.onlineDurationMinutes,
+          kickoffSeed: this.onlineRematchSeed
+        });
+      }
+    }
+
+    if (this.onlineWasMatchResults && !nowResults) {
+      context.session.setLocalVote(VoteKind.RematchYes, false);
+    }
+    this.onlineWasMatchResults = modules.gameFlow.getMatchState() === "MATCH_RESULTS";
+  }
+
+  /**
+   * S5 (guest only): converge onto the newest authoritative snapshot the host
+   * has sent — WITHOUT introducing perceived lag. The snapshot describes the
+   * world as of the host's tick T, which is RTT/2 + a snapshot interval in
+   * the past; applying it directly would yank the ball and cars backward a
+   * few ticks on every snapshot (a constant sawtooth that reads as lag even
+   * on a LAN). Instead the guest REWINDS to the authoritative frame and then
+   * REPLAYS its buffered inputs (its own from the local send buffer, the
+   * host's from the receive buffer, hold-last for any not yet arrived) up to
+   * the tick it had already reached. The result is always
+   * "authoritative state + everything known since" — the present stays the
+   * present, the ball responds to local hits instantly, and drift is still
+   * fully corrected. A handful of extra physics steps per snapshot is cheap
+   * (~2 cars + ball).
+   */
+  private applyHostSnapshot(): void {
+    const context = this.onlineSession;
+    const modules = this.modules;
+    if (!context || !modules) {
+      return;
+    }
+    const snapshot = context.session.consumeSnapshot();
+    if (!snapshot) {
+      return;
+    }
+
+    modules.gameFlow.applyAuthorityState(snapshot.flow);
+
+    // P1.2: capture "where things appeared" before reconciling, so any net
+    // position change can be handed to the renderer as a decaying visual
+    // offset instead of a hard pop (see PhysicsRenderBinding.addCorrectionOffset).
+    const beforePositions = this.captureCorrectionPositions(modules.physics, context);
+
+    // The world snapshot is the state AFTER the host simulated tick T; the
+    // guest's own frontier is the last tick it simulated.
+    const lastSimulated = this.fixedStepCoordinator.tick - 1;
+    const replayTicks = lastSimulated - snapshot.tick;
+
+    // P1.3: this "replay ticks" figure IS the guest's lead over the host's
+    // snapshot tick — EMA it (only in the well-behaved case; the outright
+    // -adopt branch below is an already-abnormal jump, not a lead sample)
+    // so the frame-clock nudge in `frame()` can track it smoothly.
+    if (replayTicks >= 0 && replayTicks <= ONLINE_MAX_REPLAY_TICKS) {
+      this.onlineLeadEma += LEAD_EMA_ALPHA * (replayTicks - this.onlineLeadEma);
+    }
+
+    if (replayTicks < 0 || replayTicks > ONLINE_MAX_REPLAY_TICKS) {
+      // The guest is behind the host (slower machine / just joined) or too
+      // far ahead to replay across (an RTT spike): adopt the host's frame
+      // AND its timeline outright.
+      modules.physics.applyWorldSnapshot(snapshot.world);
+      this.fixedStepCoordinator.setTickForOnlineSync(snapshot.tick + 1);
+      this.onlineNextSubmitTick = Math.max(this.onlineNextSubmitTick, snapshot.tick + 1);
+      this.emitCorrectionOffsets(modules.physics, context, beforePositions);
+      return;
+    }
+
+    modules.physics.applyWorldSnapshot(snapshot.world);
+    const controlsActive = modules.gameFlow.areControlsActive();
+    for (let t = snapshot.tick + 1; t <= lastSimulated; t += 1) {
+      if (controlsActive) {
+        modules.physics.setCarInput(context.localCarId, context.session.localInputForTick(t));
+        modules.physics.setCarInput(context.remoteCarId, context.session.remoteSource.inputOrHeldForTick(t));
+      } else {
+        modules.physics.clearAllInputs();
+      }
+      modules.physics.step();
+    }
+    // Replayed ticks re-fire physics events (pad pickups, goal overlaps) the
+    // presentation already reacted to when they were first simulated — drop
+    // them so sounds/VFX don't double-fire.
+    modules.physics.clearGoalEvents();
+    modules.physics.clearBoostPadEvents();
+    this.emitCorrectionOffsets(modules.physics, context, beforePositions);
+  }
+
+  /** P1.2: snapshot the world-space positions correction smoothing cares about, or null where not yet spawned. */
+  private captureCorrectionPositions(
+    physics: ModuleContainer["physics"],
+    context: OnlineMatchContext
+  ): Partial<Record<CorrectionTargetId, Vec3Like>> {
+    const liveCarIds = physics.getCarIds();
+    const out: Partial<Record<CorrectionTargetId, Vec3Like>> = {};
+    if (liveCarIds.includes(context.localCarId)) {
+      out[context.localCarId] = physics.getCarState(context.localCarId).position;
+    }
+    if (liveCarIds.includes(context.remoteCarId)) {
+      out[context.remoteCarId] = physics.getCarState(context.remoteCarId).position;
+    }
+    out.ball = physics.getBallState().position;
+    return out;
+  }
+
+  /** P1.2: hand the renderer the delta between the pre-reconciliation and post-reconciliation positions. */
+  private emitCorrectionOffsets(
+    physics: ModuleContainer["physics"],
+    context: OnlineMatchContext,
+    before: Partial<Record<CorrectionTargetId, Vec3Like>>
+  ): void {
+    const binding = this.physicsRenderBinding;
+    if (!binding) {
+      return;
+    }
+    const liveCarIds = physics.getCarIds();
+    const targets: CorrectionTargetId[] = [context.localCarId, context.remoteCarId, "ball"];
+    for (const target of targets) {
+      const beforePos = before[target];
+      if (!beforePos) {
+        continue;
+      }
+      const afterPos =
+        target === "ball"
+          ? physics.getBallState().position
+          : liveCarIds.includes(target)
+            ? physics.getCarState(target).position
+            : null;
+      if (!afterPos) {
+        continue;
+      }
+      const delta = {
+        x: beforePos.x - afterPos.x,
+        y: beforePos.y - afterPos.y,
+        z: beforePos.z - afterPos.z
+      };
+      binding.addCorrectionOffset(target, delta);
+    }
+  }
+
   private onFixedTick(tick: number): void {
     const modules = this.modules;
     if (!modules) {
@@ -533,6 +1301,12 @@ export class GameRuntime implements GameRuntimeFacade {
       return;
     }
 
+    // N6: in online mode the local input was already sampled (once per
+    // tick) and submitted by `driveOnlineSubmit` before the gated advance,
+    // so DO NOT re-sample here (that would double-consume edges). The
+    // buffered local source + remote source read from the lockstep buffers.
+    const online = this.onlineSession;
+
     // Sample input once per tick regardless of match state (input spec:
     // one sample per tick) so camera toggles/swivel still respond during
     // countdown/pause, then either apply or neutralise the CarInput half
@@ -544,33 +1318,39 @@ export class GameRuntime implements GameRuntimeFacade {
       ? modules.physics.getCarState(PLAYER_CAR_ID).grounded
       : true;
 
-    const frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
-    this.cameraController?.consumeCameraInput(frame.camera);
-
-    if (frame.system.pausePressed) {
-      this.pauseMatch();
+    let frame: HumanGameplayInputFrame;
+    if (online) {
+      // Reuse the frame the submit loop sampled (for the input context's
+      // shape); the online sources don't read it, and camera/pause were
+      // already handled in driveOnlineSubmit.
+      frame = this.lastOnlineFrame ?? modules.input.sampleGameplayInputForTick(tick, { grounded });
+    } else {
+      frame = modules.input.sampleGameplayInputForTick(tick, { grounded });
+      this.cameraController?.consumeCameraInput(frame.camera);
+      if (frame.system.pausePressed) {
+        this.pauseMatch();
+      }
     }
 
     if (modules.gameFlow.areControlsActive()) {
-      modules.physics.setCarInput(PLAYER_CAR_ID, frame.car);
-      modules.physics.setCarControlProfile(PLAYER_CAR_ID, frame.carControlProfile);
-
-      if (modules.physics.getCarIds().includes(OPPONENT_CAR_ID)) {
-        const ownGoalCentre = modules.physics.getGoalSensorCentre("opponent");
-        const targetGoalCentre = modules.physics.getGoalSensorCentre("player");
-
-        if (ownGoalCentre && targetGoalCentre) {
-          const aiInput = modules.ai.update({
-            tick,
-            matchState: modules.gameFlow.getMatchState(),
-            controlledCar: modules.physics.getCarState(OPPONENT_CAR_ID),
-            humanCar: modules.physics.getCarState(PLAYER_CAR_ID),
-            ball: modules.physics.getBallState(),
-            boostPads: modules.physics.getBoostPadStates(),
-            ownGoalCentre,
-            targetGoalCentre
-          });
-          modules.physics.setCarInput(OPPONENT_CAR_ID, aiInput);
+      // N1: drive every car from its CarInputSource (local device, AI, or
+      // — online — a remote peer). Cars not yet spawned in physics are
+      // skipped, exactly as the old `getCarIds().includes(...)` guards did.
+      const context: CarInputContext = {
+        tick,
+        matchState: modules.gameFlow.getMatchState(),
+        physics: modules.physics,
+        localFrame: frame
+      };
+      const liveCarIds = modules.physics.getCarIds();
+      for (const [carId, source] of this.carInputSources) {
+        if (!liveCarIds.includes(carId)) {
+          continue;
+        }
+        const sample = source.sampleForTick(context);
+        modules.physics.setCarInput(carId, sample.input);
+        if (sample.profile) {
+          modules.physics.setCarControlProfile(carId, sample.profile);
         }
       }
     } else {
@@ -584,6 +1364,20 @@ export class GameRuntime implements GameRuntimeFacade {
     modules.physics.step();
 
     modules.gameFlow.applyPhysicsResults();
+
+    if (online && online.isHost && online.session.shouldSnapshot(tick)) {
+      // S5 (host only): stream the just-simulated authoritative frame — world
+      // + match-flow decisions — so the guest converges. No hashing, no
+      // desync check: drift is corrected by these snapshots, never fatal.
+      online.session.sendSnapshot({
+        tick,
+        world: modules.physics.getWorldSnapshot(),
+        flow: modules.gameFlow.captureAuthorityState()
+      });
+    }
+    if (online) {
+      online.session.onTickHousekeeping(tick);
+    }
 
     this.dispatcher.emit("runtime:fixed-tick", {
       tick,
@@ -613,6 +1407,25 @@ export class GameRuntime implements GameRuntimeFacade {
   }
 
   /**
+   * The session state oriented to this client's own car. Score and winner
+   * are stored from the canonical `player` team's perspective; the online
+   * answerer drives `car-opponent`, so its HUD must show that team's score
+   * as "YOU". Single-player and the offerer see the state unchanged.
+   */
+  private sessionStateForLocalPlayer(): GameSessionState {
+    const state = this.requireModules().gameFlow.getSessionState();
+    if (this.localPlayerCarId !== OPPONENT_CAR_ID) {
+      return state;
+    }
+    return {
+      ...state,
+      playerScore: state.opponentScore,
+      opponentScore: state.playerScore,
+      winner: state.winner === null ? null : otherTeam(state.winner)
+    };
+  }
+
+  /**
    * Emitted once per fixed tick — not once per rendered frame — so the Vue
    * UI layer stays in sync with match-flow session state whether ticks are
    * driven by the real rAF loop or by `stepFixedTicksForTesting()` (used
@@ -633,7 +1446,7 @@ export class GameRuntime implements GameRuntimeFacade {
     this.syncTournamentFromMatchFlow(this.modules.gameFlow.getMatchState());
 
     this.dispatcher.emit("runtime:session-state-changed", {
-      session: this.modules.gameFlow.getSessionState(),
+      session: this.sessionStateForLocalPlayer(),
       playerBoostAmount: this.getPlayerBoostAmount(),
       playerSupersonic: this.getPlayerSupersonic(),
       playerBallCamera: this.getPlayerBallCamera(),
@@ -949,16 +1762,16 @@ export class GameRuntime implements GameRuntimeFacade {
 
   public getPlayerBoostAmount(): number {
     const modules = this.requireModules();
-    return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
-      ? modules.physics.getCarState(PLAYER_CAR_ID).boostAmount
+    return modules.physics.getCarIds().includes(this.localPlayerCarId)
+      ? modules.physics.getCarState(this.localPlayerCarId).boostAmount
       : 0;
   }
 
   /** WS9.C: HUD supersonic feedback on the boost ring. */
   public getPlayerSupersonic(): boolean {
     const modules = this.requireModules();
-    return modules.physics.getCarIds().includes(PLAYER_CAR_ID)
-      ? modules.physics.getCarState(PLAYER_CAR_ID).supersonic
+    return modules.physics.getCarIds().includes(this.localPlayerCarId)
+      ? modules.physics.getCarState(this.localPlayerCarId).supersonic
       : false;
   }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useGameRuntime } from "@/core/useGameRuntime";
 import { useMatchFlowStore } from "@/stores/matchFlowStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -7,6 +7,46 @@ import { useSettingsStore } from "@/stores/settingsStore";
 const runtime = useGameRuntime();
 const matchFlowStore = useMatchFlowStore();
 const settingsStore = useSettingsStore();
+
+// P3: online replaces RESUME/SETTINGS/RESTART/RETURN with a vote flow —
+// neither player can unilaterally resume/restart/leave-without-forfeit.
+// `matchFlowStore.session` is re-emitted every rendered frame while online
+// (even while actually paused), so reading it forces these to stay live.
+const isOnline = computed(() => {
+  void matchFlowStore.session;
+  return runtime.isOnlineSession();
+});
+const isActuallyPaused = computed(() => {
+  void matchFlowStore.session;
+  return matchFlowStore.matchState === "PAUSED";
+});
+const voteCounts = computed(() => {
+  void matchFlowStore.session;
+  return runtime.getOnlineVoteCounts();
+});
+const myPauseRequestActive = computed(() => {
+  void matchFlowStore.session;
+  return runtime.isRequestingOnlinePause();
+});
+const myContinueVoteActive = computed(() => {
+  void matchFlowStore.session;
+  return runtime.isVotingOnlineContinue();
+});
+
+function toggleOnlinePauseRequest(): void {
+  runtime.playUiSound("confirm");
+  runtime.requestOnlinePause(!myPauseRequestActive.value);
+}
+
+function toggleOnlineContinueVote(): void {
+  runtime.playUiSound("confirm");
+  runtime.voteOnlineContinue(!myContinueVoteActive.value);
+}
+
+function leaveOnlineMatch(): void {
+  runtime.playUiSound("cancel");
+  runtime.leaveOnlineMatch();
+}
 
 /**
  * F10: `window.confirm` is invisible to the gamepad layer (and Playwright
@@ -38,7 +78,11 @@ function openSettings(): void {
  * row is showing so a stray Escape can't blow past the confirmation.
  */
 function handlePauseKeydown(event: KeyboardEvent): void {
-  if (confirming.value) {
+  if (confirming.value || isOnline.value) {
+    // P3: online's pause key is consumed by GameRuntime itself (it toggles
+    // the personal overlay / needs to keep working while the tick-driven
+    // edge consumption used for SP is frozen) — this DOM listener would
+    // double-handle the same keypress.
     return;
   }
   if (event.code !== settingsStore.settings.controls.keyboardMouse.pause) {
@@ -89,68 +133,111 @@ function cancelConfirm(): void {
 <template>
   <div class="pause-overlay" data-testid="pause-menu" data-menu-root>
     <div class="pause-panel wo-panel">
-      <h2 class="heading wo-title">PAUSED</h2>
-      <template v-if="!confirming">
-        <button
-          type="button"
-          class="menu-item wo-item"
-          data-index="01"
-          autofocus
-          data-menu-back
-          @click="resumeMatch()"
-        >
-          RESUME
-        </button>
+      <template v-if="isOnline">
+        <h2 class="heading wo-title">{{ isActuallyPaused ? "PAUSED" : "PAUSE MENU" }}</h2>
+        <template v-if="!isActuallyPaused">
+          <p class="wo-label vote-hint">BOTH PLAYERS MUST AGREE TO PAUSE</p>
+          <button
+            type="button"
+            class="menu-item wo-item"
+            data-index="01"
+            autofocus
+            data-testid="online-request-pause"
+            @click="toggleOnlinePauseRequest()"
+          >
+            {{ myPauseRequestActive ? "CANCEL PAUSE REQUEST" : "REQUEST MATCH PAUSE" }}
+            ({{ voteCounts.pauseRequests }}/2)
+          </button>
+        </template>
+        <template v-else>
+          <p class="wo-label vote-hint">BOTH PLAYERS MUST AGREE TO CONTINUE</p>
+          <button
+            type="button"
+            class="menu-item wo-item"
+            data-index="01"
+            autofocus
+            data-testid="online-vote-continue"
+            @click="toggleOnlineContinueVote()"
+          >
+            {{ myContinueVoteActive ? "CANCEL VOTE" : "VOTE TO CONTINUE" }}
+            ({{ voteCounts.continueVotes }}/2)
+          </button>
+        </template>
         <button
           type="button"
           class="menu-item wo-item"
           data-index="02"
-          data-testid="pause-settings"
-          @click="openSettings()"
+          data-menu-back
+          data-testid="online-leave-match"
+          @click="leaveOnlineMatch()"
         >
-          SETTINGS
-        </button>
-        <button
-          ref="restartButtonEl"
-          type="button"
-          class="menu-item wo-item"
-          data-index="03"
-          @click="requestRestart()"
-        >
-          RESTART MATCH
-        </button>
-        <button
-          ref="returnButtonEl"
-          type="button"
-          class="menu-item wo-item"
-          data-index="04"
-          @click="requestReturn()"
-        >
-          RETURN TO MENU
+          LEAVE MATCH
         </button>
       </template>
       <template v-else>
-        <p class="wo-label confirm-label">ARE YOU SURE?</p>
-        <button
-          type="button"
-          class="menu-item wo-item"
-          data-index="01"
-          data-testid="pause-confirm-yes"
-          @click="confirmAction()"
-        >
-          CONFIRM
-        </button>
-        <button
-          ref="cancelButtonEl"
-          type="button"
-          class="menu-item wo-item"
-          data-index="02"
-          data-menu-back
-          data-testid="pause-confirm-no"
-          @click="cancelConfirm()"
-        >
-          CANCEL
-        </button>
+        <h2 class="heading wo-title">PAUSED</h2>
+        <template v-if="!confirming">
+          <button
+            type="button"
+            class="menu-item wo-item"
+            data-index="01"
+            autofocus
+            data-menu-back
+            @click="resumeMatch()"
+          >
+            RESUME
+          </button>
+          <button
+            type="button"
+            class="menu-item wo-item"
+            data-index="02"
+            data-testid="pause-settings"
+            @click="openSettings()"
+          >
+            SETTINGS
+          </button>
+          <button
+            ref="restartButtonEl"
+            type="button"
+            class="menu-item wo-item"
+            data-index="03"
+            @click="requestRestart()"
+          >
+            RESTART MATCH
+          </button>
+          <button
+            ref="returnButtonEl"
+            type="button"
+            class="menu-item wo-item"
+            data-index="04"
+            @click="requestReturn()"
+          >
+            RETURN TO MENU
+          </button>
+        </template>
+        <template v-else>
+          <p class="wo-label confirm-label">ARE YOU SURE?</p>
+          <button
+            type="button"
+            class="menu-item wo-item"
+            data-index="01"
+            data-testid="pause-confirm-yes"
+            @click="confirmAction()"
+          >
+            CONFIRM
+          </button>
+          <button
+            ref="cancelButtonEl"
+            type="button"
+            class="menu-item wo-item"
+            data-index="02"
+            data-menu-back
+            data-testid="pause-confirm-no"
+            @click="cancelConfirm()"
+          >
+            CANCEL
+          </button>
+        </template>
       </template>
     </div>
   </div>
@@ -183,6 +270,13 @@ function cancelConfirm(): void {
 .confirm-label {
   text-align: center;
   margin: 0 0 0.25rem 0;
+}
+
+.vote-hint {
+  text-align: center;
+  margin: 0 0 0.25rem 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
 }
 
 .menu-item {

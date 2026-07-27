@@ -1,7 +1,16 @@
 import { RL_CONSTANTS } from "@/physics/PhysicsConstants";
+import { flipRate } from "@/physics/car/DodgeRateProfile";
 import type { PhysicsParameters } from "@/physics/PhysicsParameters";
 import * as V from "@/physics/Vec3Math";
 import type { CarEntity } from "@/physics/entities/CarRegistry";
+
+/**
+ * G7.a (plan/GAME_ENHANCEMENTS_PLAN.md): ticks of exponential decay applied
+ * to the flip's residual non-yaw spin once the active phase ends, instead
+ * of an instant snap to zero — see `updateDodgeState`'s recovery branch.
+ */
+const RECOVERY_DAMP_TICKS = 3;
+const RECOVERY_DAMP_FACTOR = 0.4;
 
 /**
  * WS3 (plan/POLISH_OVERHAUL_PLAN.md): kinematic flip rewrite. Rocket
@@ -90,7 +99,12 @@ export function updateDodgeState(car: CarEntity, parameters: PhysicsParameters, 
   car.runtime.dodgeElapsed += dt;
 
   if (car.runtime.dodgeState === "active") {
-    const flipRateFull = (2 * Math.PI) / parameters.dodge.activeDuration;
+    // G7.a: front-loaded rate profile (peaks immediately, eases down
+    // through the back half) instead of a constant metronome rate — see
+    // DodgeRateProfile.ts's doc comment for why this is what makes a real
+    // RL flip feel clean. Its integral over the full duration is exactly
+    // 2*PI, so an uncancelled flip still lands wheels-down.
+    const currentRate = flipRate(car.runtime.dodgeElapsed, parameters.dodge.activeDuration);
 
     // Flip cancel: holding pitch opposite the dodge's own forward
     // component blends the flip rate down to zero and ends the active
@@ -107,25 +121,41 @@ export function updateDodgeState(car: CarEntity, parameters: PhysicsParameters, 
       }
     }
 
-    const effectiveRate = flipRateFull * (1 - car.runtime.dodgeCancelBlend);
+    const effectiveRate = currentRate * (1 - car.runtime.dodgeCancelBlend);
     car.body.setAngvel(V.scale(car.runtime.dodgeAxis, effectiveRate), true);
 
     const cancelledOut = car.runtime.dodgeCancelBlend >= 1;
     if (cancelledOut || car.runtime.dodgeElapsed >= parameters.dodge.activeDuration) {
-      // Landing should carry yaw (so a dodge can still redirect heading)
-      // but not the flip's pitch/roll spin — otherwise the car keeps
-      // tumbling instead of settling flat.
-      const angvel = car.body.angvel();
-      const yawComponent = V.scale(V.UP, V.dot(angvel, V.UP));
-      car.body.setAngvel(yawComponent, true);
-
+      // G7.a: landing should carry yaw (so a dodge can still redirect
+      // heading) but not the flip's pitch/roll spin — otherwise the car
+      // keeps tumbling instead of settling flat. Rather than an instant
+      // snap to yaw-only (the old hard cutoff a player felt as a "snap"),
+      // the residual non-yaw spin carries into recovery and decays there
+      // over RECOVERY_DAMP_TICKS ticks (see the recovery branch below) —
+      // easing into wheels-down instead of chopping to it.
+      car.runtime.dodgeRecoveryDampTicksRemaining = RECOVERY_DAMP_TICKS;
       car.runtime.dodgeState = "recovery";
       car.runtime.dodgeElapsed = 0;
     }
   } else if (car.runtime.dodgeState === "recovery") {
+    if (car.runtime.dodgeRecoveryDampTicksRemaining > 0) {
+      const angvel = car.body.angvel();
+      const yawComponent = V.scale(V.UP, V.dot(angvel, V.UP));
+      const nonYawComponent = V.sub(angvel, yawComponent);
+
+      car.runtime.dodgeRecoveryDampTicksRemaining -= 1;
+      if (car.runtime.dodgeRecoveryDampTicksRemaining <= 0) {
+        // Final tick: fully settle rather than asymptotically approach zero.
+        car.body.setAngvel(yawComponent, true);
+      } else {
+        car.body.setAngvel(V.add(yawComponent, V.scale(nonYawComponent, RECOVERY_DAMP_FACTOR)), true);
+      }
+    }
+
     if (car.runtime.dodgeElapsed >= parameters.dodge.recoveryDuration) {
       car.runtime.dodgeState = "none";
       car.runtime.dodgeElapsed = 0;
+      car.runtime.dodgeRecoveryDampTicksRemaining = 0;
     }
   }
 }

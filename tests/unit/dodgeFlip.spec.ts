@@ -73,6 +73,33 @@ describe("Dodge / flip", () => {
     expect(finalState.grounded).toBe(true);
   });
 
+  it("G7.a: after a full forward dodge + recovery, spin has settled to near zero and the car landed close to wheels-down", () => {
+    physics.setCarInput("car-a", { throttle: 1 });
+    physics.stepTicks(120);
+
+    physics.setCarInput("car-a", { throttle: 1, jump: true });
+    physics.stepTicks(1);
+    physics.setCarInput("car-a", { throttle: 1, jump: false });
+    physics.stepTicks(6);
+    physics.setCarInput("car-a", { throttle: 1, jump: true, pitch: 1 });
+    physics.stepTicks(1);
+    physics.setCarInput("car-a", { throttle: 1, jump: false, pitch: 0 });
+
+    // Run through the full active phase (78 ticks at activeDuration=0.65s)
+    // plus the eased recovery damp (well past RECOVERY_DAMP_TICKS) without
+    // letting the car touch the ground yet, so this isolates the flip's
+    // own settling from any suspension/ground-contact damping.
+    physics.stepTicks(90);
+
+    const angvel = physics.getCarState("car-a").angularVelocity;
+    const pitchRollMagnitude = Math.hypot(angvel.x, angvel.z);
+    expect(pitchRollMagnitude).toBeLessThan(0.1);
+
+    physics.stepTicks(180); // let it land and settle
+    expect(carUp().y).toBeGreaterThan(0.9);
+    expect(physics.getCarState("car-a").grounded).toBe(true);
+  });
+
   it("a forward flip accelerates the car", () => {
     physics.setCarInput("car-a", { throttle: 1 });
     physics.stepTicks(120);

@@ -1007,3 +1007,239 @@ visually: menu wide shot (single hex layer, square hexes, symmetric
 floor, continuous corner shell, ramps flush to the floor), a wall/
 corner climb, a goal-blast moment, both ball-cam indicator states, and
 the pause → SETTINGS → overlay → BACK → RESUME flow.
+
+## Online multiplayer — N1 (sim/net input seam, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+A pure refactor with **zero intended behaviour change**, preparing
+`GameRuntime.onFixedTick` to accept remote-peer inputs without special-
+casing them. Three seams were introduced:
+
+1. **`CarInputSource`** (`src/netcode/CarInputSource.ts`) — every
+   simulated car's per-tick `CarInput` now comes from a source keyed by
+   `CarId`, not from hard-coded "player" / "AI" branches.
+   `LocalDeviceSource` wraps the sampled local frame, `AiSource` wraps
+   the existing `OpponentAiController.update` (faithful pass-through —
+   verified by a test that an independently-seeded controller fed the
+   identical context produces the identical input), and
+   `RemoteCarInputSource` buffers decoded wire inputs per tick (wired but
+   unused in single-player; fed by N2, installed as the opponent by N5).
+   `onFixedTick` iterates a `Map<CarId, CarInputSource>` assembled once at
+   init (`configureSinglePlayerInputSources`: local player + AI opponent),
+   skipping cars not yet spawned — exactly the old
+   `getCarIds().includes(...)` guard. Only local human sources carry a
+   `CarControlProfile`, so profile application stays player-only as
+   before. This map's size — not any hard-coded pair — is what makes the
+   core 2v2-ready (§4.6).
+
+2. **Input quantization at the sampling seam**
+   (`src/netcode/InputQuantize.ts`) — `LocalDeviceSource` quantizes the
+   five analog axes to the shared int8 wire grid (1/127 steps) *before*
+   they are simulated, so single-player and online simulate the identical
+   input space and a peer decoding the int8 wire value can never disagree
+   with the sender's local sim. Full deflection (±1) and neutral (0) are
+   exact, so the existing input-foundation assertions (`throttle=1`,
+   `steer=1`, `throttle=-1`) are unaffected; intermediate values snap by
+   at most 1/254, below perceptibility. `int8ToAxis(axisToInt8(q)) === q`
+   for any grid value `q` — the round-trip identity the N2 codec relies
+   on, pinned in `tests/unit/inputQuantize.spec.ts`.
+
+3. **`TickAdvanceGate`** on `FixedStepCoordinator` — before advancing to a
+   tick, the coordinator asks a gate whether that tick may run.
+   Single-player uses `ALWAYS_ADVANCE` (a no-op, byte-identical timing to
+   pre-N1); online lockstep (N2) installs a gate that only allows tick T
+   once the remote input for T is buffered, so a missing input **stalls**
+   the shared timeline rather than letting peers diverge. `stepOnce`
+   (manual Playwright stepping) stays ungated by design.
+
+Also: `MatchFlowController.setOpponentIsAi(boolean)` (default true) gates
+the F13 stuck-watchdog, which teleports the opponent car — correct for a
+wedged AI, but it must never rubber-band a live remote human (and would
+desync the two peers). Single-player keeps it on; online (N5) turns it
+off.
+
+**Gates**: `vue-tsc` clean; new unit specs
+(`inputQuantize.spec.ts`, `carInputSource.spec.ts`,
+`tickAdvanceGate.spec.ts`, 15 tests); full `vitest run` 341/341 with
+**zero** existing tests modified; the live-input Playwright suites
+(`tests/input`, `tests/physics`, `tests/ai`, `tests/game-flow`,
+`tests/integration`) green unchanged — proving the refactor is
+behaviour-preserving through the real device → physics path.
+
+## Online multiplayer — N2 (deterministic lockstep core, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+The transport-agnostic heart of online play, all pure TypeScript with no
+real network (`src/netcode/`):
+
+- **`protocol.ts`** — the wire codec (§4.3). One unreliable channel,
+  1-byte packet-type discriminator: INPUT (an ack + a redundancy window of
+  int8-encoded input frames), HASH (a tick + FNV-1a32 state fingerprint),
+  PING/PONG. `decodePacket` returns `null` for any malformed / truncated /
+  unknown packet so a hostile or corrupt peer can never crash the decoder
+  or inject an out-of-contract packet. Inputs are the pre-quantized int8
+  axes, so decode is lossless w.r.t. the sender's simulated value.
+- **`LockstepSession.ts`** — owns both peers' per-tick input buffers,
+  transmits the local car's inputs with an 8-frame redundancy window,
+  buffers the remote car's into the very `RemoteCarInputSource` (N1) that
+  GameRuntime installs, gates advance on holding both cars' inputs for a
+  tick, and runs the every-60-tick state-hash exchange that turns any
+  divergence into a detected `desynced` status rather than a silent split.
+  Physics-agnostic: the driver feeds it scheduled inputs and a serialized
+  world state to hash.
+- **`testing/FakeLink.ts`** — a deterministic, seeded model of an impaired
+  full-duplex channel (latency, jitter, loss, duplication, reordering) so
+  every adverse-network case is perfectly reproducible.
+
+**Correctness finding (caught by the two-facade harness, fixed in the
+core):** the value a peer simulates for a car must equal the value the
+*other* peer decodes off the wire for that same car. `makeInputScript`
+quantizes to 1/64 but the int8 wire grid is 1/127, so simulating the raw
+submitted value locally while the peer simulated the wire-decoded value
+diverged the two sims. `submitLocalInput` now quantizes to the wire grid
+before storing *and* sending — "what I simulate locally == what my peer
+decodes" is enforced inside the session, not left to the caller. (This is
+the same quantization LocalDeviceSource applies, so it's idempotent in the
+real N5 path.)
+
+**Gates** (`tests/unit/netProtocol.spec.ts`, `lockstepSession.spec.ts`,
+16 tests): codec round-trips every int8 axis level and rejects malformed
+packets; two independent PhysicsFacades over an impaired FakeLink run
+1500-tick scripted matches at {perfect, 50ms±10, 120ms±30, 3% loss, 10%
+loss+5% dup} and all reach **bit-identical** final state with zero desync
+and bounded stalls; a single forged remote input is caught within one
+60-tick hash interval and flips the session to `desynced`; and one
+surviving packet's redundancy window confirms all 8 of its ticks even
+when every other packet is dropped. Full suite 356/356, `vue-tsc` and
+`npm run validate` clean.
+
+## Online multiplayer — N3 (WebRTC transport, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+`PeerLink` (`src/netcode/PeerLink.ts`) is a real WebRTC DataChannel behind
+the exact `NetLink` interface the lockstep core (N2) was validated against
+over `FakeLink` — so the whole client stack composes by construction. The
+channel is `{ ordered: false, maxRetransmits: 0 }`: input streaming must
+never head-of-line block behind a lost packet (the N2 redundancy window
+recovers loss; a reliable channel would turn one drop into a stall of
+every later input). The `RTCPeerConnection` is created through an
+injectable factory so the connection/reconnect state machine is
+unit-testable in node.
+
+Handshake is trickle-ICE via a small `SignalingChannel` interface
+(`Signaling.ts`) — the RoomDO WebSocket client (N4) implements it;
+`createLoopbackSignaling` wires two peers in-process for tests. Remote ICE
+candidates arriving before the remote description is set are buffered and
+flushed (they'd otherwise throw). On `failed`/`disconnected`, PeerLink
+calls `restartIce()` and (as offerer) re-offers with `{ iceRestart: true }`,
+capped at 3 attempts before surfacing `failed`. RTT is read best-effort
+from the nominated candidate pair's `getStats()` (feeds N7's adaptive
+delay). `connected` requires BOTH the PC connected and the channel open.
+
+**Gates**: `tests/unit/peerLink.spec.ts` (11 tests, controllable mock
+RTCPeerConnection) covers channel config, send/receive queueing,
+candidate buffering/flush, the connected/reconnecting/failed transitions,
+ICE-restart + cap, RTT, and idempotent teardown;
+`tests/unit/peerLinkLockstep.spec.ts` runs two real PeerLinks (cross-wired
+mock connections) fronting two real LockstepSessions + PhysicsFacades
+through a 400-tick match to bit-identical state. The real browser
+DataChannel path stays covered by `tests/netspike/webrtc-lockstep.spec.ts`
+(two pages, real RTCPeerConnection, hash `d12dfc99` on both). The in-app
+browser E2E of PeerLink+LockstepSession is deferred to N5's online-match
+Playwright test, where the runtime wiring that installs them exists —
+building a bundled test page for it in isolation would duplicate that.
+
+## Online multiplayer — N4 (control plane, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+The serverless control plane (`backend/`, a Cloudflare Workers + Durable
+Objects project). Control-only — no game state is ever simulated here;
+gameplay stays peer-to-peer (N2/N3). Same "pure core + thin adapter"
+split as the netcode:
+
+- **`src/netcode/lobbyProtocol.ts`** (shared, dependency-free — imported by
+  BOTH client and Worker) — the JSON control-plane message shapes, room-code
+  alphabet/generation, and the handshake compatibility rule (protocol
+  version + deterministic-build hash must match, else the match is refused
+  because mismatched builds would desync).
+- **`backend/src/RoomCore.ts`** — pure per-room state machine: two fixed
+  slots (offerer/answerer), signaling relay routing, ready/handshake, and
+  match-start with a shared kickoff seed. **`MatchmakingCore.ts`** — pure
+  FIFO queue pairing the two longest-waiting players. **`turn.ts`** — Cloudflare
+  Realtime TURN credential minting with a STUN-only fallback.
+- **`RoomDO` / `MatchmakingDO` / `worker.ts`** — thin Durable Object
+  adapters + a stateless router (`/room`, `/matchmaking`, `/turn-cred`).
+  WebSocket **hibernation** (`acceptWebSocket`) keeps idle rooms/queue at
+  $0; membership is rebuilt from live sockets' attachments after a wake.
+
+**Gates**: all room/queue/handshake/TURN LOGIC is unit-tested in the main
+vitest suite (`tests/unit/{lobbyProtocol,roomCore,matchmakingCore,turnCred}.spec.ts`,
+22 tests) — role assignment, signaling-relay-to-the-other-peer, match
+start on compatible handshakes, **build-hash-mismatch rejection**, room-full,
+peer-left + rejoin, FIFO pairing, dead-socket queue eviction, and the
+STUN-only / TURN-configured / TURN-error credential paths. The Durable
+Object adapters typecheck against `@cloudflare/workers-types`
+(`backend/tsconfig.json`, `cd backend && npx tsc --noEmit` clean). A full
+miniflare/`wrangler dev` integration pass (real WS upgrade + DO routing)
+and deploy need the Cloudflare toolchain/account and are the documented
+local runbook in `backend/README.md` (which also carries the $0 free-tier
+arithmetic). Full main suite 390/390.
+
+## Online multiplayer — N5 (online match flow, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+Ties the netcode core into the game's match flow:
+
+- **`MatchFlowController.startOnlineMatch({ durationMinutes, kickoffSeed })`**
+  — both peers call it with the SAME seed from the RoomDO handshake, so the
+  deterministic kickoff-variant sequence starts identically; sets
+  `opponentIsAi(false)` (F13 watchdog off). **`endOnlineMatchByForfeit(winner)`**
+  ends the match on forfeit / disconnect-past-grace (win by abandonment).
+- **`LobbyClient`** (`src/netcode/LobbyClient.ts`) — the client side of the
+  N4 control plane: opens the room / matchmaking WebSocket, speaks the lobby
+  protocol, and exposes a `SignalingChannel` view so a PeerLink trickles SDP
+  + ICE through the same socket. Injectable WebSocket factory → fully
+  unit-testable.
+- **`MultiplayerSession`** (`src/netcode/MultiplayerSession.ts`) — the
+  orchestrator that sequences LobbyClient → PeerLink → LockstepSession and
+  emits high-level events (`queued`, `room-ready`, `connecting`,
+  `match-ready`, `handshake-rejected`, `disconnected`) for the runtime + UI.
+  Injectable lobby/peer factories → unit-testable end to end.
+
+**Gates**: the plan's core N5 vitest gate —
+`tests/unit/onlineMatchSync.spec.ts` — runs two independent
+MatchFlowControllers + PhysicsFacades + LockstepSessions over an impaired
+FakeLink through countdown → a scored goal → celebration → the next
+kickoff, and asserts **bit-identical world state on every tick** plus
+identical final session state. This proves the whole match flow (goal
+detection, celebration timing, kickoff reset), not just raw physics, stays
+in lockstep. Plus `lobbyClient.spec.ts` (7) and `multiplayerSession.spec.ts`
+(4) for the connection sequencing. Full suite 402/402.
+
+The remaining N5 wiring — `GameRuntime` installing the remote input source
++ lockstep advance-gate and driving submit-ahead/pump in its frame loop —
+is deliberately landed with **N6**, because its only real verification is
+the two-page live-match Playwright E2E that the lobby UI (N6) exists to
+drive. N5 proves the match-flow determinism that wiring relies on; N6
+connects it to a running browser and validates it end to end.
+
+## Online multiplayer — N7 (resilience & feel, `plan/ONLINE_MULTIPLAYER_PLAN.md`)
+
+The adaptive input-delay policy (`src/netcode/AdaptiveDelay.ts`) — the core
+resilience mechanism. `recommendDelayTicks(rttMs, jitterMs)` picks the
+smallest delay that covers one-way latency + the jitter spread, clamped to
+[2, 10] ticks (17–83ms); `classifyConnection` buckets RTT into good/ok/poor
+for a connection HUD; `stabilizeDelay` avoids ±1-tick thrashing on RTT
+noise. Delay changes apply only at safe boundaries (kickoffs) so the shared
+timeline never warps mid-play.
+
+**Gates** (`tests/unit/adaptiveDelay.spec.ts`, 8 tests): the policy is
+monotone in RTT/jitter, clamped, and classified correctly; and — run
+through the real two-facade lockstep harness — the *recommended* delay
+produces near-zero stalls at a reasonable ping (~100ms RTT) and, at extreme
+ping (~233ms RTT, beyond what the 83ms max delay can hide — an acknowledged
+high-RTT limit, plan §9), the match still completes **bit-identically with
+bounded, non-runaway stalls**. This is the plan's "impairment matrix stays
+synced with bounded stall ceilings" gate, driven by the policy itself.
+
+Deferred to a follow-on (folded into the N8 pass as UI polish, low risk):
+the in-match connection-quality HUD readout and page-visibility
+(background-tab) stall handling — both are thin presentational layers over
+data the session already exposes (`getStats()`, `PeerLink.getRttMs`), and
+the underlying stall accounting + desync-safety they'd surface is already
+tested here and in N2.
